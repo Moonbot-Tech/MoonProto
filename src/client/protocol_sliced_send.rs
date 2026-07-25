@@ -25,33 +25,6 @@ fn sliced_used_limit_threshold(client_limit: usize) -> usize {
     (client_limit as f64 * 0.8).round() as usize
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sliced_retry_round_trip_delay_uses_startup_floor_only_for_unknown_rtt() {
-        assert_eq!(
-            sliced_retry_round_trip_delay(0),
-            UNKNOWN_RTT_SLICED_FLOOR_MS
-        );
-        assert_eq!(
-            sliced_retry_round_trip_delay(-1),
-            UNKNOWN_RTT_SLICED_FLOOR_MS
-        );
-        assert_eq!(sliced_retry_round_trip_delay(37), 37);
-    }
-
-    #[test]
-    fn sliced_path_delay_and_budget_match_delphi_rounding() {
-        assert_eq!(sliced_path_delay(100, 1.1), 120);
-        assert_eq!(sliced_client_limit(262_120, 5.0), 1311);
-        assert_eq!(sliced_client_limit(262_120, 2.0), 1311);
-        assert_eq!(sliced_client_limit(262_120, 20.0), 3932);
-        assert_eq!(sliced_used_limit_threshold(1311), 1049);
-    }
-}
-
 impl ProtocolCore<'_> {
     pub(crate) fn apply_sliced_send_u_key_cleanup(&mut self, sliced: &[SendItem]) {
         // Delphi `CheckSeningData` keeps the cleanup scopes separate:
@@ -417,5 +390,32 @@ impl ProtocolCore<'_> {
                 u8::MAX,
                 sending_count,
             );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sliced_retry_round_trip_delay_uses_startup_floor_only_for_unknown_rtt() {
+        assert_eq!(
+            sliced_retry_round_trip_delay(0),
+            UNKNOWN_RTT_SLICED_FLOOR_MS
+        );
+        assert_eq!(
+            sliced_retry_round_trip_delay(-1),
+            UNKNOWN_RTT_SLICED_FLOOR_MS
+        );
+        assert_eq!(sliced_retry_round_trip_delay(37), 37);
+    }
+
+    #[test]
+    fn sliced_path_delay_and_budget_match_delphi_rounding() {
+        assert_eq!(sliced_path_delay(100, 1.1), 120);
+        assert_eq!(sliced_client_limit(262_120, 5.0), 1311);
+        assert_eq!(sliced_client_limit(262_120, 2.0), 1311);
+        assert_eq!(sliced_client_limit(262_120, 20.0), 3932);
+        assert_eq!(sliced_used_limit_threshold(1311), 1049);
     }
 }

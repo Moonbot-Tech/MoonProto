@@ -35,8 +35,14 @@ impl BaseCommandHeader {
 #[derive(Debug, Clone)]
 pub struct MarketCommandHeader {
     pub base: BaseCommandHeader,
+    #[allow(dead_code)]
+    // Required by the inherited wire header even when a command only needs its UID.
     pub currency: u8,
+    #[allow(dead_code)]
+    // Required by the inherited wire header even when a command only needs its UID.
     pub platform: u8,
+    #[allow(dead_code)]
+    // Required by the inherited wire header even when a command only needs its UID.
     pub market_name: String,
 }
 
@@ -58,6 +64,7 @@ impl MarketCommandHeader {
         })
     }
 
+    #[allow(dead_code)] // Exact inherited-header serializer retained for parity fixtures.
     pub fn write(&self, out: &mut Vec<u8>, base_currency: u8, base_platform: u8) {
         self.base.write(out);
         out.push(base_currency);

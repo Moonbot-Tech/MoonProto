@@ -125,12 +125,9 @@ fn runtime_smoke_full_happy_path() {
     let mut balance_events = 0u32;
     while Instant::now() < balance_deadline {
         for event in client.drain_events() {
-            match event {
-                Event::Balance(_) => {
-                    balance_events += 1;
-                    break;
-                }
-                _ => {}
+            if let Event::Balance(_) = event {
+                balance_events += 1;
+                break;
             }
         }
         if balance_events > 0 {

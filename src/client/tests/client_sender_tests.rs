@@ -3,14 +3,16 @@ use crate::client::subscriptions::PendingCandleSubscribes;
 use crate::commands::candles::DeepHistoryKind;
 use crate::commands::engine_api::EngineMethod;
 
-fn make_sender() -> (
+type SenderFixture = (
     ClientSender,
     Arc<Mutex<SubscriptionRegistry>>,
     Arc<Mutex<SendLockState>>,
     Arc<AtomicBool>,
     Arc<AtomicBool>,
     Arc<AtomicBool>,
-) {
+);
+
+fn make_sender() -> SenderFixture {
     let subscription_registry = Arc::new(Mutex::new(SubscriptionRegistry::default()));
     let subscription_summary = Arc::new(SubscriptionRegistrySummary::default());
     let subscription_trade_storage_intent = Arc::new(parking_lot::RwLock::new(None));

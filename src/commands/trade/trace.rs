@@ -61,6 +61,7 @@ impl OrderTracePoint {
 
     #[cfg(any(test, feature = "diagnostics"))]
     #[doc(hidden)]
+    #[allow(dead_code)]
     pub fn trace_time_delphi(&self) -> DelphiTime {
         DelphiTime::from_days(self.trace_time)
     }

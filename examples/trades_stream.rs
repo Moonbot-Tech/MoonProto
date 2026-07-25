@@ -75,51 +75,48 @@ fn main() {
 
     while Instant::now() < deadline {
         for event in client.drain_events() {
-            match event {
-                Event::Trade(TradesEvent::Applied { .. }) => {
-                    signals += 1;
-                    if let Some(market) = selected_market.as_ref() {
-                        let Some(snapshot) = client.snapshot() else {
-                            continue;
-                        };
-                        if readers.is_none() {
-                            readers = snapshot.market_history_readers_for(market);
-                        }
-                        let Some(reader) = readers.as_ref().and_then(|r| r.futures_trades.clone())
-                        else {
-                            continue;
-                        };
-                        let cursor = cursor.get_or_insert_with(|| reader.cursor_from_oldest());
-                        rows.clear();
-                        let meta = reader.copy_new_since(cursor, 4096, &mut rows);
-                        if meta.clipped {
-                            println!("[retained-gap] local cursor fell behind retained history");
-                        }
-                        trades += rows.len() as u64;
-                        let remaining_to_print = 25u64.saturating_sub(printed) as usize;
-                        for row in rows.iter().take(remaining_to_print) {
-                            let side = if row.is_buy() { "buy" } else { "sell" };
-                            println!(
-                                "[retained-trade] {} {side} price={} qty={} time_ms={}",
-                                market.name(),
-                                row.price,
-                                row.quantity(),
-                                row.unix_millis()
-                            );
-                            printed += 1;
-                            if printed >= 25 {
-                                break;
-                            }
-                        }
-                    } else {
-                        trades += 1;
-                        if printed < 25 {
-                            printed += 1;
-                            println!("[trade-signal] retained rows updated");
+            if let Event::Trade(TradesEvent::Applied { .. }) = event {
+                signals += 1;
+                if let Some(market) = selected_market.as_ref() {
+                    let Some(snapshot) = client.snapshot() else {
+                        continue;
+                    };
+                    if readers.is_none() {
+                        readers = snapshot.market_history_readers_for(market);
+                    }
+                    let Some(reader) = readers.as_ref().and_then(|r| r.futures_trades.clone())
+                    else {
+                        continue;
+                    };
+                    let cursor = cursor.get_or_insert_with(|| reader.cursor_from_oldest());
+                    rows.clear();
+                    let meta = reader.copy_new_since(cursor, 4096, &mut rows);
+                    if meta.clipped {
+                        println!("[retained-gap] local cursor fell behind retained history");
+                    }
+                    trades += rows.len() as u64;
+                    let remaining_to_print = 25u64.saturating_sub(printed) as usize;
+                    for row in rows.iter().take(remaining_to_print) {
+                        let side = if row.is_buy() { "buy" } else { "sell" };
+                        println!(
+                            "[retained-trade] {} {side} price={} qty={} time_ms={}",
+                            market.name(),
+                            row.price,
+                            row.quantity(),
+                            row.unix_millis()
+                        );
+                        printed += 1;
+                        if printed >= 25 {
+                            break;
                         }
                     }
+                } else {
+                    trades += 1;
+                    if printed < 25 {
+                        printed += 1;
+                        println!("[trade-signal] retained rows updated");
+                    }
                 }
-                _ => {}
             }
         }
         std::thread::sleep(Duration::from_millis(50));

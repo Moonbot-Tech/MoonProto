@@ -33,6 +33,7 @@ use super::MoonKey;
 ///     gate, so a forged Ping can also transiently throttle or over-fragment
 ///     outgoing reliable sends — availability-only, self-corrected by the next
 ///     genuine Ping.
+///
 /// Even so the worst plaintext-transport tampering stays short of the account
 /// boundary: it is forge-gated (2^32 per delivered packet), the command content
 /// stays GCM-authenticated (only delivery is suppressed, never altered), and the
