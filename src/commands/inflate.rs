@@ -35,10 +35,7 @@ pub(crate) fn read_inflate_to_vec<R: Read>(
 }
 
 fn alloc_error(err: std::collections::TryReserveError) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::Other,
-        format!("inflate output allocation failed: {err}"),
-    )
+    io::Error::other(format!("inflate output allocation failed: {err}"))
 }
 
 fn over_cap_error(max_output: usize) -> io::Error {

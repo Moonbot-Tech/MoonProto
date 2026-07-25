@@ -593,7 +593,7 @@ impl ProtocolCore<'_> {
                 .data_read_state
                 .decode_cipher
                 .as_ref()
-                .and_then(|cipher| crypted::decrypt_command_no_replay(cipher, &payload));
+                .and_then(|cipher| crypted::decrypt_command_no_replay(cipher, payload));
             if let Some((hdr, mut plaintext)) = maybe_deferred {
                 if hdr.msg_num <= PRE_AUTH_CRYPTED_MAX_MSG_NUM {
                     plaintext.drain(..crypted::CRYPTO_HEADER_SIZE);

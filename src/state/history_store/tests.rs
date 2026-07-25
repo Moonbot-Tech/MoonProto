@@ -1241,9 +1241,9 @@ fn derived_refresh_full_rings_cpu_benchmark() {
     let trade_wall = Instant::now();
     for tick in 0..REALISTIC_TICKS {
         let trade_time = MoonTime::from_unix_millis(now.unix_millis() + tick as i64 * 250);
-        for market_index in 0..REALISTIC_MARKETS {
+        for name in names.iter().take(REALISTIC_MARKETS) {
             registry
-                .get_mut(&names[market_index])
+                .get_mut(name)
                 .expect("configured benchmark market")
                 .append_futures_trade(TradeHistoryRow {
                     time: trade_time,

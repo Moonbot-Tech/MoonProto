@@ -72,6 +72,7 @@ impl OrderDescription {
         self.flags & ODF_IS_SHORT != 0
     }
 
+    #[cfg(test)]
     pub(crate) fn wire_bytes(&self, out: &mut Vec<u8>) {
         out.push(self.name_len);
         out.extend_from_slice(&self.name[..self.name_len as usize]);
@@ -83,8 +84,10 @@ impl OrderDescription {
         if name_len as usize > ORDER_DESC_NAME_MAX || rest.len() < name_len as usize {
             return None;
         }
-        let mut desc = Self::default();
-        desc.name_len = name_len;
+        let mut desc = Self {
+            name_len,
+            ..Self::default()
+        };
         desc.name[..name_len as usize].copy_from_slice(&rest[..name_len as usize]);
         let tail = &rest[name_len as usize..];
         if let Some((&flags, tail)) = tail.split_first() {
@@ -101,8 +104,10 @@ impl OrderDescription {
     pub(crate) fn for_test(market: &str, emulator: bool, is_short: bool) -> Self {
         let bytes = market.as_bytes();
         assert!(!bytes.is_empty() && bytes.len() <= ORDER_DESC_NAME_MAX);
-        let mut desc = Self::default();
-        desc.name_len = bytes.len() as u8;
+        let mut desc = Self {
+            name_len: bytes.len() as u8,
+            ..Self::default()
+        };
         desc.name[..bytes.len()].copy_from_slice(bytes);
         if emulator {
             desc.flags |= ODF_EMULATOR;
@@ -172,6 +177,7 @@ impl CanonicalOrderState {
         StopSettings::read_from_delphi_stream(&mut bytes)
     }
 
+    #[cfg(test)]
     fn write_sections(&self, mask: u16, out: &mut Vec<u8>) {
         for section in 0..ORDER_SECTION_COUNT {
             if mask & (1 << section) != 0 {
@@ -181,11 +187,10 @@ impl CanonicalOrderState {
     }
 
     fn read_sections(&mut self, mask: u16, input: &mut &[u8]) -> bool {
-        for section in 0..ORDER_SECTION_COUNT {
+        for (section, &size) in ORDER_SECTION_SIZE.iter().enumerate() {
             if mask & (1 << section) == 0 {
                 continue;
             }
-            let size = ORDER_SECTION_SIZE[section];
             let copied = size.min(input.len());
             self.section_mut(section)[..copied].copy_from_slice(&input[..copied]);
             *input = &input[copied..];
@@ -310,6 +315,7 @@ impl OrderPatch {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // Kept as the exact patch-wire counterpart for parity fixtures.
     pub(crate) fn write(&self, out: &mut Vec<u8>) {
         self.header.write(out);
         write_uleb(self.state_rev, out);
@@ -336,6 +342,8 @@ pub(crate) struct OrderCatalogRecord {
 
 #[derive(Debug, Clone)]
 pub(crate) struct OrdersSnapshot {
+    #[allow(dead_code)]
+    // Parsing consumes the command envelope; snapshot reconciliation uses page bounds.
     pub header: BaseCommandHeader,
     pub from_uid: u64,
     pub range_end_uid: u64,
@@ -390,6 +398,8 @@ impl OrdersSnapshot {
 
 #[derive(Debug, Clone)]
 pub(crate) struct OrdersCatalog {
+    #[allow(dead_code)]
+    // Parsing consumes the command envelope; catalog reconciliation uses page bounds.
     pub header: BaseCommandHeader,
     pub from_uid: u64,
     pub range_end_uid: u64,
@@ -425,6 +435,7 @@ impl OrdersCatalog {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Parsed for command-registry parity; clients send this command.
 pub(crate) struct OrderStatusRequest {
     pub header: BaseCommandHeader,
     pub exact_rev: u64,

@@ -80,7 +80,7 @@ impl ServerMsgHeader {
     /// Serialize this header to the exact 7-byte wire layout.
     #[inline]
     #[cfg(test)]
-    pub(crate) fn to_bytes(&self) -> [u8; SERVER_HDR_SIZE] {
+    pub(crate) fn to_bytes(self) -> [u8; SERVER_HDR_SIZE] {
         let wire = WireServerMsgHeader {
             rnd: self.rnd,
             checksum: LeU32::new(self.checksum),

@@ -1139,8 +1139,7 @@ fn wildcard_match_ascii_ci(subject: &[u8], pattern: &[u8]) -> bool {
 
     while si < subject.len() {
         if pi < pattern.len()
-            && (pattern[pi] == b'?'
-                || pattern[pi].to_ascii_uppercase() == subject[si].to_ascii_uppercase())
+            && (pattern[pi] == b'?' || pattern[pi].eq_ignore_ascii_case(&subject[si]))
         {
             si += 1;
             pi += 1;

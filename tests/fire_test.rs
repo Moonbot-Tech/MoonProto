@@ -2165,19 +2165,11 @@ fn format_order_market_preview(st: &SessionStats) -> String {
 }
 
 fn avg_us(total_ns: u64, count: u64) -> u64 {
-    if count == 0 {
-        0
-    } else {
-        total_ns / count / 1_000
-    }
+    total_ns.checked_div(count).unwrap_or(0) / 1_000
 }
 
 fn avg_units(total: u64, count: u64) -> u64 {
-    if count == 0 {
-        0
-    } else {
-        total / count
-    }
+    total.checked_div(count).unwrap_or(0)
 }
 
 fn metric_cmd_label(cmd: u8, api_method: u8, payload_len: u64) -> String {
@@ -2857,7 +2849,7 @@ fn record_event(
                     ),
                 );
             } else {
-                log_server_event(&st, event_no, "UI LevManageUpdated".to_string());
+                log_server_event(&st, event_no, "UI LevManageUpdated");
             }
         }
         Event::Settings(SettingsEvent::RuntimeStateUpdated) => {

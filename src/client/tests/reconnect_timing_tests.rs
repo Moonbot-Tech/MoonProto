@@ -358,7 +358,11 @@ fn fine_requires_session_key_hello_payload() {
     let aad = handshake::handshake_aad(client.cfg.client_id, Command::Fine.to_byte());
     let master_payload = crypto::encrypt(&client.cfg.master_key, &hello.to_bytes_packed(), &aad);
 
-    assert!(apply_reader_handshake_payload(&mut client, Command::Fine, &master_payload,) == false);
+    assert!(!apply_reader_handshake_payload(
+        &mut client,
+        Command::Fine,
+        &master_payload,
+    ));
 
     install_session_key(&mut client);
     client.authorized = false;

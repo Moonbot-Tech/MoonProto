@@ -3,6 +3,12 @@ use crate::protocol::Command;
 #[cfg(any(test, feature = "diagnostics"))]
 use std::time::Instant;
 
+type DispatchBuffers = (
+    Vec<crate::events::Event>,
+    Vec<(Command, Vec<u8>)>,
+    Vec<crate::events::ActiveAction>,
+);
+
 /// Single active receive delivery path.
 ///
 /// The runtime owns one [`EventDispatcher`](crate::events::EventDispatcher) and
@@ -40,13 +46,7 @@ impl<'a> RunMode<'a> {
         }
     }
 
-    pub(crate) fn into_buffers(
-        self,
-    ) -> (
-        Vec<crate::events::Event>,
-        Vec<(Command, Vec<u8>)>,
-        Vec<crate::events::ActiveAction>,
-    ) {
+    pub(crate) fn into_buffers(self) -> DispatchBuffers {
         (self.event_buf, self.payload_buf, self.active_actions_buf)
     }
 

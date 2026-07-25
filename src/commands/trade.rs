@@ -167,6 +167,8 @@ impl MoveAllBuysParams {
 /// Exact expanded SQL written to the MoonBot Orders report database.
 #[derive(Debug, Clone)]
 pub struct ClosedSellOrderReport {
+    #[allow(dead_code)]
+    // Parsed to preserve the complete command envelope; the event exposes report data.
     pub header: BaseCommandHeader,
     pub db_id: i64,
     pub sql: String,

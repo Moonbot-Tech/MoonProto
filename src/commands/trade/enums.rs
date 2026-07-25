@@ -348,6 +348,7 @@ impl MoveAllCmdType {
 
     #[cfg(any(test, feature = "diagnostics"))]
     #[doc(hidden)]
+    #[allow(dead_code)] // Retained for diagnostic wire-parity callers.
     pub const fn to_byte(self) -> u8 {
         self.0
     }

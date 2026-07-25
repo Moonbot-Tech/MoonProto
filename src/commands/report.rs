@@ -17,6 +17,8 @@ pub(crate) const MAX_SET_ROWS_DELETED_WIRE_BYTES: usize = 1000;
 
 #[derive(Debug, Clone)]
 pub struct RepRowUpsert {
+    #[allow(dead_code)]
+    // Parsed as part of the complete wire envelope; report state consumes the row.
     pub(crate) header: BaseCommandHeader,
     pub(crate) rec_id: i64,
     pub(crate) row: Vec<u8>,
@@ -39,6 +41,8 @@ impl RepRowUpsert {
 
 #[derive(Debug, Clone)]
 pub struct RepRowDelete {
+    #[allow(dead_code)]
+    // Parsed as part of the complete wire envelope; report state consumes the id.
     pub(crate) header: BaseCommandHeader,
     pub(crate) rec_id: i64,
 }
@@ -78,6 +82,8 @@ impl RepRowDelete {
 
 #[derive(Debug, Clone)]
 pub struct RepSyncPage {
+    #[allow(dead_code)]
+    // Parsed as part of the complete wire envelope; sync matches request_uid below.
     pub(crate) header: BaseCommandHeader,
     pub(crate) request_uid: u64,
     pub(crate) last_rec_id: i64,
@@ -135,6 +141,8 @@ impl RepCheckRowsRequest {
 
 #[derive(Debug, Clone)]
 pub struct RepSetRowsDeleted {
+    #[allow(dead_code)]
+    // Parsed as part of the complete wire envelope; the mutation is idempotent.
     pub(crate) header: BaseCommandHeader,
     pub(crate) deleted: bool,
     pub(crate) ranges: Vec<(i64, i64)>,
@@ -178,6 +186,8 @@ impl RepSetRowsDeleted {
 
 #[derive(Debug, Clone)]
 pub struct RepSchema {
+    #[allow(dead_code)]
+    // Parsed as part of the complete wire envelope; schema state consumes data.
     pub(crate) header: BaseCommandHeader,
     pub(crate) data: Vec<u8>,
 }

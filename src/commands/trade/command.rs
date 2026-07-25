@@ -15,28 +15,40 @@ use std::convert::TryInto;
 /// existing ids; canonical order state lives in 41..47.
 #[derive(Debug, Clone)]
 pub enum TradeCommand {
+    #[allow(dead_code)] // Parsed to retain the complete current command registry.
     Penalty(MarketCommandHeader),
+    #[allow(dead_code)] // Parsed to retain the complete current command registry.
     TradeVisual(MarketCommandHeader),
     OrderTracePoint(OrderTracePoint),
     CorridorUpdate(CorridorUpdate),
     ClosedSellOrderReport(ClosedSellOrderReport),
     ReportRowUpsert(crate::commands::report::RepRowUpsert),
     ReportRowDelete(crate::commands::report::RepRowDelete),
+    #[allow(dead_code)] // Request shape is parsed for registry parity; clients only send it.
     ReportSyncRequest(crate::commands::report::RepSyncRequest),
+    #[allow(dead_code)] // Request shape is parsed for registry parity; clients only send it.
     ReportSchemaRequest(BaseCommandHeader),
     ReportSchema(crate::commands::report::RepSchema),
     ReportSyncPage(crate::commands::report::RepSyncPage),
+    #[allow(dead_code)] // Request shape is parsed for registry parity; clients only send it.
     ReportCheckRowsRequest(crate::commands::report::RepCheckRowsRequest),
     ReportSetRowsDeleted(crate::commands::report::RepSetRowsDeleted),
     OrderImage(OrderImage),
     OrderPatch(OrderPatch),
     OrdersSnapshot(OrdersSnapshot),
     OrdersCatalog(OrdersCatalog),
+    #[allow(dead_code)] // Request shape is parsed for registry parity; clients only send it.
     OrderStatusRequest(OrderStatusRequest),
     OrderNotFound(BaseCommandHeader),
+    #[allow(dead_code)] // Inbound parsing is retained for registry parity and wire tests.
     OrderCommand(OrderCommand),
+    #[allow(dead_code)] // Parsed to retain the inherited base command shape.
     BaseMarket(MarketCommandHeader),
-    Unknown { cmd_id: u8, uid: u64 },
+    #[allow(dead_code)] // Unknown command metadata is intentionally retained for forward parsing.
+    Unknown {
+        cmd_id: u8,
+        uid: u64,
+    },
 }
 
 impl TradeCommand {
@@ -102,6 +114,7 @@ impl TradeCommand {
         }
     }
 
+    #[allow(dead_code)] // Complete-envelope helper retained with the registry even when no consumer needs it.
     pub fn uid(&self) -> u64 {
         match self {
             Self::Penalty(h) | Self::TradeVisual(h) | Self::BaseMarket(h) => h.base.uid,

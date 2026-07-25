@@ -320,9 +320,9 @@ impl SendLockState {
             let ack_data_len = payload.len() - ack_words_offset;
             let r_count = (ack_data_len / 8).min(64);
             let mut bits = [0u64; 64];
-            for i in 0..r_count {
+            for (i, bit) in bits.iter_mut().enumerate().take(r_count) {
                 let start = ack_words_offset + i * 8;
-                bits[i] = u64::from_le_bytes(payload[start..start + 8].try_into().unwrap());
+                *bit = u64::from_le_bytes(payload[start..start + 8].try_into().unwrap());
             }
             self.tmp_slider.bit_field = bits;
             self.tmp_slider.start_num = srv_ack_start;

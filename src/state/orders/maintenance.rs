@@ -91,13 +91,12 @@ impl OrderState {
             .read
             .map
             .values()
-            .filter_map(|order| {
-                (order.replace_sent_time_ms > 0).then(|| {
-                    order
-                        .replace_sent_time_ms
-                        .saturating_add(TARGET_CONFIRM_TIMEOUT_MS)
-                        .saturating_add(1)
-                })
+            .filter(|order| order.replace_sent_time_ms > 0)
+            .map(|order| {
+                order
+                    .replace_sent_time_ms
+                    .saturating_add(TARGET_CONFIRM_TIMEOUT_MS)
+                    .saturating_add(1)
             })
             .min();
         events

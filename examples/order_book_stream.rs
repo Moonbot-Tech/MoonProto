@@ -41,40 +41,35 @@ fn main() {
 
     while Instant::now() < deadline {
         for event in client.drain_events() {
-            if let Event::OrderBook(event) = event {
-                match event {
-                    OrderBookEvent::Apply {
-                        market_name,
-                        kind,
-                        is_full,
-                        top,
-                        ..
-                    } => {
-                        applies += 1;
-                        if is_full {
-                            fulls += 1;
-                        }
-                        let name = market_name.as_deref().unwrap_or("<unknown>");
-                        let bid = top
-                            .bid
-                            .map(|level| format!("{} @ {}", level.quantity, level.rate))
-                            .unwrap_or_else(|| "none".to_string());
-                        let ask = top
-                            .ask
-                            .map(|level| format!("{} @ {}", level.quantity, level.rate))
-                            .unwrap_or_else(|| "none".to_string());
-                        println!(
-                            "[book] market={} kind={} full={} top_bid={} top_ask={}",
-                            name,
-                            kind.as_str(),
-                            is_full,
-                            bid,
-                            ask
-                        );
-                    }
-                    #[cfg(any(test, feature = "diagnostics"))]
-                    _ => {}
+            if let Event::OrderBook(OrderBookEvent::Apply {
+                market_name,
+                kind,
+                is_full,
+                top,
+                ..
+            }) = event
+            {
+                applies += 1;
+                if is_full {
+                    fulls += 1;
                 }
+                let name = market_name.as_deref().unwrap_or("<unknown>");
+                let bid = top
+                    .bid
+                    .map(|level| format!("{} @ {}", level.quantity, level.rate))
+                    .unwrap_or_else(|| "none".to_string());
+                let ask = top
+                    .ask
+                    .map(|level| format!("{} @ {}", level.quantity, level.rate))
+                    .unwrap_or_else(|| "none".to_string());
+                println!(
+                    "[book] market={} kind={} full={} top_bid={} top_ask={}",
+                    name,
+                    kind.as_str(),
+                    is_full,
+                    bid,
+                    ask
+                );
             }
         }
         std::thread::sleep(Duration::from_millis(50));
