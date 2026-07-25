@@ -2197,7 +2197,7 @@ fn candles_snapshot_stale_gate_reports_zero_retained_candles() {
 }
 
 #[test]
-fn active_dispatch_history_worker_uses_server_index_mapping_not_market_vector_order() {
+fn active_dispatch_resolves_server_index_before_history_worker() {
     let worker = crate::state::MarketHistoryWorker::spawn(crate::state::MarketHistoryConfig {
         futures_trades_capacity: 8,
         spot_trades_capacity: 0,
@@ -2246,8 +2246,120 @@ fn active_dispatch_history_worker_uses_server_index_mapping_not_market_vector_or
     eth.copy_last(8, &mut eth_rows);
     assert!(
         eth_rows.is_empty(),
-        "stream mIndex=1 must preserve GetMarketsIndexes slots, not local market vector order"
+        "stream mIndex=1 must resolve through GetMarketsIndexes before worker queueing"
     );
+}
+
+#[test]
+fn active_dispatch_retained_history_follows_same_market_identity_after_index_resync() {
+    let worker = crate::state::MarketHistoryWorker::spawn(crate::state::MarketHistoryConfig {
+        futures_trades_capacity: 8,
+        spot_trades_capacity: 8,
+        liquidation_capacity: 8,
+        mm_orders_capacity: 8,
+        last_price_capacity: 0,
+        mini_candles_capacity: 0,
+        candles_5m_capacity: 0,
+    });
+
+    let mut d = EventDispatcher::new();
+    d.set_market_history_handle(worker.handle());
+    seed_event_markets(&mut d, &["BTCUSDT", "ETHUSDT"]);
+    d.markets
+        .apply_markets_indexes(vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()]);
+
+    let mut client = crate::client::Client::new(dummy_client_cfg());
+    client.testing_set_domain_ready(true);
+    client.subscribe_all_trades(true);
+    let mut out = Vec::new();
+    let mut actions = Vec::new();
+
+    dispatch_active_packet_for_test(
+        &mut d,
+        Command::TradesStream,
+        &trades_payload_with_all_history_sections(900, 0),
+        7_000,
+        &mut out,
+        &client,
+        &mut actions,
+    );
+    assert!(worker.flush(mt(45_000.0)));
+
+    d.markets.mark_indexes_stale();
+    dispatch_active_packet_for_test(
+        &mut d,
+        Command::TradesStream,
+        &trades_payload_with_all_history_sections(901, 0),
+        7_010,
+        &mut out,
+        &client,
+        &mut actions,
+    );
+    assert!(worker.flush(mt(45_000.0)));
+
+    let markets_version = d.markets.markets_version();
+    let mut markets_list = Vec::new();
+    markets_list.extend_from_slice(&2i32.to_le_bytes());
+    write_market(&mut markets_list, &event_market("ETHUSDT"), 2);
+    write_market(&mut markets_list, &event_market("BTCUSDT"), 2);
+    markets_list.extend_from_slice(&0i32.to_le_bytes());
+    dispatch_active_packet_for_test(
+        &mut d,
+        Command::API,
+        &api_response_payload_ver(2, EngineMethod::GetMarketsList, &markets_list),
+        7_015,
+        &mut out,
+        &client,
+        &mut actions,
+    );
+    assert_eq!(
+        d.markets.markets_version(),
+        markets_version,
+        "server-index permutation must not masquerade as a market-universe change"
+    );
+    assert_eq!(d.markets.market_name_by_index(0), Some("ETHUSDT"));
+    assert_eq!(d.markets.market_name_by_index(1), Some("BTCUSDT"));
+
+    dispatch_active_packet_for_test(
+        &mut d,
+        Command::TradesStream,
+        &trades_payload_with_all_history_sections(901, 0),
+        7_020,
+        &mut out,
+        &client,
+        &mut actions,
+    );
+    assert!(worker.flush(mt(45_000.0)));
+
+    let btc = worker.readers("BTCUSDT").expect("BTC retained store");
+    let eth = worker.readers("ETHUSDT").expect("ETH retained store");
+    for (name, readers) in [("BTC", btc), ("ETH", eth)] {
+        let mut futures = Vec::new();
+        readers
+            .futures_trades
+            .expect("futures ring")
+            .copy_last(8, &mut futures);
+        let mut spot = Vec::new();
+        readers
+            .spot_trades
+            .expect("spot ring")
+            .copy_last(8, &mut spot);
+        let mut liquidations = Vec::new();
+        readers
+            .liquidations
+            .expect("liquidations ring")
+            .copy_last(8, &mut liquidations);
+        let mut mm_orders = Vec::new();
+        readers
+            .mm_orders
+            .expect("MM ring")
+            .copy_last(8, &mut mm_orders);
+
+        assert_eq!(futures.len(), 1, "{name} futures routing");
+        assert_eq!(spot.len(), 1, "{name} spot routing");
+        assert_eq!(liquidations.len(), 1, "{name} liquidation routing");
+        assert_eq!(mm_orders.len(), 1, "{name} MM routing");
+    }
 }
 
 #[test]

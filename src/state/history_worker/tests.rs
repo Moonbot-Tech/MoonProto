@@ -27,7 +27,7 @@ fn worker_stores_enabled_futures_trades_after_flush() {
         base_time: 45_000.0,
         now_time,
         sections: vec![MarketHistoryStreamSection {
-            market_index: 0,
+            market_name: Arc::from("BTCUSDT"),
             kind: MarketHistoryStreamSectionKind::FuturesTrades,
             start: 0,
             len: 1,
@@ -71,7 +71,7 @@ fn worker_does_not_create_market_from_stream_batch() {
         base_time: 45_000.0,
         now_time: 45_000.0,
         sections: vec![MarketHistoryStreamSection {
-            market_index: 0,
+            market_name: Arc::from("BTCUSDT"),
             kind: MarketHistoryStreamSectionKind::SpotTrades,
             start: 0,
             len: 1,
@@ -311,7 +311,7 @@ fn worker_flush_compacts_evicted_futures_to_mini_candles() {
         base_time: 45_000.0,
         now_time,
         sections: vec![MarketHistoryStreamSection {
-            market_index: 0,
+            market_name: Arc::from("BTCUSDT"),
             kind: MarketHistoryStreamSectionKind::FuturesTrades,
             start: 0,
             len: 3,

@@ -229,7 +229,7 @@ fn registering_large_market_universe_does_not_allocate_dense_histories() {
 }
 
 #[test]
-fn registry_resolves_stream_sections_by_configured_server_index() {
+fn registry_configures_only_requested_market_names() {
     let mut registry = MarketHistoryRegistry::new(MarketHistoryConfig {
         futures_trades_capacity: 1,
         spot_trades_capacity: 0,
@@ -246,27 +246,15 @@ fn registry_resolves_stream_sections_by_configured_server_index() {
     ];
 
     registry.configure_markets(&markets, Some(&TradeStorageScope::All));
-    assert!(registry.get_mut_by_server_index(0).is_some());
-    assert!(registry.get_mut_by_server_index(1).is_some());
-    assert!(registry.get_mut_by_server_index(3).is_none());
+    assert!(registry.get_mut("ETHUSDT").is_some());
+    assert!(registry.get_mut("BTCUSDT").is_some());
+    assert!(registry.get_mut("SOLUSDT").is_some());
 
     let scope = TradeStorageScope::from_markets(["BTCUSDT"]);
     registry.configure_markets(&markets, Some(&scope));
-    assert!(registry.get_mut_by_server_index(0).is_none());
-    assert!(registry.get_mut_by_server_index(1).is_some());
-    assert!(registry.get_mut_by_server_index(2).is_none());
-
-    registry.configure_market_index_slots(
-        &[
-            None,
-            Some("BTCUSDT".to_string()),
-            Some("SOLUSDT".to_string()),
-        ],
-        Some(&TradeStorageScope::All),
-    );
-    assert!(registry.get_mut_by_server_index(0).is_none());
-    assert!(registry.get_mut_by_server_index(1).is_some());
-    assert!(registry.get_mut_by_server_index(2).is_some());
+    assert!(registry.get_mut("ETHUSDT").is_none());
+    assert!(registry.get_mut("BTCUSDT").is_some());
+    assert!(registry.get_mut("SOLUSDT").is_none());
 }
 
 #[test]
@@ -1255,8 +1243,8 @@ fn derived_refresh_full_rings_cpu_benchmark() {
         let trade_time = MoonTime::from_unix_millis(now.unix_millis() + tick as i64 * 250);
         for market_index in 0..REALISTIC_MARKETS {
             registry
-                .get_mut_by_server_index(market_index as u16)
-                .expect("configured benchmark market index")
+                .get_mut(&names[market_index])
+                .expect("configured benchmark market")
                 .append_futures_trade(TradeHistoryRow {
                     time: trade_time,
                     price: 100.0 + tick as f32 * 0.01,

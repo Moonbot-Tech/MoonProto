@@ -99,9 +99,9 @@ impl MarketsState {
     }
 
     /// Resolve a server `mIndex` into a stable market handle.
-    pub(crate) fn market_by_index(&self, m_index: u16) -> Option<MarketHandle> {
+    pub(crate) fn market_by_index(&self, m_index: u16) -> Option<&MarketHandle> {
         let name = self.market_name_by_index(m_index)?;
-        self.get(name)
+        self.handles_by_name.get(name)
     }
 
     /// Resolve a market name into the current server `mIndex`.
