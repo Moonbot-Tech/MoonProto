@@ -123,158 +123,139 @@ impl EventDispatcher {
                     let market_index = rows.market_index();
                     let is_spot = rows.is_spot();
                     let row_count = rows.len();
-                    if row_count == 0 || self.markets.has_server_market_index(market_index) {
-                        let market_name = if row_count > 0 {
-                            self.markets.market_name_by_index(market_index)
-                        } else {
-                            None
-                        };
-                        if let Some(market_name) = market_name {
-                            if !self.trade_section_visible_to_active_lib(market_name) {
-                                continue;
-                            }
-                        }
-                        let collect_market_history = market_name.is_some_and(|name| {
-                            collect_history && self.active_trade_storage_allows_market(name)
-                        });
-                        let history_start = history_trade_rows.len();
-                        if collect_market_history {
-                            history_trade_rows.reserve(row_count);
-                        }
-                        for trade in rows {
-                            Self::ensure_trades_packet_time_shift(
-                                decoded.base_time,
-                                trade.time_delta_ms,
-                                history_now_time_days,
-                                &mut packet_time_shift,
+                    let Some(market) = self.markets.market_by_index(market_index) else {
+                        continue;
+                    };
+                    let market_name = market.name();
+                    if !self.trade_section_visible_to_active_lib(market_name) {
+                        continue;
+                    }
+                    let collect_market_history =
+                        collect_history && self.active_trade_storage_allows_market(market_name);
+                    let history_start = history_trade_rows.len();
+                    if collect_market_history {
+                        history_trade_rows.reserve(row_count);
+                    }
+                    for trade in rows {
+                        Self::ensure_trades_packet_time_shift(
+                            decoded.base_time,
+                            trade.time_delta_ms,
+                            history_now_time_days,
+                            &mut packet_time_shift,
+                        );
+                        if let Some(now_ms) = now_ms {
+                            self.markets.apply_trade_tail_row(
+                                market,
+                                trade.is_spot,
+                                trade.price,
+                                trade.qty,
+                                now_ms,
                             );
-                            if let Some(now_ms) = now_ms {
-                                self.markets.apply_trade_tail_row(
-                                    trade.market_index,
-                                    trade.is_spot,
-                                    trade.price,
-                                    trade.qty,
-                                    now_ms,
-                                );
-                            }
-                            if collect_market_history {
-                                history_trade_rows.push(MarketHistoryTradeInput {
-                                    time_delta_ms: trade.time_delta_ms,
-                                    price: trade.price,
-                                    qty: trade.qty,
-                                });
-                            }
                         }
-                        let history_len = history_trade_rows.len() - history_start;
-                        if collect_market_history && history_len > 0 {
-                            history_sections.push(MarketHistoryStreamSection {
-                                market_index,
-                                kind: if is_spot {
-                                    MarketHistoryStreamSectionKind::SpotTrades
-                                } else {
-                                    MarketHistoryStreamSectionKind::FuturesTrades
-                                },
-                                start: history_start,
-                                len: history_len,
+                        if collect_market_history {
+                            history_trade_rows.push(MarketHistoryTradeInput {
+                                time_delta_ms: trade.time_delta_ms,
+                                price: trade.price,
+                                qty: trade.qty,
                             });
                         }
+                    }
+                    let history_len = history_trade_rows.len() - history_start;
+                    if collect_market_history && history_len > 0 {
+                        history_sections.push(MarketHistoryStreamSection {
+                            market_name: market.name_arc(),
+                            kind: if is_spot {
+                                MarketHistoryStreamSectionKind::SpotTrades
+                            } else {
+                                MarketHistoryStreamSectionKind::FuturesTrades
+                            },
+                            start: history_start,
+                            len: history_len,
+                        });
                     }
                 }
                 TradeSectionRef::MMOrders(rows) => {
                     let market_index = rows.market_index();
                     let row_count = rows.len();
-                    if row_count == 0 || self.markets.has_server_market_index(market_index) {
-                        let market_name = if row_count > 0 {
-                            self.markets.market_name_by_index(market_index)
-                        } else {
-                            None
-                        };
-                        if let Some(market_name) = market_name {
-                            if !self.trade_section_visible_to_active_lib(market_name) {
-                                continue;
-                            }
-                        }
-                        let collect_market_history = market_name.is_some_and(|name| {
-                            collect_history
-                                && self.retain_mm_orders
-                                && self.active_trade_storage_allows_market(name)
-                        });
-                        let history_start = history_mm_order_rows.len();
+                    let Some(market) = self.markets.market_by_index(market_index) else {
+                        continue;
+                    };
+                    let market_name = market.name();
+                    if !self.trade_section_visible_to_active_lib(market_name) {
+                        continue;
+                    }
+                    let collect_market_history = collect_history
+                        && self.retain_mm_orders
+                        && self.active_trade_storage_allows_market(market_name);
+                    let history_start = history_mm_order_rows.len();
+                    if collect_market_history {
+                        history_mm_order_rows.reserve(row_count);
+                    }
+                    for row in rows {
+                        Self::ensure_trades_packet_time_shift(
+                            decoded.base_time,
+                            row.time_delta_ms,
+                            history_now_time_days,
+                            &mut packet_time_shift,
+                        );
                         if collect_market_history {
-                            history_mm_order_rows.reserve(row_count);
-                        }
-                        for row in rows {
-                            Self::ensure_trades_packet_time_shift(
-                                decoded.base_time,
-                                row.time_delta_ms,
-                                history_now_time_days,
-                                &mut packet_time_shift,
-                            );
-                            if collect_market_history {
-                                history_mm_order_rows.push(MarketHistoryMMOrderInput {
-                                    time_delta_ms: row.time_delta_ms,
-                                    volume: row.vol,
-                                    q: row.q,
-                                    taker: row.taker,
-                                });
-                            }
-                        }
-                        let history_len = history_mm_order_rows.len() - history_start;
-                        if collect_market_history && history_len > 0 {
-                            history_sections.push(MarketHistoryStreamSection {
-                                market_index,
-                                kind: MarketHistoryStreamSectionKind::MMOrders,
-                                start: history_start,
-                                len: history_len,
+                            history_mm_order_rows.push(MarketHistoryMMOrderInput {
+                                time_delta_ms: row.time_delta_ms,
+                                volume: row.vol,
+                                q: row.q,
+                                taker: row.taker,
                             });
                         }
+                    }
+                    let history_len = history_mm_order_rows.len() - history_start;
+                    if collect_market_history && history_len > 0 {
+                        history_sections.push(MarketHistoryStreamSection {
+                            market_name: market.name_arc(),
+                            kind: MarketHistoryStreamSectionKind::MMOrders,
+                            start: history_start,
+                            len: history_len,
+                        });
                     }
                 }
                 TradeSectionRef::LiqOrders(rows) => {
                     let market_index = rows.market_index();
                     let row_count = rows.len();
-                    if row_count == 0 || self.markets.has_server_market_index(market_index) {
-                        let market_name = if row_count > 0 {
-                            self.markets.market_name_by_index(market_index)
-                        } else {
-                            None
-                        };
-                        if let Some(market_name) = market_name {
-                            if !self.trade_section_visible_to_active_lib(market_name) {
-                                continue;
-                            }
-                        }
-                        let collect_market_history = market_name.is_some_and(|name| {
-                            collect_history && self.active_trade_storage_allows_market(name)
-                        });
-                        let history_start = history_trade_rows.len();
+                    let Some(market) = self.markets.market_by_index(market_index) else {
+                        continue;
+                    };
+                    let market_name = market.name();
+                    if !self.trade_section_visible_to_active_lib(market_name) {
+                        continue;
+                    }
+                    let collect_market_history =
+                        collect_history && self.active_trade_storage_allows_market(market_name);
+                    let history_start = history_trade_rows.len();
+                    if collect_market_history {
+                        history_trade_rows.reserve(row_count);
+                    }
+                    for trade in rows {
+                        Self::ensure_trades_packet_time_shift(
+                            decoded.base_time,
+                            trade.time_delta_ms,
+                            history_now_time_days,
+                            &mut packet_time_shift,
+                        );
                         if collect_market_history {
-                            history_trade_rows.reserve(row_count);
-                        }
-                        for trade in rows {
-                            Self::ensure_trades_packet_time_shift(
-                                decoded.base_time,
-                                trade.time_delta_ms,
-                                history_now_time_days,
-                                &mut packet_time_shift,
-                            );
-                            if collect_market_history {
-                                history_trade_rows.push(MarketHistoryTradeInput {
-                                    time_delta_ms: trade.time_delta_ms,
-                                    price: trade.price,
-                                    qty: trade.qty,
-                                });
-                            }
-                        }
-                        let history_len = history_trade_rows.len() - history_start;
-                        if collect_market_history && history_len > 0 {
-                            history_sections.push(MarketHistoryStreamSection {
-                                market_index,
-                                kind: MarketHistoryStreamSectionKind::Liquidations,
-                                start: history_start,
-                                len: history_len,
+                            history_trade_rows.push(MarketHistoryTradeInput {
+                                time_delta_ms: trade.time_delta_ms,
+                                price: trade.price,
+                                qty: trade.qty,
                             });
                         }
+                    }
+                    let history_len = history_trade_rows.len() - history_start;
+                    if collect_market_history && history_len > 0 {
+                        history_sections.push(MarketHistoryStreamSection {
+                            market_name: market.name_arc(),
+                            kind: MarketHistoryStreamSectionKind::Liquidations,
+                            start: history_start,
+                            len: history_len,
+                        });
                     }
                 }
                 TradeSectionRef::WatcherFills {
@@ -282,46 +263,44 @@ impl EventDispatcher {
                     user,
                     data,
                 } => {
-                    if self.markets.has_server_market_index(market_index) {
-                        let Some(market) = self.markets.market_by_index(market_index) else {
-                            continue;
-                        };
-                        let market_name = market.name_arc();
-                        if !self.trade_section_visible_to_active_lib(market_name.as_ref()) {
-                            continue;
-                        }
-                        let Some(records) = parse_watcher_fills(data) else {
-                            continue;
-                        };
-                        let mut fills = Vec::with_capacity(records.len());
-                        for fill in records {
-                            let time = Self::trades_packet_shifted_time(
-                                decoded.base_time,
-                                fill.time_delta_ms,
-                                history_now_time_days,
-                                &mut packet_time_shift,
-                            );
-                            fills.push(WatcherFillEvent {
-                                time_ms: (time * DELPHI_MSECS_PER_DAY).round() as i64,
-                                time,
-                                price: fill.price,
-                                qty: fill.qty,
-                                z_btc: fill.z_btc,
-                                position: fill.position,
-                                order_type: fill.order_type,
-                                is_short: fill.is_short(),
-                                is_open: fill.is_open(),
-                                is_taker: fill.is_taker(),
-                            });
-                        }
-                        if !fills.is_empty() {
-                            out.push(Event::WatcherFills(WatcherFillsEvent {
-                                market_index,
-                                market_name,
-                                user,
-                                fills,
-                            }));
-                        }
+                    let Some(market) = self.markets.market_by_index(market_index) else {
+                        continue;
+                    };
+                    let market_name = market.name_arc();
+                    if !self.trade_section_visible_to_active_lib(market_name.as_ref()) {
+                        continue;
+                    }
+                    let Some(records) = parse_watcher_fills(data) else {
+                        continue;
+                    };
+                    let mut fills = Vec::with_capacity(records.len());
+                    for fill in records {
+                        let time = Self::trades_packet_shifted_time(
+                            decoded.base_time,
+                            fill.time_delta_ms,
+                            history_now_time_days,
+                            &mut packet_time_shift,
+                        );
+                        fills.push(WatcherFillEvent {
+                            time_ms: (time * DELPHI_MSECS_PER_DAY).round() as i64,
+                            time,
+                            price: fill.price,
+                            qty: fill.qty,
+                            z_btc: fill.z_btc,
+                            position: fill.position,
+                            order_type: fill.order_type,
+                            is_short: fill.is_short(),
+                            is_open: fill.is_open(),
+                            is_taker: fill.is_taker(),
+                        });
+                    }
+                    if !fills.is_empty() {
+                        out.push(Event::WatcherFills(WatcherFillsEvent {
+                            market_index,
+                            market_name,
+                            user,
+                            fills,
+                        }));
                     }
                 }
             }

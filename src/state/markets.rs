@@ -124,50 +124,29 @@ impl MarketsState {
         Self::default()
     }
 
-    /// Apply the live market-tail side effects for one already-known trade row.
+    /// Apply the live market-tail side effects for one already-resolved trade row.
     ///
     /// Gap tracking remains in `TradesState`. This mirrors only the bounded
-    /// per-market tail fields: futures trades call the `SetLastTradePrices`
-    /// tail and update `LastGotAllTrades`; spot trades update only
-    /// `LastGotSpotTrades`.
+    /// The caller resolves the server index once per section before entering the
+    /// row loop. Futures trades call the `SetLastTradePrices` tail and update
+    /// `LastGotAllTrades`; spot trades update only `LastGotSpotTrades`.
     // parity: MoonBot MoonProtoEngine.pas:ProcessTradesStream (per-market live tail)
     pub(crate) fn apply_trade_tail_row(
         &self,
-        market_index: u16,
+        market: &MarketHandle,
         is_spot: bool,
         price: f32,
         qty: f32,
         now_ms: i64,
     ) {
-        if !self.indexes_synchronized {
-            return;
-        }
-        let Some(name) = self
-            .market_indexes
-            .get(market_index as usize)
-            .map(String::as_str)
-        else {
-            return;
-        };
-        // Mutate the live `TMarket` trade tail in place through its own lock.
-        // `&self` here is deliberate: the trades datagram must not trigger a
-        // copy-on-write clone of the whole `MarketsState`, exactly like the
-        // per-market balance apply path. The market objects are structurally
-        // shared with any published snapshot.
-        let Some(handle) = self.handles_by_name.get(name) else {
-            return;
-        };
         let eps = self.eps_profile.eps;
-        handle.with_mut(|market| {
+        market.with_mut(|state| {
             if is_spot {
-                market.trade_tail.apply_spot_trade(now_ms);
+                state.trade_tail.apply_spot_trade(now_ms);
             } else {
-                market.trade_tail.apply_futures_trade(
-                    f64::from(price),
-                    f64::from(qty),
-                    now_ms,
-                    eps,
-                );
+                state
+                    .trade_tail
+                    .apply_futures_trade(f64::from(price), f64::from(qty), now_ms, eps);
             }
         });
     }

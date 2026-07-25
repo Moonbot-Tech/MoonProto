@@ -65,7 +65,9 @@ pub(crate) struct MarketHistoryLastPriceBatch {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MarketHistoryStreamSection {
-    pub(crate) market_index: u16,
+    /// Stable market identity resolved by the protocol owner while the current
+    /// server-index map is known to be fresh.
+    pub(crate) market_name: Arc<str>,
     pub(crate) kind: MarketHistoryStreamSectionKind,
     pub(crate) start: usize,
     pub(crate) len: usize,
@@ -121,7 +123,7 @@ enum MarketHistoryCommand {
     SetEpsProfile(EpsProfile),
     SetDeltasByTrades(bool),
     ConfigureMarkets {
-        market_slots: Vec<Option<Arc<str>>>,
+        market_names: Vec<Arc<str>>,
         scope: Option<TradeStorageScope>,
     },
     #[cfg(test)]
@@ -193,7 +195,10 @@ impl MarketHistoryWorker {
         market_names: Vec<String>,
         scope: Option<TradeStorageScope>,
     ) -> bool {
-        self.handle.configure_markets(market_names, scope)
+        self.handle.configure_markets(
+            market_names.into_iter().map(Arc::<str>::from).collect(),
+            scope,
+        )
     }
 
     #[cfg(test)]
@@ -257,27 +262,14 @@ impl MarketHistoryHandle {
             .is_ok()
     }
 
-    #[cfg(test)]
     pub(crate) fn configure_markets(
         &self,
-        market_names: Vec<String>,
-        scope: Option<TradeStorageScope>,
-    ) -> bool {
-        let market_slots = market_names
-            .into_iter()
-            .map(|name| Some(Arc::<str>::from(name)))
-            .collect();
-        self.configure_market_index_slots(market_slots, scope)
-    }
-
-    pub(crate) fn configure_market_index_slots(
-        &self,
-        market_slots: Vec<Option<Arc<str>>>,
+        market_names: Vec<Arc<str>>,
         scope: Option<TradeStorageScope>,
     ) -> bool {
         self.tx
             .send(MarketHistoryCommand::ConfigureMarkets {
-                market_slots,
+                market_names,
                 scope,
             })
             .is_ok()
@@ -500,10 +492,10 @@ fn handle_worker_command(
             registry.set_deltas_by_trades(enabled);
         }
         Ok(MarketHistoryCommand::ConfigureMarkets {
-            market_slots,
+            market_names,
             scope,
         }) => {
-            registry.configure_market_index_slots(&market_slots, scope.as_ref());
+            registry.configure_markets(&market_names, scope.as_ref());
             publish_read_index(read_index, registry);
         }
         #[cfg(test)]
@@ -606,7 +598,7 @@ fn process_stream_batch(registry: &mut MarketHistoryRegistry, batch: MarketHisto
     for section in batch.sections {
         match section.kind {
             MarketHistoryStreamSectionKind::FuturesTrades => {
-                let Some(store) = registry.get_mut_by_server_index(section.market_index) else {
+                let Some(store) = registry.get_mut(section.market_name.as_ref()) else {
                     continue;
                 };
                 let end = section.start.saturating_add(section.len);
@@ -622,7 +614,7 @@ fn process_stream_batch(registry: &mut MarketHistoryRegistry, batch: MarketHisto
                 }
             }
             MarketHistoryStreamSectionKind::SpotTrades => {
-                let Some(store) = registry.get_mut_by_server_index(section.market_index) else {
+                let Some(store) = registry.get_mut(section.market_name.as_ref()) else {
                     continue;
                 };
                 let end = section.start.saturating_add(section.len);
@@ -638,7 +630,7 @@ fn process_stream_batch(registry: &mut MarketHistoryRegistry, batch: MarketHisto
                 }
             }
             MarketHistoryStreamSectionKind::Liquidations => {
-                let Some(store) = registry.get_mut_by_server_index(section.market_index) else {
+                let Some(store) = registry.get_mut(section.market_name.as_ref()) else {
                     continue;
                 };
                 let end = section.start.saturating_add(section.len);
@@ -654,7 +646,7 @@ fn process_stream_batch(registry: &mut MarketHistoryRegistry, batch: MarketHisto
                 }
             }
             MarketHistoryStreamSectionKind::MMOrders => {
-                let Some(store) = registry.get_mut_by_server_index(section.market_index) else {
+                let Some(store) = registry.get_mut(section.market_name.as_ref()) else {
                     continue;
                 };
                 let end = section.start.saturating_add(section.len);

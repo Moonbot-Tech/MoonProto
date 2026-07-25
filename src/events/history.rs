@@ -234,35 +234,21 @@ impl EventDispatcher {
         self.last_market_history_markets_version = None;
     }
 
-    fn market_history_market_slots(&self) -> Vec<Option<Arc<str>>> {
-        if self.markets.indexes_synchronized && !self.markets.market_indexes.is_empty() {
-            return self
-                .markets
-                .market_indexes
-                .iter()
-                .map(|name| {
-                    self.markets
-                        .handles_by_name
-                        .get(name.as_str())
-                        .map(|handle| handle.name_arc())
-                })
-                .collect();
-        }
+    fn market_history_market_names(&self) -> Vec<Arc<str>> {
         self.markets
             .markets
             .iter()
-            .map(|market| Some(market.name_arc()))
+            .map(|market| market.name_arc())
             .collect()
     }
 
-    fn has_active_market_history_market(&self, market_slots: &[Option<Arc<str>>]) -> bool {
+    fn has_active_market_history_market(&self, market_names: &[Arc<str>]) -> bool {
         let Some(scope) = self.trade_storage_scope.as_ref() else {
             return false;
         };
-        market_slots
+        market_names
             .iter()
-            .filter_map(Option::as_deref)
-            .any(|market_name| scope.contains(market_name))
+            .any(|market_name| scope.contains(market_name.as_ref()))
     }
 
     pub(super) fn sync_market_history_storage(&mut self) {
@@ -272,13 +258,13 @@ impl EventDispatcher {
         {
             return;
         }
-        let market_slots = self.market_history_market_slots();
-        let has_active_market = self.has_active_market_history_market(&market_slots);
+        let market_names = self.market_history_market_names();
+        let has_active_market = self.has_active_market_history_market(&market_names);
         self.ensure_default_market_history_worker(has_active_market);
         let Some(handle) = &self.market_history else {
             return;
         };
-        handle.configure_market_index_slots(market_slots, self.trade_storage_scope.clone());
+        handle.configure_markets(market_names, self.trade_storage_scope.clone());
         self.last_market_history_scope = self.trade_storage_scope.clone();
         self.last_market_history_markets_version = Some(markets_version);
     }
