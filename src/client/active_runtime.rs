@@ -517,7 +517,10 @@ impl MoonClient {
         })
     }
 
-    /// Unsubscribe from all trades and clear the reconnect registry intent.
+    /// Queue an all-trades unsubscribe for the runtime owner.
+    ///
+    /// The runtime clears reconnect intent and sends the command after startup reaches the domain
+    /// command loop.
     pub(crate) fn unsubscribe_all_trades(&self) -> Result<(), MoonClientError> {
         self.send_no_reply(RuntimeCommand::UnsubscribeAllTrades)
     }

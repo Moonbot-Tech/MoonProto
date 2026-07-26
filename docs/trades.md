@@ -45,10 +45,13 @@ application asks for it. Without a trades subscription intent, incoming trade
 stream packets are treated as unexpected and are dropped instead of becoming
 public events.
 
-Before Init, subscribe/unsubscribe calls update only the reconnect registry.
-After Init, changed intent also queues the server request. Reconnect restores
-the trade stream automatically and waits until a trade packet proves that it
-belongs to the current server token.
+Before Init, the runtime owner defers subscribe/unsubscribe calls without
+sending a wire packet. After Init, deferred commands update the reconnect
+registry; changed subscribe intent sends the server request, while
+`unsubscribe_all_trades` always sends the server command even if no local intent
+was remembered. This unconditional unsubscribe repairs stale remote state after
+reconnect. Reconnect restores a requested trade stream automatically and waits
+until a trade packet proves that it belongs to the current server token.
 
 ## Events
 

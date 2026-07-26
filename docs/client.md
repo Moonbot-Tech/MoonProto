@@ -514,12 +514,12 @@ client.streams().unsubscribe_all_orderbooks()?;
 client.streams().unsubscribe_all_trades()?;
 ```
 
-The registry records the latest subscription intent. Before Init, public
-subscription calls update that registry but do not send Engine API/UI
-subscription packets. The one-time Init flushes the pre-init registry once, and
-later reconnects replay the registry automatically, so streams continue without
-the application running Init again. After a server restart, orderbook replay is
-delayed until fresh market indexes have been received for the current
+The runtime owner records the latest subscription intent. Before Init, public
+subscription calls are deferred and send no Engine API/UI subscription packets.
+After Init, the deferred commands update the reconnect registry and run once.
+Later reconnects replay that registry automatically, so streams continue
+without the application running Init again. After a server restart, orderbook
+replay is delayed until fresh market indexes have been received for the current
 `PeerAppToken`; this prevents new server `market_index` values from racing the
 old local index map.
 All-trades reconnect follows the MoonBot stream-recovery gate: until a
@@ -545,6 +545,9 @@ group before confirming the candle subscription watermark.
 All-trades is opt-in in the Rust library. If the registry has no all-trades
 subscription intent, incoming `TradesStream` / `TradesResendResponse` packets
 are treated as unexpected and are dropped instead of becoming public events.
+After Init, `unsubscribe_all_trades` always sends the server command, even when
+the local registry already has no intent. This lets an application repair stale
+remote state after reconnect without first creating a local subscription.
 Orderbook subscriptions are per market name; incoming events carry typed
 `OrderBookKind` so the application can render futures and spot books separately.
 The batched orderbook helpers update the same registry and send one
@@ -565,7 +568,7 @@ client.strategies().sell_price_update(strategy_id, sell_price)?;
 ```
 
 Typed command methods append into the same unbounded priority send queues
-after Init. Before Init, subscriptions update only the reconnect registry and
+after Init. Before Init, the runtime owner defers subscription commands and
 other domain commands queue nothing. Neither path has a local capacity cap.
 
 Order actions with local stateful effects, such as replace/cancel/panic,

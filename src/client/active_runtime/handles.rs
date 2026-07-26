@@ -559,7 +559,9 @@ impl MoonStreams<'_> {
         self.client.subscribe_trades_for(mode, market_names)
     }
 
-    /// Unsubscribe from all trades and clear the reconnect registry intent.
+    /// Queue an all-trades unsubscribe for the runtime owner.
+    ///
+    /// Before Init completes, the command remains deferred and produces no wire packet.
     pub fn unsubscribe_all_trades(&self) -> Result<(), MoonClientError> {
         self.client.unsubscribe_all_trades()
     }

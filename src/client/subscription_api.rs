@@ -161,7 +161,7 @@ impl Client {
             .subscribe_trades_for(want_mm, market_names);
     }
 
-    /// Unsubscribe from the all-trades stream and remove the registry intent.
+    /// Clear all-trades intent and send the unsubscribe command when the domain is ready.
     pub(crate) fn unsubscribe_all_trades(&self) {
         self.sender_internal().unsubscribe_all_trades();
     }

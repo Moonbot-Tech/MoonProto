@@ -267,6 +267,37 @@ fn unsubscribe_all_trades_clears_registry_and_sends_wire_request() {
     );
 }
 
+/// `sender/subscriptions.rs:try_unsubscribe_all_trades` gating the wire command on remembered
+/// local intent would leave a stale server stream running and waste network traffic.
+#[test]
+fn unsubscribe_all_trades_repairs_remote_state_without_local_intent() {
+    let (sender, registry, send_q, _, _, _) = make_sender();
+
+    sender.unsubscribe_all_trades();
+
+    assert!(registry.lock().trades_sub.is_none());
+    let sent = take_send_items(&send_q);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        method_id(&sent[0].data),
+        Some(EngineMethod::UnsubscribeAllTrades.to_byte())
+    );
+}
+
+/// `sender/subscriptions.rs:try_unsubscribe_all_trades` bypassing `domain_ready` would send an
+/// Engine API command before Init and violate the typed-command transport gate.
+#[test]
+fn pre_init_unsubscribe_all_trades_records_intent_without_wire() {
+    let (sender, registry, send_q, _, _, domain_ready) = make_sender();
+    registry.lock().trades_sub = Some(TradesSubscription { want_mm: true });
+    domain_ready.store(false, Ordering::Relaxed);
+
+    sender.unsubscribe_all_trades();
+
+    assert!(registry.lock().trades_sub.is_none());
+    assert!(take_send_items(&send_q).is_empty());
+}
+
 #[test]
 fn try_subscribe_returns_ok() {
     let (sender, _, _, _, _, _) = make_sender();

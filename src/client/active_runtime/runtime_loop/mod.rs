@@ -709,6 +709,31 @@ mod tests {
         assert!(pending.auto_candles_scope.is_none());
     }
 
+    /// `runtime_loop/handlers.rs:handle_command` dropping `UnsubscribeAllTrades` before it reaches
+    /// `ClientSender` would leave account-only applications unable to repair stale remote streams.
+    #[test]
+    fn runtime_unsubscribe_without_local_intent_reaches_the_wire_queue() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+
+        assert!(!handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::UnsubscribeAllTrades,
+            &mut pending,
+        ));
+
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(sliced.len(), 1);
+        assert_eq!(sliced[0].cmd, Command::API.to_byte());
+        assert_eq!(
+            sliced[0].data.get(11).copied(),
+            Some(crate::commands::engine_api::EngineMethod::UnsubscribeAllTrades.to_byte())
+        );
+    }
+
     #[test]
     fn init_time_trades_scope_schedules_auto_candles_when_runtime_starts() {
         let mut client = ready_client();

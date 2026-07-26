@@ -85,7 +85,10 @@ impl ClientSender {
         }
     }
 
-    /// Unsubscribe from the all-trades stream and update the reconnect registry.
+    /// Unsubscribe from the all-trades stream and clear the reconnect registry.
+    ///
+    /// Once the domain is ready, this always sends the server command even when no local
+    /// subscription is remembered, allowing callers to repair stale remote state.
     pub(crate) fn unsubscribe_all_trades(&self) {
         if let Err(e) = self.try_unsubscribe_all_trades() {
             log::warn!(target: "moonproto::client",
@@ -308,18 +311,17 @@ impl ClientSender {
         ))
     }
 
-    /// Fallible all-trades unsubscribe.
+    /// Clears local all-trades intent and repairs the ready server's remote subscription state.
     pub(crate) fn try_unsubscribe_all_trades(&self) -> Result<(), SubscribeError> {
         if !self.shared.app_queue_alive.load(Ordering::Relaxed) {
             return Err(SubscribeError::Disconnected);
         }
-        let had_subscription = {
+        {
             let mut registry = self.shared.subscription_registry.lock();
-            let had_subscription = registry.trades_sub.take().is_some();
+            registry.trades_sub.take();
             self.shared.refresh_subscription_summary(&registry);
-            had_subscription
-        };
-        if had_subscription && self.domain_ready_for_typed_send() {
+        }
+        if self.domain_ready_for_typed_send() {
             self.try_send_api_request(crate::commands::engine_request::unsubscribe_all_trades())?;
         }
         Ok(())
