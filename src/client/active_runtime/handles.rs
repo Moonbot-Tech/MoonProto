@@ -559,7 +559,7 @@ impl MoonStreams<'_> {
         self.client.subscribe_trades_for(mode, market_names)
     }
 
-    /// Unsubscribe from all trades and clear the reconnect registry intent.
+    /// Keep the all-trades stream disabled across reconnects.
     pub fn unsubscribe_all_trades(&self) -> Result<(), MoonClientError> {
         self.client.unsubscribe_all_trades()
     }

@@ -85,7 +85,7 @@ impl ClientSender {
         }
     }
 
-    /// Unsubscribe from the all-trades stream and update the reconnect registry.
+    /// Keep the all-trades stream disabled across reconnects.
     pub(crate) fn unsubscribe_all_trades(&self) {
         if let Err(e) = self.try_unsubscribe_all_trades() {
             log::warn!(target: "moonproto::client",
@@ -142,6 +142,9 @@ impl ClientSender {
     }
 
     /// Fallible orderbook unsubscribe.
+    ///
+    /// The supplied market is sent even when it was absent locally: the server
+    /// command is idempotent and local absence does not prove remote absence.
     pub(crate) fn try_unsubscribe_orderbook(
         &self,
         market_name: &str,
@@ -150,13 +153,12 @@ impl ClientSender {
             return Err(SubscribeError::Disconnected);
         }
         let market_name = market_name.to_string();
-        let removed = {
+        {
             let mut registry = self.shared.subscription_registry.lock();
-            let removed = registry.orderbook_subs.remove(&market_name);
+            registry.orderbook_subs.remove(&market_name);
             self.shared.refresh_subscription_summary(&registry);
-            removed
-        };
-        if removed && self.domain_ready_for_typed_send() {
+        }
+        if self.domain_ready_for_typed_send() {
             self.try_send_api_request(crate::commands::engine_request::unsubscribe_order_book(&[
                 &market_name,
             ]))?;
@@ -221,18 +223,15 @@ impl ClientSender {
         if !self.shared.app_queue_alive.load(Ordering::Relaxed) {
             return Err(SubscribeError::Disconnected);
         }
-        let mut removed_names = Vec::new();
         {
             let mut registry = self.shared.subscription_registry.lock();
-            for market_name in market_names {
-                if registry.orderbook_subs.remove(&market_name) {
-                    removed_names.push(market_name);
-                }
+            for market_name in &market_names {
+                registry.orderbook_subs.remove(market_name);
             }
             self.shared.refresh_subscription_summary(&registry);
         }
-        if !removed_names.is_empty() && self.domain_ready_for_typed_send() {
-            let refs: Vec<&str> = removed_names.iter().map(String::as_str).collect();
+        if self.domain_ready_for_typed_send() {
+            let refs: Vec<&str> = market_names.iter().map(String::as_str).collect();
             self.try_send_api_request(crate::commands::engine_request::unsubscribe_order_book(
                 &refs,
             ))?;
@@ -291,10 +290,10 @@ impl ClientSender {
         }
         let wire_changed = {
             let mut registry = self.shared.subscription_registry.lock();
-            let new_sub = Some(TradesSubscription { want_mm });
+            let new_intent = AllTradesIntent::Subscribed(TradesSubscription { want_mm });
             let wire_changed =
-                registry.trades_sub != new_sub || registry.mm_orders_sub != Some(want_mm);
-            registry.trades_sub = Some(TradesSubscription { want_mm });
+                registry.all_trades_intent != new_intent || registry.mm_orders_sub != Some(want_mm);
+            registry.all_trades_intent = new_intent;
             registry.mm_orders_sub = Some(want_mm);
             registry.trades_storage_scope = storage_scope;
             self.shared.refresh_subscription_summary(&registry);
@@ -309,17 +308,19 @@ impl ClientSender {
     }
 
     /// Fallible all-trades unsubscribe.
+    ///
+    /// This is an idempotent remote-state command, not a local `Some -> None`
+    /// transition. Once ready, every explicit call reaches the server.
     pub(crate) fn try_unsubscribe_all_trades(&self) -> Result<(), SubscribeError> {
         if !self.shared.app_queue_alive.load(Ordering::Relaxed) {
             return Err(SubscribeError::Disconnected);
         }
-        let had_subscription = {
+        {
             let mut registry = self.shared.subscription_registry.lock();
-            let had_subscription = registry.trades_sub.take().is_some();
+            registry.all_trades_intent = AllTradesIntent::Unsubscribed;
             self.shared.refresh_subscription_summary(&registry);
-            had_subscription
-        };
-        if had_subscription && self.domain_ready_for_typed_send() {
+        }
+        if self.domain_ready_for_typed_send() {
             self.try_send_api_request(crate::commands::engine_request::unsubscribe_all_trades())?;
         }
         Ok(())
@@ -385,17 +386,14 @@ impl ClientSender {
         if !self.shared.app_queue_alive.load(Ordering::Relaxed) {
             return Err(SubscribeError::Disconnected);
         }
-        let mut removed = Vec::new();
         {
             let mut registry = self.shared.subscription_registry.lock();
-            for market_name in market_names {
-                if registry.candle_subs.remove(&market_name).is_some() {
-                    removed.push(market_name);
-                }
+            for market_name in &market_names {
+                registry.candle_subs.remove(market_name);
             }
         }
-        if !removed.is_empty() && self.domain_ready_for_typed_send() {
-            let refs: Vec<&str> = removed.iter().map(String::as_str).collect();
+        if self.domain_ready_for_typed_send() {
+            let refs: Vec<&str> = market_names.iter().map(String::as_str).collect();
             self.try_send_api_request(crate::commands::candles::unsubscribe_candles(&refs))?;
         }
         Ok(())

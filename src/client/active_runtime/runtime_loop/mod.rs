@@ -710,6 +710,29 @@ mod tests {
     }
 
     #[test]
+    fn runtime_unsubscribe_without_local_subscription_reaches_wire_queue() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+
+        assert!(!handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::UnsubscribeAllTrades,
+            &mut pending,
+        ));
+
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(sliced.len(), 1);
+        assert_eq!(sliced[0].cmd, Command::API.to_byte());
+        assert_eq!(
+            sliced[0].data.get(11).copied(),
+            Some(crate::commands::engine_api::EngineMethod::UnsubscribeAllTrades.to_byte())
+        );
+    }
+
+    #[test]
     fn init_time_trades_scope_schedules_auto_candles_when_runtime_starts() {
         let mut client = ready_client();
         client.subscribe_all_trades(false);
@@ -908,6 +931,42 @@ mod tests {
             .expect("deferred strategy snapshot payload must parse");
         assert_eq!(batch.strategies.len(), 1);
         assert_eq!(batch.strategies[0].strategy_id, strategy.strategy_id);
+    }
+
+    #[test]
+    fn startup_defers_unsubscribe_then_sends_it_after_init() {
+        let mut client = Client::new(dummy_cfg());
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let (tx, rx) = mpsc::channel();
+        tx.send(RuntimeCommand::UnsubscribeAllTrades).unwrap();
+
+        let mut deferred = VecDeque::new();
+        let (stop, changed) = drain_commands_during_startup(&rx, &mut deferred);
+        assert!(!stop);
+        assert!(!changed);
+        assert_eq!(deferred.len(), 1);
+        assert!(client.take_send_queues_for_test().0.is_empty());
+
+        client.testing_set_domain_ready(true);
+        let (stop, changed) = drain_deferred_and_live_commands(
+            &mut client,
+            &mut dispatcher,
+            &rx,
+            &mut pending,
+            &mut deferred,
+        );
+        assert!(!stop);
+        assert!(!changed);
+        assert!(deferred.is_empty());
+
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(sliced.len(), 1);
+        assert_eq!(
+            sliced[0].data.get(11).copied(),
+            Some(crate::commands::engine_api::EngineMethod::UnsubscribeAllTrades.to_byte())
+        );
     }
 
     #[test]

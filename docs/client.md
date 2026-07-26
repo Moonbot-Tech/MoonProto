@@ -514,11 +514,11 @@ client.streams().unsubscribe_all_orderbooks()?;
 client.streams().unsubscribe_all_trades()?;
 ```
 
-The registry records the latest subscription intent. Before Init, public
-subscription calls update that registry but do not send Engine API/UI
-subscription packets. The one-time Init flushes the pre-init registry once, and
-later reconnects replay the registry automatically, so streams continue without
-the application running Init again. After a server restart, orderbook replay is
+The runtime records the latest subscription intent. Before Init, public
+subscription commands are deferred and send no Engine API/UI packets. The
+one-time Init applies them once, and later reconnects replay the resulting
+intent automatically without the application running Init again. After a
+server restart, orderbook replay is
 delayed until fresh market indexes have been received for the current
 `PeerAppToken`; this prevents new server `market_index` values from racing the
 old local index map.
@@ -545,10 +545,15 @@ group before confirming the candle subscription watermark.
 All-trades is opt-in in the Rust library. If the registry has no all-trades
 subscription intent, incoming `TradesStream` / `TradesResendResponse` packets
 are treated as unexpected and are dropped instead of becoming public events.
+`unsubscribe_all_trades` is an idempotent remote-state command: after Init every
+explicit call reaches the server, and the disabled intent is retained across
+reconnects. This prevents a stale remote stream from surviving merely because
+the local read model already reports no active subscription.
 Orderbook subscriptions are per market name; incoming events carry typed
 `OrderBookKind` so the application can render futures and spot books separately.
-The batched orderbook helpers update the same registry and send one
-subscribe/unsubscribe request for the changed market names. Use
+The batched orderbook helpers update the same registry. Subscribe requests send
+newly added names; explicit unsubscribe requests always send the names supplied
+by the application, so they can repair stale remote state. Use
 `unsubscribe_all_orderbooks` instead of raw
 Engine API calls when clearing the UI selection: the raw Engine API call does
 not update the reconnect registry. The high-level helper sends one batched
@@ -564,9 +569,9 @@ client.balances().refresh()?;
 client.strategies().sell_price_update(strategy_id, sell_price)?;
 ```
 
-Typed command methods append into the same unbounded priority send queues
-after Init. Before Init, subscriptions update only the reconnect registry and
-other domain commands queue nothing. Neither path has a local capacity cap.
+Typed command methods append into the same unbounded priority send queues after
+Init. Before Init, the runtime defers subscription commands and other domain
+commands queue nothing. Neither path has a local capacity cap.
 
 Order actions with local stateful effects, such as replace/cancel/panic,
 stop/VStop, and immune clicks, are intents on `client.orders()`. The runtime

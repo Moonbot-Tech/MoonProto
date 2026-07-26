@@ -90,7 +90,7 @@ fn pre_init_subscription_intents_update_registry_without_wire() {
     client.with_subscription_registry(|registry| {
         assert!(registry.orderbook_subs.contains("BTCUSDT"));
         assert_eq!(
-            registry.trades_sub,
+            registry.all_trades_intent.subscription(),
             Some(TradesSubscription { want_mm: true })
         );
         assert_eq!(registry.mm_orders_sub, Some(false));
@@ -148,7 +148,7 @@ fn client_sender_can_be_held_independently_of_client() {
     let sender = client.sender();
     sender.subscribe_all_trades(true);
     assert_eq!(
-        client.with_subscription_registry(|registry| registry.trades_sub),
+        client.with_subscription_registry(|registry| registry.all_trades_intent.subscription()),
         Some(TradesSubscription { want_mm: true })
     );
     let sent = drain_api_requests(&client);
@@ -311,7 +311,7 @@ fn subscribe_all_trades_sets_registry() {
     let client = Client::new(dummy_cfg());
     client.subscribe_all_trades(true);
     assert_eq!(
-        client.with_subscription_registry(|registry| registry.trades_sub),
+        client.with_subscription_registry(|registry| registry.all_trades_intent.subscription()),
         Some(TradesSubscription { want_mm: true }),
     );
     assert_eq!(
@@ -322,7 +322,7 @@ fn subscribe_all_trades_sets_registry() {
     // A repeat with a different want_mm updates the registry.
     client.subscribe_all_trades(false);
     assert_eq!(
-        client.with_subscription_registry(|registry| registry.trades_sub),
+        client.with_subscription_registry(|registry| registry.all_trades_intent.subscription()),
         Some(TradesSubscription { want_mm: false }),
     );
     assert_eq!(
@@ -338,7 +338,7 @@ fn subscribe_trades_for_sets_storage_scope_without_changing_wire_shape() {
     client.subscribe_trades_for(true, ["ETHUSDT", "BTCUSDT", "ETHUSDT"]);
     client.with_subscription_registry(|registry| {
         assert_eq!(
-            registry.trades_sub,
+            registry.all_trades_intent.subscription(),
             Some(TradesSubscription { want_mm: true })
         );
         assert_eq!(registry.mm_orders_sub, Some(true));
@@ -355,11 +355,14 @@ fn subscribe_trades_for_sets_storage_scope_without_changing_wire_shape() {
 }
 
 #[test]
-fn unsubscribe_all_trades_clears_registry() {
+fn unsubscribe_all_trades_records_negative_intent() {
     let client = Client::new(dummy_cfg());
     client.subscribe_all_trades(true);
     client.unsubscribe_all_trades();
-    assert!(client.with_subscription_registry(|registry| registry.trades_sub.is_none()));
+    assert_eq!(
+        client.with_subscription_registry(|registry| registry.all_trades_intent),
+        AllTradesIntent::Unsubscribed
+    );
     assert!(client.trade_storage_intent().is_none());
     assert!(crate::events::ActiveDispatchContext::from_client(&client)
         .trade_storage_intent
@@ -384,7 +387,7 @@ fn apply_mm_orders_subscribe_keeps_all_trades_want_mm() {
         Some(true)
     );
     assert_eq!(
-        client.with_subscription_registry(|registry| registry.trades_sub),
+        client.with_subscription_registry(|registry| registry.all_trades_intent.subscription()),
         Some(TradesSubscription { want_mm: false }),
     );
 }

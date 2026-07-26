@@ -397,7 +397,8 @@ fn first_fine_before_init_does_not_send_engine_api_or_restore_subscriptions() {
     client.auth_status = AuthStatus::Connected;
     client.reconnect.tracked_indexes_peer_app_token = 0;
     client.with_subscription_registry_mut(|registry| {
-        registry.trades_sub = Some(TradesSubscription { want_mm: true });
+        registry.all_trades_intent =
+            AllTradesIntent::Subscribed(TradesSubscription { want_mm: true });
         registry.mm_orders_sub = Some(true);
         registry.orderbook_subs.insert("BTCUSDT".to_string());
     });
@@ -440,7 +441,8 @@ fn post_init_reconnect_restores_domain_without_second_init_and_reopens_stream_ga
         fetch_indexes: true,
     };
     client.with_subscription_registry_mut(|registry| {
-        registry.trades_sub = Some(TradesSubscription { want_mm: false });
+        registry.all_trades_intent =
+            AllTradesIntent::Subscribed(TradesSubscription { want_mm: false });
         registry.orderbook_subs.insert("BTCUSDT".to_string());
     });
 
@@ -739,7 +741,8 @@ fn trades_reconnect_restores_distinct_mm_orders_override_after_delayed_subscribe
     client.set_domain_ready(true);
     client.server_token = 0x2222;
     client.with_subscription_registry_mut(|registry| {
-        registry.trades_sub = Some(TradesSubscription { want_mm: false });
+        registry.all_trades_intent =
+            AllTradesIntent::Subscribed(TradesSubscription { want_mm: false });
         registry.mm_orders_sub = Some(true);
     });
 
@@ -1210,7 +1213,8 @@ fn trades_reconnect_retries_every_five_seconds_until_stream_token_is_seen() {
     client.set_domain_ready(true);
     client.server_token = 0x2222;
     client.with_subscription_registry_mut(|registry| {
-        registry.trades_sub = Some(TradesSubscription { want_mm: true });
+        registry.all_trades_intent =
+            AllTradesIntent::Subscribed(TradesSubscription { want_mm: true });
     });
 
     client.tick_trades_reconnect_sequence(10_000, 0);
@@ -1314,7 +1318,8 @@ fn successful_subscribe_all_trades_response_refreshes_reconnect_gate() {
     client.server_token = 0x2222;
     client.reconnect.last_trades_reconnect_check_ms = -TRADES_RECONNECT_THROTTLE_MS;
     client.with_subscription_registry_mut(|registry| {
-        registry.trades_sub = Some(TradesSubscription { want_mm: true });
+        registry.all_trades_intent =
+            AllTradesIntent::Subscribed(TradesSubscription { want_mm: true });
     });
 
     let response_payload =

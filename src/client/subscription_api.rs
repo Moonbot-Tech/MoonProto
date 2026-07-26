@@ -272,10 +272,10 @@ impl Client {
         delay_orderbooks: bool,
         delay_trades: bool,
     ) {
-        let (trades_sub, mm_orders_sub, orderbook_subs, candle_subs) = {
+        let (all_trades_intent, mm_orders_sub, orderbook_subs, candle_subs) = {
             let registry = self.subscriptions.subscription_registry.lock();
             (
-                registry.trades_sub,
+                registry.all_trades_intent,
                 registry.mm_orders_sub,
                 registry.orderbook_subs.iter().cloned().collect::<Vec<_>>(),
                 registry
@@ -286,12 +286,8 @@ impl Client {
             )
         };
 
-        if let Some(sub) = trades_sub {
-            if delay_trades {
-                // Reconnect path is handled by `tick_trades_reconnect_sequence`:
-                // Delphi does not just replay SubscribeAllTrades; it first sends
-                // UnsubscribeAllTrades, waits 100ms, then subscribes again.
-            } else {
+        match all_trades_intent {
+            AllTradesIntent::Subscribed(sub) if !delay_trades => {
                 let want_mm = sub.want_mm;
                 self.send_api_request(&crate::commands::engine_request::subscribe_all_trades(
                     want_mm,
@@ -302,8 +298,22 @@ impl Client {
                     }
                 }
             }
-        } else if let Some(subscribe) = mm_orders_sub {
-            self.send_mm_orders_subscribe_cmd(subscribe);
+            AllTradesIntent::Subscribed(_) => {
+                // Reconnect path is handled by `tick_trades_reconnect_sequence`:
+                // Reconnect recovery first sends UnsubscribeAllTrades, waits
+                // 100ms, then subscribes again instead of blindly replaying.
+            }
+            AllTradesIntent::Unsubscribed => {
+                self.send_api_request(&crate::commands::engine_request::unsubscribe_all_trades());
+                if let Some(subscribe) = mm_orders_sub {
+                    self.send_mm_orders_subscribe_cmd(subscribe);
+                }
+            }
+            AllTradesIntent::Unspecified => {
+                if let Some(subscribe) = mm_orders_sub {
+                    self.send_mm_orders_subscribe_cmd(subscribe);
+                }
+            }
         }
         self.restore_candle_subscriptions(candle_subs, self.now_ms());
         if delay_orderbooks {
@@ -337,7 +347,7 @@ impl Client {
 
     fn registry_trades_want_mm(&self) -> Option<bool> {
         let registry = self.subscriptions.subscription_registry.lock();
-        let sub = registry.trades_sub?;
+        let sub = registry.all_trades_intent.subscription()?;
         Some(sub.want_mm)
     }
 
@@ -576,10 +586,10 @@ impl Client {
             return;
         }
 
-        let (trades_sub, orderbook_subs, candle_subs) = {
+        let (all_trades_intent, orderbook_subs, candle_subs) = {
             let registry = self.subscriptions.subscription_registry.lock();
             (
-                registry.trades_sub,
+                registry.all_trades_intent,
                 registry.orderbook_subs.iter().cloned().collect::<Vec<_>>(),
                 registry
                     .candle_subs
@@ -589,14 +599,20 @@ impl Client {
             )
         };
 
-        if let Some(sub) = trades_sub {
-            let want_mm = sub.want_mm;
-            self.send_api_request(&crate::commands::engine_request::subscribe_all_trades(
-                want_mm,
-            ));
-            let mut registry = self.subscriptions.subscription_registry.lock();
-            registry.mm_orders_sub = Some(want_mm);
-            self.refresh_subscription_summary(&registry);
+        match all_trades_intent {
+            AllTradesIntent::Subscribed(sub) => {
+                let want_mm = sub.want_mm;
+                self.send_api_request(&crate::commands::engine_request::subscribe_all_trades(
+                    want_mm,
+                ));
+                let mut registry = self.subscriptions.subscription_registry.lock();
+                registry.mm_orders_sub = Some(want_mm);
+                self.refresh_subscription_summary(&registry);
+            }
+            AllTradesIntent::Unsubscribed => {
+                self.send_api_request(&crate::commands::engine_request::unsubscribe_all_trades());
+            }
+            AllTradesIntent::Unspecified => {}
         }
 
         let refs: Vec<&str> = orderbook_subs.iter().map(String::as_str).collect();

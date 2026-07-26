@@ -1236,7 +1236,8 @@ fn post_init_mm_orders_does_not_overwrite_prequeued_all_trades_want_mm() {
     let mut client = Client::new(dummy_cfg());
     client.set_domain_ready(true);
     client.with_subscription_registry_mut(|registry| {
-        registry.trades_sub = Some(TradesSubscription { want_mm: true });
+        registry.all_trades_intent =
+            AllTradesIntent::Subscribed(TradesSubscription { want_mm: true });
     });
     let cfg = InitConfig {
         mm_orders_subscribe: None,

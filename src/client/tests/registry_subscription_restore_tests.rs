@@ -91,7 +91,8 @@ fn shared_state_preserves_subscription_intent_across_runtime_rebuild() {
     let shared = ClientSharedState::new();
     let first = Client::new_with_shared(dummy_cfg(), shared.clone());
     first.with_subscription_registry_mut(|registry| {
-        registry.trades_sub = Some(TradesSubscription { want_mm: true });
+        registry.all_trades_intent =
+            AllTradesIntent::Subscribed(TradesSubscription { want_mm: true });
         registry.mm_orders_sub = Some(false);
         registry.orderbook_subs.insert("BTCUSDT".to_string());
     });
@@ -100,7 +101,7 @@ fn shared_state_preserves_subscription_intent_across_runtime_rebuild() {
     let mut second = Client::new_with_shared(dummy_cfg(), shared);
     second.with_subscription_registry(|registry| {
         assert_eq!(
-            registry.trades_sub,
+            registry.all_trades_intent.subscription(),
             Some(TradesSubscription { want_mm: true })
         );
         assert_eq!(registry.mm_orders_sub, Some(false));
@@ -134,11 +135,71 @@ fn restore_with_empty_registry_sends_nothing() {
 }
 
 #[test]
+fn post_init_flush_sends_pre_init_explicit_unsubscribe() {
+    let mut client = Client::new(dummy_cfg());
+    client.unsubscribe_all_trades();
+    assert!(drain_api_requests(&client).is_empty());
+
+    mark_post_init(&mut client);
+    client.send_registry_subscriptions_after_init();
+
+    let sent = drain_api_requests(&client);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        method_id(&sent[0]),
+        Some(EngineMethod::UnsubscribeAllTrades.to_byte())
+    );
+}
+
+#[test]
+fn reconnect_restore_replays_explicit_unsubscribe_without_subscribe() {
+    let mut client = Client::new(dummy_cfg());
+    mark_post_init(&mut client);
+    client.with_subscription_registry_mut(|registry| {
+        registry.all_trades_intent = AllTradesIntent::Unsubscribed;
+    });
+    client.server_token = 0xCAFE;
+
+    client.restore_domain_after_reconnect();
+
+    let methods = drain_api_requests(&client)
+        .iter()
+        .filter_map(|payload| method_id(payload))
+        .collect::<Vec<_>>();
+    assert!(methods.contains(&EngineMethod::UnsubscribeAllTrades.to_byte()));
+    assert!(!methods.contains(&EngineMethod::SubscribeAllTrades.to_byte()));
+}
+
+#[test]
+fn shared_state_preserves_explicit_unsubscribe_across_runtime_rebuild() {
+    let shared = ClientSharedState::new();
+    let first = Client::new_with_shared(dummy_cfg(), shared.clone());
+    first.unsubscribe_all_trades();
+    drop(first);
+
+    let mut second = Client::new_with_shared(dummy_cfg(), shared);
+    assert_eq!(
+        second.with_subscription_registry(|registry| registry.all_trades_intent),
+        AllTradesIntent::Unsubscribed
+    );
+    mark_post_init(&mut second);
+    second.send_registry_subscriptions_after_init();
+
+    let sent = drain_api_requests(&second);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        method_id(&sent[0]),
+        Some(EngineMethod::UnsubscribeAllTrades.to_byte())
+    );
+}
+
+#[test]
 fn restore_trades_only_sends_single_subscribe_all_trades() {
     let mut client = Client::new(dummy_cfg());
     mark_post_init(&mut client);
     client.with_subscription_registry_mut(|registry| {
-        registry.trades_sub = Some(TradesSubscription { want_mm: true });
+        registry.all_trades_intent =
+            AllTradesIntent::Subscribed(TradesSubscription { want_mm: true });
     });
     client.server_token = 1;
     client.restore_registry_subscriptions();
@@ -156,7 +217,8 @@ fn restore_trades_replays_mm_orders_override_after_exact_trades_subscribe() {
     let mut client = Client::new(dummy_cfg());
     mark_post_init(&mut client);
     client.with_subscription_registry_mut(|registry| {
-        registry.trades_sub = Some(TradesSubscription { want_mm: false });
+        registry.all_trades_intent =
+            AllTradesIntent::Subscribed(TradesSubscription { want_mm: false });
         registry.mm_orders_sub = Some(true);
     });
     client.server_token = 1;
@@ -319,7 +381,8 @@ fn restore_combined_sends_trades_plus_orderbook_batches() {
     let mut client = Client::new(dummy_cfg());
     mark_post_init(&mut client);
     client.with_subscription_registry_mut(|registry| {
-        registry.trades_sub = Some(TradesSubscription { want_mm: false });
+        registry.all_trades_intent =
+            AllTradesIntent::Subscribed(TradesSubscription { want_mm: false });
         registry.orderbook_subs.insert("BTC".to_string());
         registry.orderbook_subs.insert("XRP".to_string());
     });

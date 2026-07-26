@@ -517,7 +517,7 @@ impl MoonClient {
         })
     }
 
-    /// Unsubscribe from all trades and clear the reconnect registry intent.
+    /// Keep the all-trades stream disabled across reconnects.
     pub(crate) fn unsubscribe_all_trades(&self) -> Result<(), MoonClientError> {
         self.send_no_reply(RuntimeCommand::UnsubscribeAllTrades)
     }

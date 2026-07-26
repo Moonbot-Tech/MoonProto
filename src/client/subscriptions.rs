@@ -28,6 +28,29 @@ pub struct TradesSubscription {
     pub want_mm: bool,
 }
 
+/// Desired server-side state of the all-trades stream.
+///
+/// `Unspecified` means the application has never managed this stream.
+/// `Unsubscribed` is an explicit negative intent that must survive reconnects;
+/// collapsing both states into `None` can leave a stale server subscription
+/// running after a lost unsubscribe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum AllTradesIntent {
+    #[default]
+    Unspecified,
+    Subscribed(TradesSubscription),
+    Unsubscribed,
+}
+
+impl AllTradesIntent {
+    pub(crate) fn subscription(self) -> Option<TradesSubscription> {
+        match self {
+            Self::Subscribed(subscription) => Some(subscription),
+            Self::Unspecified | Self::Unsubscribed => None,
+        }
+    }
+}
+
 /// One maintained live-candle subscription.
 ///
 /// Candle intervals are owned per market by the MoonBot core. A timeframe
@@ -74,7 +97,7 @@ pub struct ActiveSubscriptions {
 #[derive(Default)]
 pub(crate) struct SubscriptionRegistry {
     pub orderbook_subs: HashSet<String>,
-    pub trades_sub: Option<TradesSubscription>,
+    pub all_trades_intent: AllTradesIntent,
     pub trades_storage_scope: crate::state::TradeStorageScope,
     /// Last server-side `IsMMOrdersSubscribed` flag.
     ///
@@ -116,7 +139,7 @@ impl SubscriptionRegistry {
             });
         ActiveSubscriptions {
             orderbooks,
-            all_trades: self.trades_sub,
+            all_trades: self.all_trades_intent.subscription(),
             mm_orders: self.mm_orders_sub.unwrap_or(false),
             live_candles,
             live_candle_timeframes,
@@ -134,8 +157,10 @@ pub(crate) struct SubscriptionRegistrySummary {
 
 impl SubscriptionRegistrySummary {
     pub(crate) fn update_from(&self, registry: &SubscriptionRegistry) {
-        self.trades_subscribed
-            .store(registry.trades_sub.is_some(), Ordering::Relaxed);
+        self.trades_subscribed.store(
+            registry.all_trades_intent.subscription().is_some(),
+            Ordering::Relaxed,
+        );
         self.has_orderbook_subs
             .store(!registry.orderbook_subs.is_empty(), Ordering::Relaxed);
     }
@@ -161,10 +186,13 @@ pub(crate) fn refresh_subscription_summary(
     registry: &SubscriptionRegistry,
 ) {
     summary.update_from(registry);
-    *storage_intent.write() = registry.trades_sub.map(|subscription| TradeStorageIntent {
-        scope: Arc::new(registry.trades_storage_scope.clone()),
-        retain_mm_orders: registry.mm_orders_sub.unwrap_or(subscription.want_mm),
-    });
+    *storage_intent.write() = registry
+        .all_trades_intent
+        .subscription()
+        .map(|subscription| TradeStorageIntent {
+            scope: Arc::new(registry.trades_storage_scope.clone()),
+            retain_mm_orders: registry.mm_orders_sub.unwrap_or(subscription.want_mm),
+        });
 }
 
 /// What the single user-level Init requested from the domain layer.
@@ -463,7 +491,7 @@ mod tests {
         // HashSet insertion order is non-deterministic; the snapshot must sort.
         reg.orderbook_subs.insert("ETHUSDT".to_string());
         reg.orderbook_subs.insert("BTCUSDT".to_string());
-        reg.trades_sub = Some(TradesSubscription { want_mm: true });
+        reg.all_trades_intent = AllTradesIntent::Subscribed(TradesSubscription { want_mm: true });
         reg.mm_orders_sub = Some(true);
         reg.candle_subs
             .insert("ETHUSDT".to_string(), DeepHistoryKind::Hour4);

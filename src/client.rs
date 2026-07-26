@@ -142,8 +142,9 @@ pub(crate) use send_queue::{initial_retry_left, typed_send_metadata, SendItem, S
 pub(crate) use sender::ClientSenderShared;
 use socket::{set_dont_fragment_for_socket, set_socket_buffers, ClientTransport};
 pub(crate) use subscriptions::{
-    refresh_subscription_summary, DomainRestoreIntent, PendingTradesUnsubscribe, ReconnectRestore,
-    SubscriptionRegistry, SubscriptionRegistrySummary, Subscriptions, TradeStorageIntent,
+    refresh_subscription_summary, AllTradesIntent, DomainRestoreIntent, PendingTradesUnsubscribe,
+    ReconnectRestore, SubscriptionRegistry, SubscriptionRegistrySummary, Subscriptions,
+    TradeStorageIntent,
 };
 pub(crate) use transport_state::{
     DataReadState, ReaderSlicedStats, RecvState, SentSliced, SlicedAck,

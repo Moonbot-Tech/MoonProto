@@ -164,7 +164,7 @@ fn pre_init_sender_subscription_records_intent_without_wire() {
         let registry = registry.lock();
         assert!(registry.orderbook_subs.contains("BTCUSDT"));
         assert_eq!(
-            registry.trades_sub,
+            registry.all_trades_intent.subscription(),
             Some(TradesSubscription { want_mm: true })
         );
         assert_eq!(registry.mm_orders_sub, Some(false));
@@ -177,6 +177,21 @@ fn unsubscribe_orderbook_updates_registry_and_sends_wire_request() {
     let (sender, registry, send_q, _, _, _) = make_sender();
     registry.lock().orderbook_subs.insert("ETHUSDT".to_string());
     sender.unsubscribe_orderbook("ETHUSDT");
+    assert!(!registry.lock().orderbook_subs.contains("ETHUSDT"));
+    let sent = take_send_items(&send_q);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        method_id(&sent[0].data),
+        Some(EngineMethod::UnsubscribeOrderBook.to_byte())
+    );
+}
+
+#[test]
+fn unsubscribe_orderbook_without_local_intent_still_reaches_server() {
+    let (sender, registry, send_q, _, _, _) = make_sender();
+
+    sender.unsubscribe_orderbook("ETHUSDT");
+
     assert!(!registry.lock().orderbook_subs.contains("ETHUSDT"));
     let sent = take_send_items(&send_q);
     assert_eq!(sent.len(), 1);
@@ -220,6 +235,22 @@ fn unsubscribe_orderbooks_sends_one_batched_wire_request() {
 }
 
 #[test]
+fn unsubscribe_candles_without_local_intent_still_reaches_server() {
+    let (sender, registry, send_q, _, _, _) = make_sender();
+
+    sender.unsubscribe_candles(["BTCUSDT"]);
+
+    assert!(!registry.lock().candle_subs.contains_key("BTCUSDT"));
+    let sent = take_send_items(&send_q);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        method_id(&sent[0].data),
+        Some(EngineMethod::UnsubscribeCandles.to_byte())
+    );
+    assert_eq!(market_names_count(&sent[0].data), Some(1));
+}
+
+#[test]
 fn unsubscribe_all_orderbooks_clears_registry_and_sends_existing_names() {
     let (sender, registry, send_q, _, _, _) = make_sender();
     registry.lock().orderbook_subs.insert("BTCUSDT".to_string());
@@ -241,7 +272,7 @@ fn subscribe_all_trades_carries_want_mm_flag() {
     sender.subscribe_all_trades(false);
     let registry = registry.lock();
     assert_eq!(
-        registry.trades_sub,
+        registry.all_trades_intent.subscription(),
         Some(TradesSubscription { want_mm: false })
     );
     assert_eq!(registry.mm_orders_sub, Some(false));
@@ -254,17 +285,53 @@ fn subscribe_all_trades_carries_want_mm_flag() {
 }
 
 #[test]
-fn unsubscribe_all_trades_clears_registry_and_sends_wire_request() {
+fn unsubscribe_all_trades_records_off_intent_and_sends_wire_request() {
     let (sender, registry, send_q, _, _, _) = make_sender();
-    registry.lock().trades_sub = Some(TradesSubscription { want_mm: true });
+    registry.lock().all_trades_intent =
+        AllTradesIntent::Subscribed(TradesSubscription { want_mm: true });
     sender.unsubscribe_all_trades();
-    assert!(registry.lock().trades_sub.is_none());
+    assert_eq!(
+        registry.lock().all_trades_intent,
+        AllTradesIntent::Unsubscribed
+    );
     let sent = take_send_items(&send_q);
     assert_eq!(sent.len(), 1);
     assert_eq!(
         method_id(&sent[0].data),
         Some(EngineMethod::UnsubscribeAllTrades.to_byte())
     );
+}
+
+#[test]
+fn unsubscribe_all_trades_without_local_subscription_still_reaches_server() {
+    let (sender, registry, send_q, _, _, _) = make_sender();
+
+    sender.unsubscribe_all_trades();
+    sender.unsubscribe_all_trades();
+
+    assert_eq!(
+        registry.lock().all_trades_intent,
+        AllTradesIntent::Unsubscribed
+    );
+    let sent = take_send_items(&send_q);
+    assert_eq!(sent.len(), 2);
+    assert!(sent.iter().all(|item| {
+        method_id(&item.data) == Some(EngineMethod::UnsubscribeAllTrades.to_byte())
+    }));
+}
+
+#[test]
+fn pre_init_unsubscribe_all_trades_records_off_without_wire() {
+    let (sender, registry, send_q, _, _, domain_ready) = make_sender();
+    domain_ready.store(false, Ordering::Relaxed);
+
+    sender.unsubscribe_all_trades();
+
+    assert_eq!(
+        registry.lock().all_trades_intent,
+        AllTradesIntent::Unsubscribed
+    );
+    assert!(take_send_items(&send_q).is_empty());
 }
 
 #[test]

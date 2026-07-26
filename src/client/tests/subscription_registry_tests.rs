@@ -4,7 +4,7 @@ use super::*;
 fn registry_default_is_empty() {
     let r = SubscriptionRegistry::default();
     assert!(r.orderbook_subs.is_empty());
-    assert!(r.trades_sub.is_none());
+    assert_eq!(r.all_trades_intent, AllTradesIntent::Unspecified);
 }
 
 #[test]
