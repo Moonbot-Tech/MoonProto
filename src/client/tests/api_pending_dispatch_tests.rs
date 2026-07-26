@@ -635,7 +635,7 @@ fn reader_consumed_api_response_still_reaches_dispatcher_state() {
 
 #[test]
 fn s1_drops_plaintext_api_response_with_non_unencrypted_method() {
-    // S1 part 2 (эталон MoonProtoClient.pas ClientNewData MPC_API guard): a
+    // S1 part 2 (reference MoonProtoClient.pas ClientNewData MPC_API guard): a
     // plaintext API response is only legitimate for UnencryptedMethods
     // (GetMarketsList / UpdateMarketsList / RequestCandlesData). The sensitive
     // gate (part 1) intentionally lets MPC_API through, so without this method
@@ -666,8 +666,9 @@ fn s1_drops_plaintext_api_response_with_non_unencrypted_method() {
 
     // An unparseable / short plaintext API payload is not a valid engine response.
     // The server never sends such a thing in plaintext, so it is dropped rather
-    // than delivered raw — matching the эталон, where a non-response either fails
-    // the TEngineResponse gate or no-ops in ProcessApiCommand (no state change).
+    // than delivered raw — matching the reference implementation, where a
+    // non-response either fails the TEngineResponse gate or no-ops in
+    // ProcessApiCommand (no state change).
     let unparseable = vec![0u8; 5];
     assert!(
         Client::decode_command_payload_shared(

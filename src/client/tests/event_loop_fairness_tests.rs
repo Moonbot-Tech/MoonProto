@@ -513,7 +513,7 @@ fn active_dispatch_panic_drops_payload_without_rebuilding_dispatcher() {
 
 #[test]
 fn s1_drops_plaintext_sensitive_commands_but_delivers_non_sensitive() {
-    // S1 (эталон MoonProtoCommon.pas DataReadInt): a non-crypted command in
+    // S1 (reference MoonProtoCommon.pas DataReadInt): a non-crypted command in
     // MoonProtoSensitiveCmds (Order/UI/Strat/Balance — and API on the server)
     // must be dropped before it reaches the application. The transport MAC only
     // proves authenticity against a known PSK; without this gate a peer that
