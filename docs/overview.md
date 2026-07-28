@@ -168,6 +168,7 @@ let system_time = trade.time().system_time();
 
 | API | Purpose |
 |---|---|
+| `features.md` | Meaning-first map from terminal features to the high-level API |
 | `active_lib.md` | What `MoonClient` maintains automatically |
 | `client.md` | `MoonClient`, config, init, subscriptions, requests |
 | `events.md` | `MoonClient` events and immutable snapshots |

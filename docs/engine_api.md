@@ -18,7 +18,7 @@ Use these non-blocking calls from UI/application code:
 | Orders snapshot | `orders().request_snapshot()` | order events, `snapshot().orders()` |
 | UI settings | `settings().refresh()` | `Event::Settings`, `snapshot().settings()` |
 | CoinCard candles | `candles().request_coin_card_for(&market, kind)` | `Event::CoinCardCandles`, `snapshot().coin_card_candles_for(&market, kind)` |
-| Account mutations | `account().set_leverage_for(&market, ...)`, `account().set_hedge_mode`, `account().cancel_all_orders`, `account().change_position_type_for(&market, position_type)`, `balances().convert_dust_bnb`, `account().confirm_risk_limit_for(&market)`, `account().set_ma_mode`, `balances().transfer_asset`, `streams().reload_order_book` | `Event::EngineAction` and normal retained state updates |
+| Account/exchange mutations | `account()`, `balances()`, and `streams()` typed action helpers | `Event::EngineAction` and normal retained state updates |
 
 Example:
 
@@ -41,6 +41,24 @@ if let Some(snapshot) = client.snapshot() {
 `snapshot().account().api_expiration()` returns `ApiExpirationTime`: use
 `time()`, `system_time()`, or `days_until(now)` for UI labels instead of
 carrying legacy wire-time doubles through the UI.
+
+## Account And Exchange Actions
+
+| User action | API |
+|---|---|
+| Set leverage for the selected market | `account().set_leverage_for(&market, leverage)` |
+| Switch account hedge mode | `account().set_hedge_mode(enabled)` |
+| Switch one market between cross and isolated mode | `account().change_position_type_for(&market, position_type)` |
+| Confirm a pending exchange risk-limit/MMR change | `account().confirm_risk_limit_for(&market)` |
+| Toggle multi-assets/union margin mode where supported | `account().set_ma_mode(enabled)` |
+| Cancel every exchange order through the connected core | `account().cancel_all_orders()` |
+| Transfer an asset between Spot/Futures/Quarterly wallets | `balances().transfer_asset(...)` |
+| Convert supported dust balances to BNB | `balances().convert_dust_bnb()` |
+| Force an Engine API orderbook reload | `streams().reload_order_book()` |
+
+These methods queue work and return an `EngineActionTicket`; they do not mean
+the exchange accepted the action. Use the matching `Event::EngineAction` and
+retained state update as the result.
 
 ## Candles
 

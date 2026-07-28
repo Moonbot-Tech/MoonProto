@@ -347,9 +347,8 @@ Typed outgoing domain helpers use the same Init gate. Before Init:
 subscription packets into the send queue; trade wrappers, UI wrappers, strategy
 wrappers, and `balance_request_refresh` queue nothing. Stateful order helpers
 such as replace/cancel/stop/VStop/immune also do not mutate the local `Orders`
-cache before Init. The mandatory init primitives (`BaseCheck`, `AuthCheck`,
-`GetMarketsList`, `UpdateMarketsList`, and the strategy schema request) are
-owned by the runtime, not by application code.
+cache before Init. Mandatory authentication, market-list, price-refresh, and
+strategy-schema requests are owned by the runtime, not by application code.
 Balance bootstrap uses the normal post-init balance refresh intent. It follows
 the MoonBot core behavior where the initial balance API call can report success
 without carrying a serialized balance snapshot; the retained per-market balance
@@ -377,6 +376,9 @@ caller-built route records. The legacy `penalty` helper is the one remaining
 trade action that derives `TradeCtx` from `base_currency_code` and
 `exchange_code` learned during Init/BaseCheck. `new_order` also returns
 `NewOrderTicket`.
+`trade_route_status()` / `is_ready_to_trade()` check only that legacy route
+metadata. They are not the normal readiness gate; terminal code waits for
+`LifecycleEvent::Ready`.
 `ticket.client_order_id` is an outbound/local label only: the server does not
 echo it in the typed order stream, and the created order is identified by the
 server `uid`. Normal order tables should read created orders from
@@ -514,51 +516,18 @@ client.streams().unsubscribe_all_orderbooks()?;
 client.streams().unsubscribe_all_trades()?;
 ```
 
-The runtime records the latest subscription intent. Before Init, public
-subscription commands are deferred and send no Engine API/UI packets. The
-one-time Init applies them once, and later reconnects replay the resulting
-intent automatically without the application running Init again. After a
-server restart, orderbook replay is
-delayed until fresh market indexes have been received for the current
-`PeerAppToken`; this prevents new server `market_index` values from racing the
-old local index map.
-All-trades reconnect follows the MoonBot stream-recovery gate: until a
-`TradesStream` packet is seen with the current `ServerToken`, the library sends
-`UnsubscribeAllTrades`, waits 100 ms, then sends `SubscribeAllTrades`, retrying
-that sequence no more often than once per 5000 ms. A queued
-`SubscribeAllTrades` request arms the same gate, and a successful response
-refreshes it, so the active library waits for the first trades packet before
-deciding that the stream needs another reconnect cycle.
-Orderbook reconnect follows the MoonBot orderbook recovery gate: until a
-successful full-registry `SubscribeOrderBook` response confirms the current
-`ServerToken`, the library repeats the batched subscribe no more often than
-once per 5000 ms. The retry resets local orderbook sequence/cache state but
-keeps the last visible snapshot levels.
-Live-candle subscriptions retain a separate timeframe for every market.
-Calling `subscribe_candles` again changes only the listed markets; it does not
-require an unsubscribe and does not alter other candle subscriptions. The core
-broadcasts the effective per-market choice as
-`Event::CandleTimeframeState`, including changes made by another client.
-`active_subscriptions().live_candle_timeframes` is the current read model.
-Hard reconnect groups the retained markets by timeframe and replays every
-group before confirming the candle subscription watermark.
-All-trades is opt-in in the Rust library. If the registry has no all-trades
-subscription intent, incoming `TradesStream` / `TradesResendResponse` packets
-are treated as unexpected and are dropped instead of becoming public events.
-`unsubscribe_all_trades` is an idempotent remote-state command: after Init every
-explicit call reaches the server, and the disabled intent is retained across
-reconnects. This prevents a stale remote stream from surviving merely because
-the local read model already reports no active subscription.
-Orderbook subscriptions are per market name; incoming events carry typed
-`OrderBookKind` so the application can render futures and spot books separately.
-The batched orderbook helpers update the same registry. Subscribe requests send
-newly added names; explicit unsubscribe requests always send the names supplied
-by the application, so they can repair stale remote state. Use
-`unsubscribe_all_orderbooks` instead of raw
-Engine API calls when clearing the UI selection: the raw Engine API call does
-not update the reconnect registry. The high-level helper sends one batched
-unsubscribe for the names that were remembered locally; if none were
-remembered, it sends nothing.
+The runtime records the latest subscription intent, defers it until Init when
+needed, and restores it after reconnect. Application code subscribes once.
+
+- All-trades is opt-in. `unsubscribe_all_trades()` always sends the idempotent
+  remote stop after Init and keeps that disabled intent across reconnects.
+- Orderbooks are tracked by market name; use the high-level single, batch, or
+  all-clear helpers so the reconnect registry stays correct.
+- Live candles keep one effective timeframe per market. A later subscribe for
+  selected markets changes only those markets; read the current map from
+  `active_subscriptions().live_candle_timeframes`.
+- The runtime waits for fresh server market mappings before restoring indexed
+  streams after a hard server-session change.
 
 Regular applications call the `MoonClient` handle from their UI/runtime layer:
 

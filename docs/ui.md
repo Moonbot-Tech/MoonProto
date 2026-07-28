@@ -407,6 +407,40 @@ Useful helpers:
 | AutoStart settings page | `auto_start_config()`, `set_auto_start_config(...)`, `update_auto_start_config(...)` |
 | AutoStart recovery/session page | `auto_start_config2()`, `set_auto_start_config2(...)`, `update_auto_start_config2(...)` |
 
+### Global Blacklist And TempBL
+
+The global coin blacklist and `TempBL` are core-wide "do not buy" controls.
+They block new strategy entries for matching coins. They do not block selling
+or closing positions that already exist.
+
+- The global blacklist remains active until settings change. Edit
+  `use_coins_black_list` and `coins_black_list_text`.
+- `TempBL` stores a remaining duration per symbol. Read rows with
+  `temp_blacklist_entries()`.
+- `set_temp_blacklist_entries(...)` replaces the complete TempBL list. Include
+  every row that must remain, then send the edited settings snapshot.
+
+```rust
+use std::time::Duration;
+
+let Some(mut settings) = client
+    .snapshot()
+    .and_then(|state| state.settings().client_settings.clone())
+else {
+    return Ok(());
+};
+
+settings.set_temp_blacklist_entries([
+    ("ETHUSDT", Duration::from_secs(6 * 60 * 60)),
+    ("SOLUSDT", Duration::from_secs(60 * 60)),
+]);
+client.settings().send(settings)?;
+```
+
+Per-strategy `CoinsWhiteList` / `CoinsBlackList` are different: they affect only
+that strategy and are edited through its typed strategy object or
+`StrategyEditor`.
+
 Common settings controls:
 
 | UI meaning | Suggested control | Fields/helpers |
@@ -468,6 +502,28 @@ if let Some(current) = &snapshot.settings().client_settings {
 
 The hidden wire blobs are preserved for exact roundtrip and version
 compatibility when the typed views are written back.
+
+### AutoStart
+
+`AutoStartConfig` and `AutoStartConfig2` are the core's unattended-operation
+policy, not client-side timers:
+
+| Policy | Fields |
+|---|---|
+| Start automatically, restore the previous mode, enable detection, and start checked strategies | `auto_start`, `remember_state`, `auto_detect_on`, `strategies_on` |
+| Restrict operation to a daily time window | `work_time`, `work_time_from`, `work_time_to` |
+| Install updates automatically and optionally wait for sells to finish | `auto_update`, `dont_wait_sells` |
+| Stop after session loss and an optional minimum trade count; optionally sell positions | `auto_stop_if_loss`, `auto_stop_loss`, `stop_trades`, `sell_if_loss` |
+| Stop by loss over the last N hours | `auto_stop_if_loss_hours`, `auto_stop_hours_val`, `stop_hours`, `stop_hours_trades` |
+| Stop on BTC/exchange delta thresholds | `panic_btc`, `panic_btc_delta`, `panic_btc_delta_up`, `panic_market`, `panic_market_delta` |
+| Stop, sell, or restart after API-error or ping thresholds | `auto_stop_on_errors`, `errors_level`, `sell_all_on_errors`, `restart_after_err`, `restart_err_time`, `auto_stop_on_ping`, `ping_level`, `sell_all_on_ping`, `restart_after_ping`, `restart_ping_time` |
+| Exclude emulator trades from stop/loss accounting | `ignore_emulator` |
+| Restart after market deltas return to the configured range | `restart_on_market`, `btc_higher_than`, `btc_lower_than`, `market_higher_than` |
+| Listing/session policy | `show_old_listing`, `reset_session`, `rs_hours`, `max_session_cap` |
+
+Edit these values through `update_auto_start_config(...)` and
+`update_auto_start_config2(...)`, then send the full retained settings
+snapshot.
 
 ## Pending Deduplication
 

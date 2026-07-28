@@ -332,108 +332,16 @@ TokenTags::TRAD_FI;
 
 Use `contains`, `is_empty`, `bits`, and `from_bits` for bitset work.
 
-## Behavior Notes
+## Runtime Ownership
 
-These notes describe how the active runtime keeps the public read model current.
-Regular UI code should still use `MarketHandle`, market history readers, and
-typed events instead of server-index helpers.
+MoonClient refreshes market metadata, prices, funding, tags, and server-index
+mappings. It also handles listing refresh and reconnect recovery. Application
+code does not poll these endpoints or use server market indexes.
 
-`CheckBinanceTags` follows the MoonBot core client: the latest successful response is
-authoritative for tags. Known markets present in the response receive the new
-tags; known markets absent from that response read back as empty tags. A late
-payload read error is the only exception: already-read tags remain applied, and
-old absent tags are not cleared because the clear-unseen pass runs only
-after the read loop completes.
-
-`GetMarketsList` follows MoonBot core merge semantics. The first response populates
-the market list. Later responses update known markets by name and leave old
-names present if they are absent from the response; live price slots and token
-tags for known markets are preserved. Unknown names from a later response are
-added only when the list refresh was triggered by the `NewMarketFound`
-recovery path; otherwise they are ignored.
-
-The server-index mapping is rebuilt from the `GetMarketsList` response order on
-the first list and on a `NewMarketFound` refresh. A plain later
-`GetMarketsList` updates known market fields but does not rewrite the current
-`mIndex -> market name` mapping.
-
-`MarketsState::indexes_synchronized()` is a critical invariant.
-Cold Init builds the initial map from `GetMarketsList` using the same
-server-index rebuild contract as the MoonBot core. After server restart the
-runtime can mark it stale. If the one-time Init already
-completed, reconnect restore sends `GetMarketsIndexes` automatically and only
-then refreshes prices with `UpdateMarketsList`. Until the fresh response
-arrives, the active runtime drops orderbook/trades packets that depend on server
-indexes.
-Price updates keyed by server `mIndex` are also skipped while a previously known
-mapping is stale.
-
-For existing markets, `max_leverage` is updated from `GetMarketsList` only when
-the MoonBot core support flag `ES_MaxLevInGetMarkets` is active. In the active
-library path this is inferred from `BaseCheck`: currently only
-`ExchangeCode::FGate` enables it. New markets keep the value
-from the incoming list because the whole new market row is inserted.
-
-Correlation market definitions from `GetMarketsList` are inserted only when
-their `base_currency_name` is non-empty. Repeated definitions for an existing
-correlation market update tick size and `base_currency_name`, but keep the
-original exchange market currency. After a successful list, the active state
-also rebuilds BTC-correlation references and base-currency references. The
-BTC-correlation reference uses the current server base currency from
-`BaseCheck`: for a non-BTC base, the library replaces that base currency text in
-the market name with `BTC` and looks up the resulting CorrMarket name. For a BTC
-base it does nothing, matching the core correlation-market check.
-Correlation market price updates are merge-style for known correlation markets
-only: prices present in `UpdateMarketsList` overwrite their entries, unknown
-names are ignored, and absent known
-prices keep their previous value.
-
-After each successful price update, `BaseCurrencyPrice.last_price` is refreshed
-with MoonBot core priority: direct USDT market ask, reverse USDT market ask inverse,
-direct USDT CorrMarket price, reverse USDT CorrMarket price inverse, then
-`USDT = 1`.
-For every applied market price row, `MarketPrice` also mirrors the core
-post-assign fields from `UpdateMarketsList`:
-`last_bid = bid`, `last_ask = ask`, `p_last = (bid + ask) / 2`, and
-`min_lot_size = max(max(step_size, min_qty) * p_last, min_notional)`.
-`chart_price_step` is refreshed from the current ask by both
-`UpdateMarketsList` and applied orderbook updates; when `Ask > 0`, it becomes
-`max(eps, Ask / 5000)`, and when `Ask` is zero/missing, the previous value is
-kept.
-When funding is included, the same row also updates the retained market funding
-rate/time.
-
-Funding timestamps match MoonBot client state. The server serializes
-`FundingTime - TZShift`; Rust parsers add the local client timezone shift back,
-so retained funding time is client-local MoonBot wire time. A zero funding
-time stays zero. It is not Unix time; UI code should use
-`MarketHandle::price().funding_time().unix_millis()` or
-`Market::funding_time()` instead of carrying a raw `f64` timestamp.
-
-Trades stream packets also update the bounded live trade tail kept on each
-market. For futures trade rows, the runtime updates
-`MarketTradeState::last_got_all_trades_ms`, `last_trade_price`,
-`last_buy_price`, `last_sell_price`, `last_trade_price_ema15`,
-`last_trade_price_ema5`, and `last_trade_was_sell` before emitting the public
-`TradesEvent::Applied` signal. Spot trade rows update only
-`last_got_spot_trades_ms`; spot rows do not update last-trade price fields.
-
-If `UpdateMarketsList` refers to a server market index whose name is present in
-`GetMarketsIndexes` but absent from the current market list, the active runtime
-follows the `NewMarketFound` recovery path: it schedules a fresh `GetMarketsList` request
-automatically, throttled to roughly one request per 30 seconds while the unknown
-market condition persists. If that listing refresh adds new markets, the
-runtime emits `MarketsEvent::NewMarketsAdded { names }` and immediately
-requests `UpdateMarketsList` again for immediate prices. Canonical order mirrors
-that arrived before their market mapping are retained internally; after the new
-market is inserted, MoonProto attaches those parked mirrors locally. This does
-not trigger a redundant full order pull.
-
-Inbound listing notifications also force this listing refresh, but that command
-is internal to the active library. User code should react to
-`MarketsEvent::NewMarketsAdded { names }`, which is emitted only after
-`GetMarketsList` actually inserted the named markets into `MarketsState`.
-
-`UpdateMarketsList` carries server `mIndex` values. Price updates resolve those
-indexes through the current `GetMarketsIndexes` mapping, so stale mappings after
-a server restart are not used.
+- Existing `MarketHandle` values stay valid while refreshed fields change.
+- Indexed streams are not applied against a stale server mapping.
+- `MarketsEvent::NewMarketsAdded` is emitted only after new markets are present
+  in retained state.
+- Funding and other timestamps should be read through their `MoonTime` helpers.
+- Raw merge rules, correlation-index rebuilding, and listing throttles are
+  runtime implementation details rather than terminal control flow.

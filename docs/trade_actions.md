@@ -92,6 +92,17 @@ client.trade().limit_close_position_for_market(&market, OrderSide::Long)?;
 client.trade().penalty_for_market(&market)?;
 ```
 
+Position and bulk actions have explicit meanings:
+
+| Action | API |
+|---|---|
+| Split the current position with limit-order semantics | `split_position_for_market(&market, side)` |
+| Split the current position with market-order semantics | `market_split_position_for_market(&market, side)` |
+| Place the normal closing limit flow | `close_position(ClosePositionParams::for_market(&market))` |
+| Force a market close | `close_position(ClosePositionParams::market_order_for_market(&market))` |
+| Move all matching buys or sells | `move_all_buys_for_market(...)` / `move_all_sells_for_market(...)` |
+| Trigger the one-shot global panic-sell action | `panic_sell_all()` |
+
 Bulk buy/sell moves use named constructors for the trader-visible mode. The
 runtime still serializes the matching core packet internally:
 

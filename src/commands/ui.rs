@@ -603,7 +603,11 @@ impl JoinSellKind {
     }
 }
 
-/// One temporary coin-blacklist row from [`ClientSettingsCommand`].
+/// One `TempBL` row from [`ClientSettingsCommand`].
+///
+/// TempBL is the core-wide temporary "do not buy" list. While a row is active,
+/// matching markets cannot produce new strategy entries; selling and closing
+/// existing positions remain allowed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TempBlacklistEntry<'a> {
     pub symbol: &'a str,
@@ -879,11 +883,12 @@ impl ClientSettingsCommand {
             })
     }
 
-    /// Replace temporary coin-blacklist rows as one typed UI list.
+    /// Replace the complete temporary coin-blacklist as one typed UI list.
     ///
     /// The wire stores this as two parallel arrays (`TempBLSymbols` and
     /// `TempBLTimes`). Terminal code should edit rows as `(symbol, remaining
     /// duration)`; the wire arrays are rebuilt here for exact roundtrip.
+    /// This is replacement, not append: include every row that must remain.
     pub fn set_temp_blacklist_entries<I, S>(&mut self, entries: I)
     where
         I: IntoIterator<Item = (S, Duration)>,

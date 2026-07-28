@@ -174,6 +174,7 @@ Public API notes live in [`docs/`](docs). Start here:
 
 | Doc | Topic |
 |---|---|
+| [terminal features](docs/features.md) | Common MoonBot feature names, their meaning, and the high-level API that implements them. |
 | [overview](docs/overview.md) | The big picture. |
 | [client](docs/client.md) | `MoonClient` and the owned runtime. |
 | [events](docs/events.md) · [lifecycle](docs/lifecycle.md) | Events, snapshots, and session lifecycle. |

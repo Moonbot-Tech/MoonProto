@@ -208,12 +208,13 @@ impl MoonClient {
         self.snapshot().and_then(|s| s.auth_info().cloned())
     }
 
-    /// Whether the latest published snapshot's server route has the fields
-    /// required for market-level trade commands (`exchange_code` and
-    /// `base_currency_code` from BaseCheck). Mirrors
-    /// Equivalent to the low-level route check, but reads the snapshot, so it
-    /// reflects the state after Init. Returns the all-missing error before the
-    /// first snapshot.
+    /// Check whether legacy route-bound actions have the exchange/base fields
+    /// learned from BaseCheck.
+    ///
+    /// This is not a general readiness check. Canonical order actions use
+    /// market names or server order UIDs; currently the legacy `penalty` action
+    /// is the public path that still requires this route metadata. Use
+    /// [`LifecycleEvent::Ready`] for normal application readiness.
     pub fn trade_route_status(&self) -> Result<(), TradeContextError> {
         match self.snapshot() {
             Some(snapshot) => match TradeContextError::from_server_info(snapshot.server_info()) {
@@ -227,8 +228,10 @@ impl MoonClient {
         }
     }
 
-    /// `true` when [`Self::trade_route_status`] is `Ok`: the session is ready to
-    /// send market-level trade commands. Convenient for gating a UI trade button.
+    /// `true` when legacy route metadata is complete.
+    ///
+    /// Do not use this as the main trade-button gate; wait for
+    /// [`LifecycleEvent::Ready`] and use retained order/market state.
     pub fn is_ready_to_trade(&self) -> bool {
         self.trade_route_status().is_ok()
     }

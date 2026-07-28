@@ -68,6 +68,9 @@ writer the natural backpressure boundary.
 `SyncComplete` is emitted only after the final page has been acknowledged. It
 therefore describes durably applied catch-up, not merely parsed network data.
 
+`sync(...)` loads/revalidates the schema automatically. Use
+`refresh_schema()` only for an explicit manual schema refresh.
+
 ## Page Contract
 
 `ReportSyncPage` contains:
@@ -123,6 +126,9 @@ local replica are a no-op. One echo is expected per batch and may lag by about
 three seconds plus transport time. If an echo does not arrive, the same
 idempotent operation can be sent again. An older core without this operation
 does not echo it.
+
+`set_rows_deleted(...)` is the shared primitive behind `delete_rows(...)` and
+`restore_rows(...)`; normal UI code should prefer the named operations.
 
 Feed all `ReportEvent` values through one serialized database writer in delivery
 order. During catch-up, Active Lib also overlays committed soft-delete echoes on

@@ -541,29 +541,8 @@ keeps the list used for future automatic snapshot replies. If the call is made
 while Init is still in progress, the command is held in the runtime FIFO and
 serialized only after the live server schema is available.
 
-Strategy snapshot serialization mirrors the server serializer lengths:
-field-name and folder-path dictionary entries use a `Byte` length and write
-only that declared number of UTF-8 bytes; string field values use a `Word`
-length and write only that declared number of UTF-8 bytes. Strategy fields are
-emitted in live-schema order, and schema visibility is encoded as a compact
-strategy-kind bitset, so fields hidden for the strategy kind are not written.
-
-The typed writer applies the same schema field filter as the server compact
-writer. It writes only schema-known public strategy fields visible for the
-strategy kind, only when the value has the schema TypeID, and skips values equal
-to the schema default. Defaults come from `StrategySchemaBuilder`; runtime color
-defaults such as `SellOrderColor` and `BuyOrderColor` are therefore not
-hardcoded in Rust.
-
-When decoding a snapshot after schema is available, known strategy fields also
-keep type checks through the same schema: if the incoming TypeID does not match
-the schema field type, the value is skipped instead of being exposed as a
-wrongly typed field.
-
-The runtime owns the local strategy list used for future server snapshot
-requests. If the application reloads strategies after startup, call
-`client.strategies().sync_local_strategies(...)`; do not try to intercept the
-server request path yourself. If the server asks before schema has arrived, the
-runtime requests the schema and sends the pending snapshot after
-`SchemaApplied`, so it never serializes a non-empty strategy list from a stale
-Rust field table.
+Active Lib owns schema-order serialization, field visibility/type checks,
+default elision, and automatic replies to later core snapshot requests.
+Application code edits typed strategy objects and calls
+`client.strategies().sync_local_strategies(...)`; it does not reproduce the
+snapshot serializer or intercept the request path.
