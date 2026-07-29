@@ -128,6 +128,9 @@ The orderbook state keeps one reorder cache per market/kind pair:
 - stale diffs are ignored;
 - long-lived gaps switch the cache to corrupted mode and request a full book no
   more often than every 5 seconds;
+- while corrupted, incoming diffs are still applied as a degraded live view, so
+  the visible book keeps moving (and its revision keeps advancing) until the
+  full snapshot restores exact state;
 - the first diff can apply without a prior full snapshot when the local sequence
   is zero, matching the server behavior.
 

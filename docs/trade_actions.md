@@ -171,8 +171,10 @@ the runtime applies it.
 
 - `move_order` derives the active leg, current status, target size, and dedup key
   from live `Orders`; the wire action addresses the order by server `uid`.
-- `cancel` derives the current status from live `Orders`; pending orders use the
-  replace-then-cancel path.
+- `cancel` derives the current status from live `Orders`: an active buy/sell leg
+  gets the matching cancel command, while a still-pending order gets the
+  addressed pending-cancel command and keeps a local `pending_cancel` mark until
+  the server confirms the phase change.
 - `update_stops` and `update_vstop` compare against previous local values and
   send only when something changed.
 - `set_immune_for_orders` updates only found active local orders and sends
@@ -184,7 +186,9 @@ the runtime applies it.
   canonical market-name payloads. Only the legacy `penalty` command derives a
   `TradeCtx` from the session route.
 - `move_all_sells` and `move_all_buys` read the live order state and send only
-  when the active-client pre-send gates find a candidate order.
+  when the active-client pre-send gates find a candidate order. The
+  replace-kind and price-zone variants skip click-immune orders; the percent
+  variant intentionally includes them, matching the core.
 
 Protocol action IDs and current order status are intentionally not
 caller-supplied in the normal API. Active Lib owns action-ID generation and

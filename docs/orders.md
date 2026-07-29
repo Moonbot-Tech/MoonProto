@@ -294,7 +294,10 @@ row and starts a new world.
 
 Local replace targets remain UI-owned while an action is in flight. A
 same-phase server update does not overwrite that draft; a real phase change
-materializes the new canonical target.
+materializes the new canonical target. The in-flight window closes when the
+canonical state confirms the sent target or after a 5-second timeout; on
+timeout the `bulk_replace_buy` / `bulk_replace_sell` markers clear and an
+`Updated` event repaints the row.
 
 Terminal order updates are removed after the current receive batch. Sell-done
 orders keep a short grace window so immediately following visual trace packets

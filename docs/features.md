@@ -37,9 +37,9 @@ See [markets](markets.md), [trades](trades.md), [order books](order_books.md),
 | Move or cancel | Apply the trader's intent to the current live order state; the runtime handles phase and in-flight gates. | `client.orders().move_order(...)` / `cancel(...)`. |
 | Stops and VStop | Change stop-loss, trailing stop, take-profit, or volume stop only when values actually changed. | `client.orders().update_stops(...)` / `update_vstop(...)`. |
 | Panic sell | Toggle panic mode for one sell, apply the market panic-button behavior, or trigger the one-shot global action. | `turn_panic_sell(...)`, `switch_panic_sell_for_market(...)`, `client.trade().panic_sell_all()`. |
-| Click immunity | Protect selected active orders from bulk chart move actions. | `client.orders().set_immune_for_orders(...)`. |
+| Click immunity | Exclude selected active orders from replace-kind and price-zone bulk moves. Percent-based move-all intentionally includes them. | `client.orders().set_immune_for_orders(...)`. |
 | Join, split, and close | Join orders, split an order/position, or close by normal limit or explicit market semantics. | `client.trade()` with `SplitOrderParams`, `ClosePositionParams`, and named `*_for_market` helpers. |
-| Move all buys/sells | Reprice matching non-immune orders for one market. | `move_all_buys_for_market(...)` / `move_all_sells_for_market(...)`. |
+| Move all buys/sells | Reprice matching orders for one market with replace-kind, price-zone, or percent semantics. | `move_all_buys_for_market(...)` / `move_all_sells_for_market(...)`. |
 | Order traces and corridors | Chart-ready order path, stop-line endpoint, and MoonShot corridor state. | Read `buy_trace_line`, `sell_trace_line`, `stop_time`, and corridor fields from `Order`. |
 | Historical reports | Durable typed replica of the core's Orders report database, including offline catch-up and soft delete/restore. | `client.reports()` and `Event::Report`; this is separate from live `snapshot.orders()`. |
 
