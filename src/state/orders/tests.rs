@@ -102,11 +102,21 @@ fn apply(
     app_token: u64,
     market_exists: bool,
 ) -> (Vec<OrderEvent>, Vec<OrderRepair>) {
+    apply_at(orders, command, app_token, market_exists, 1_000)
+}
+
+fn apply_at(
+    orders: &mut OrderState,
+    command: TradeCommand,
+    app_token: u64,
+    market_exists: bool,
+    now_ms: i64,
+) -> (Vec<OrderEvent>, Vec<OrderRepair>) {
     let mut events = Vec::new();
     let mut repairs = Vec::new();
     orders.apply_protocol(
         command,
-        1_000,
+        now_ms,
         SERVER_TOKEN,
         app_token,
         0.0,
@@ -270,19 +280,32 @@ fn short_description_materializes_direction_in_both_order_legs() {
 }
 
 #[test]
-fn terminal_order_ignores_late_trace_and_corridor_packets() {
+fn sell_done_accepts_visual_packets_until_removal_grace_expires() {
     let uid = 71;
     let mut orders = OrderState::new();
-    apply(
+    apply_at(
         &mut orders,
         image(
             uid,
             1,
             desc("BTCUSDT"),
-            state(OrderWorkerStatus::SellDone, 1),
+            state(OrderWorkerStatus::SellSet, 1),
         ),
         APP_TOKEN,
         true,
+        999,
+    );
+    apply_at(
+        &mut orders,
+        image(
+            uid,
+            2,
+            desc("BTCUSDT"),
+            state(OrderWorkerStatus::SellDone, 2),
+        ),
+        APP_TOKEN,
+        true,
+        1_000,
     );
 
     let trace = TradeCommand::OrderTracePoint(OrderTracePoint {
@@ -300,17 +323,32 @@ fn terminal_order_ignores_late_trace_and_corridor_packets() {
         price_up: 105.0,
     });
 
-    let (trace_events, _) = apply(&mut orders, trace, APP_TOKEN, true);
-    let (corridor_events, _) = apply(&mut orders, corridor, APP_TOKEN, true);
+    let (trace_events, _) = apply_at(&mut orders, trace.clone(), APP_TOKEN, true, 1_399);
+    let (corridor_events, _) = apply_at(&mut orders, corridor, APP_TOKEN, true, 1_399);
     let order = orders.get(uid).unwrap();
 
-    assert!(trace_events.is_empty());
-    assert!(corridor_events.is_empty());
-    assert!(order.buy_trace_line.is_none());
-    assert!(order.sell_trace_line.is_none());
-    assert!(!order.is_moon_shot);
-    assert_eq!(order.corridor_price_down, 0.0);
-    assert_eq!(order.corridor_price_up, 0.0);
+    assert!(matches!(
+        trace_events.as_slice(),
+        [OrderEvent::TracePoint { uid: 71 }]
+    ));
+    assert!(matches!(
+        corridor_events.as_slice(),
+        [OrderEvent::CorridorChanged(71)]
+    ));
+    assert!(order.sell_trace_line.is_some());
+    assert!(order.is_moon_shot);
+    assert_eq!(order.corridor_price_down, 95.0);
+    assert_eq!(order.corridor_price_up, 105.0);
+    assert!(orders.drain_pending_removals_due(1_399).is_empty());
+
+    let removed = orders.drain_pending_removals_due(1_400);
+    assert_eq!(removed.len(), 1);
+    assert!(removed[0].sell_trace_line.is_some());
+    assert_eq!(removed[0].corridor_price_down, 95.0);
+    assert!(orders.get(uid).is_none());
+
+    let (after_removal, _) = apply_at(&mut orders, trace, APP_TOKEN, true, 1_401);
+    assert!(after_removal.is_empty());
 }
 
 #[test]

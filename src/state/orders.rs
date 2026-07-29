@@ -287,10 +287,7 @@ impl OrderState {
             TradeCommand::OrderTracePoint(mut point) => {
                 point.adjust_time(server_time_delta);
                 if self.mirrors.contains_key(&point.market.base.uid) {
-                    if let Some(order) = self
-                        .order_mut(point.market.base.uid)
-                        .filter(|order| !order.job_is_done)
-                    {
+                    if let Some(order) = self.order_mut(point.market.base.uid) {
                         Self::apply_trace_line(order, &point);
                         events.push(OrderEvent::TracePoint { uid: order.uid });
                     }
@@ -299,7 +296,7 @@ impl OrderState {
             TradeCommand::CorridorUpdate(corridor) => {
                 let uid = corridor.market.base.uid;
                 if self.mirrors.contains_key(&uid) {
-                    if let Some(order) = self.order_mut(uid).filter(|order| !order.job_is_done) {
+                    if let Some(order) = self.order_mut(uid) {
                         order.is_moon_shot = true;
                         order.corridor_price_down = corridor.price_down;
                         order.corridor_price_up = corridor.price_up;
