@@ -134,7 +134,9 @@ pub enum LifecycleEvent {
         /// `UpdateMarketsList`, `StrategySchema`, `PostInitFlush`,
         /// `StartupSnapshot`, or `StartupEvents`.
         step: &'static str,
-        /// Wall-clock time since the init sequence started.
+        /// Cumulative wall-clock time. Init-spine steps count from transport
+        /// authorization; `StartupSnapshot` and `StartupEvents` count from
+        /// runtime startup and therefore include connect/handshake time.
         elapsed_ms: u64,
     },
     /// Initial connect/init failed in the background runtime.

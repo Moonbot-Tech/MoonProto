@@ -131,9 +131,12 @@ The orderbook state keeps one reorder cache per market/kind pair:
 - the first diff can apply without a prior full snapshot when the local sequence
   is zero, matching the server behavior.
 
-After reconnect, orderbook packets are ignored until fresh market indexes are
-synchronized for the current server session. This prevents a new server
-`market_index` map from racing old local indexes.
+After a hard reconnect, orderbook packets are ignored until the library has
+synchronized fresh market indexes and the server has confirmed the replayed
+orderbook subscription batch for the new session. Both steps are owned by the
+runtime; the application does not resubscribe. This prevents a new server
+`market_index` map from racing old local indexes and keeps stale-session book
+packets out of the retained state.
 
 ## Protocol Data
 

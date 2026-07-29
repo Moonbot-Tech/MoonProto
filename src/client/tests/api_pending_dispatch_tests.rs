@@ -1112,7 +1112,7 @@ fn post_init_resync_enqueues_delphi_commands() {
     let mut client = Client::new(dummy_cfg());
     client.set_domain_ready(true);
     let cfg = InitConfig {
-        mm_orders_subscribe: Some(true),
+        subscribe_trades: Some(crate::client::TradesStreamMode::TradesAndMarketMakers),
         ..Default::default()
     };
     let mut dispatcher = EventDispatcher::new();
@@ -1204,46 +1204,54 @@ fn post_init_resync_enqueues_delphi_commands() {
 }
 
 #[test]
-fn post_init_mm_orders_does_not_fallback_to_subscribe_trades() {
-    let mut client = Client::new(dummy_cfg());
-    client.set_domain_ready(true);
-    let cfg = InitConfig {
-        mm_orders_subscribe: None,
-        subscribe_trades: Some(crate::client::TradesStreamMode::TradesAndMarketMakers),
-        ..Default::default()
-    };
-    let mut dispatcher = EventDispatcher::new();
-    let mut result = InitResult::default();
+fn post_init_mm_orders_matches_initial_trades_mode() {
+    for (mode, expected) in [
+        (crate::client::TradesStreamMode::TradesOnly, false),
+        (crate::client::TradesStreamMode::TradesAndMarketMakers, true),
+    ] {
+        let mut client = Client::new(dummy_cfg());
+        client.set_domain_ready(true);
+        let cfg = InitConfig {
+            subscribe_trades: Some(mode),
+            ..Default::default()
+        };
+        let mut dispatcher = EventDispatcher::new();
+        let mut result = InitResult::default();
 
-    send_post_init_resync(&mut client, &mut dispatcher, &cfg, &mut result);
+        send_post_init_resync(&mut client, &mut dispatcher, &cfg, &mut result);
+        client.subscribe_all_trades(mode.want_market_makers());
 
-    let mut mm_orders_value = None;
-    let (sliced, high, low) = client.take_send_queues_for_test();
-    for item in sliced.into_iter().chain(high).chain(low) {
-        if let Some(value) = Client::outgoing_mm_orders_subscribe_intent(&item) {
-            mm_orders_value = Some(value);
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        let mut trades_want_mm = None;
+        let mut post_init_mm_orders = None;
+        for item in sliced.iter().chain(&high).chain(&low) {
+            if let Some(value) = Client::outgoing_mm_orders_subscribe_intent(item) {
+                post_init_mm_orders = Some(value);
+            }
+            if item.cmd == Command::API.to_byte() {
+                trades_want_mm = subscribe_all_trades_want_mm(&item.data);
+            }
         }
-    }
 
-    assert_eq!(
-            mm_orders_value,
-            Some(false),
-            "Delphi post-init TMMOrdersSubscribeCommand uses cfg.ShowHeatMap, not SubscribeAllTrades want_mm"
+        assert_eq!(trades_want_mm, Some(expected));
+        assert_eq!(post_init_mm_orders, Some(expected));
+        assert_eq!(
+            client.with_subscription_registry(|registry| registry.mm_orders_sub),
+            Some(expected)
         );
+    }
 }
 
 #[test]
-fn post_init_mm_orders_does_not_overwrite_prequeued_all_trades_want_mm() {
+fn post_init_mm_orders_uses_prequeued_trades_intent_without_init_subscription() {
     let mut client = Client::new(dummy_cfg());
     client.set_domain_ready(true);
     client.with_subscription_registry_mut(|registry| {
         registry.all_trades_intent =
             AllTradesIntent::Subscribed(TradesSubscription { want_mm: true });
+        registry.mm_orders_sub = Some(true);
     });
-    let cfg = InitConfig {
-        mm_orders_subscribe: None,
-        ..Default::default()
-    };
+    let cfg = InitConfig::default();
     let mut dispatcher = EventDispatcher::new();
     let mut result = InitResult::default();
 
@@ -1264,8 +1272,8 @@ fn post_init_mm_orders_does_not_overwrite_prequeued_all_trades_want_mm() {
 
     assert_eq!(
         post_init_mm_orders,
-        Some(false),
-        "post-init UI command still mirrors cfg.ShowHeatMap/default false"
+        Some(true),
+        "post-init UI command must preserve the queued stream's MM intent"
     );
     assert_eq!(
         trades_want_mm,
@@ -1273,8 +1281,8 @@ fn post_init_mm_orders_does_not_overwrite_prequeued_all_trades_want_mm() {
         "the later registry SubscribeAllTrades flush must keep its own want_mm"
     );
     assert_eq!(
-            client.with_subscription_registry(|registry| registry.mm_orders_sub),
-            Some(true),
-            "after the later SubscribeAllTrades wire command, reconnect intent follows the final server MMOrders flag"
-        );
+        client.with_subscription_registry(|registry| registry.mm_orders_sub),
+        Some(true),
+        "wire commands and reconnect intent must keep one MM value"
+    );
 }

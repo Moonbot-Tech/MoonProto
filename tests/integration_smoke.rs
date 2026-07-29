@@ -81,7 +81,6 @@ fn runtime_smoke_full_happy_path() {
         subscribe_trades: Some(TradesStreamMode::TradesOnly),
         subscribe_orderbooks: vec!["BTCUSDT".to_string()],
         step_timeout: None,
-        ..Default::default()
     };
     let client = MoonClient::connect(
         cfg,

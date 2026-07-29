@@ -42,14 +42,9 @@ pub struct InitConfig {
     /// An explicit empty list is valid and means "client has no local
     /// strategies".
     pub initial_strategies: Option<InitialStrategies>,
-    /// Post-init market-maker/order heatmap subscription flag.
-    ///
-    /// MoonBot core expects the matching UI action after `InitDone`.
-    /// `None` falls back to a previously queued `ui_mm_subscribe` intent, then
-    /// to `false`.
-    pub mm_orders_subscribe: Option<bool>,
-    /// Subscribe to all-trades during init. `None` skips the all-trades
-    /// subscription during init.
+    /// Subscribe to all-trades during init. The selected mode also controls
+    /// whether the initial stream includes market-maker/heat-map sections.
+    /// `None` skips the all-trades subscription during init.
     pub subscribe_trades: Option<TradesStreamMode>,
     /// Subscribe to orderbooks by market name.
     ///

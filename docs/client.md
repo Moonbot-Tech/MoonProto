@@ -159,8 +159,9 @@ events, and immutable snapshots:
 `Ready` covers the mandatory init spine: authorization, BaseCheck/AuthCheck,
 markets list/server-index map, initial price refresh, strategy schema, and the
 post-init command flush. Strategy schema is
-requested after AuthCheck and may be received while the market init requests are
-still running; `Ready` is emitted only after the schema is applied. It does not
+requested as soon as BaseCheck first succeeds and may be received while
+AuthCheck and the market init requests are still running; `Ready` is emitted
+only after the schema is applied. It does not
 wait for the replies to the queued order/settings/balance/local-strategy resync,
 retained 5m candles, CoinCard candles, transfer assets, or the first stream
 packet; those arrive as normal domain events and snapshot updates.
@@ -282,10 +283,11 @@ the server-index map from the server list order and stores the current
 `PeerAppToken`. After reconnect/server-token changes, the library
 refreshes `GetMarketsIndexes` before any `UpdateMarketsList` price refresh that
 depends on server `mIndex` values. Init also requests the live strategy schema
-after AuthCheck. The decoded schema is stored in the active strategy state and
-contains strategy kinds, fields, TypeIDs, UI kind, picklists, visibility, and
-chapter/layout markers. This is agreed active-library behavior: clients use the
-live server schema for strategy UI metadata and typed strategy snapshot writes
+as soon as BaseCheck first succeeds. The decoded schema is stored in the active
+strategy state and contains strategy kinds, fields, TypeIDs, UI kind, picklists,
+visibility, and chapter/layout markers. This is agreed active-library behavior:
+clients use the live server schema for strategy UI metadata and typed strategy
+snapshot writes
 instead of a hardcoded Rust copy of core strategy fields/defaults. Only this
 schema request/response is allowed through the pre-Init Strat gate; regular
 strategy commands remain closed until `domain_ready`.
@@ -332,15 +334,14 @@ full client strategy snapshot from the runtime-owned local strategy list,
 settings request, MM-orders subscription state, and balance refresh request.
 When the server later asks for the client's current strategy list, the runtime
 replies from the same owned list; an empty list is a valid non-empty serializer
-payload. Terminal code does not build or send this reply manually. Set
-`InitConfig::mm_orders_subscribe` when the UI needs a heat-map MM-orders
-subscription value. If it is `None`, a previously queued
-`set_mm_orders_subscription` intent is used; otherwise the post-init UI command
-sends `false`. It never
-falls back to `subscribe_trades`: the MM-orders UI flag and the all-trades
-subscription `want_mm` flag are separate intents.
-If all-trades was queued before Init, the later registry flush still sends its
-own stored `want_mm`; the post-init UI command does not rewrite that value.
+payload. Terminal code does not build or send this reply manually. The initial
+MM-orders state comes from `InitConfig::subscribe_trades`: use
+`TradesStreamMode::TradesAndMarketMakers` when the terminal needs heat-map rows,
+or `TradesOnly` to keep those heavier sections out of the stream. If Init does
+not request a trades stream, a previously queued
+`set_mm_orders_subscription` intent is preserved; otherwise the post-init value
+is `false`. After Init, `set_mm_orders_subscription` can change the MM state
+without restarting the trades stream.
 
 Typed outgoing domain helpers use the same Init gate. Before Init:
 `subscribe_*` / `unsubscribe_*` record the latest registry intent but do not put

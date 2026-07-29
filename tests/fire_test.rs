@@ -844,7 +844,6 @@ impl Session {
 
         let retained_markets = firetest_retained_markets(cfg);
         let init = InitConfig {
-            mm_orders_subscribe: Some(true),
             subscribe_trades: None,
             subscribe_orderbooks: vec![cfg.market.clone()],
             step_timeout: None,
@@ -5090,7 +5089,6 @@ fn run_moonclient_public_smoke(
     require_orderbook_update: bool,
 ) -> MoonClientPathStats {
     let init = InitConfig {
-        mm_orders_subscribe: Some(true),
         subscribe_trades: Some(TradesStreamMode::TradesOnly),
         subscribe_orderbooks: vec![cfg.market.clone()],
         step_timeout: None,

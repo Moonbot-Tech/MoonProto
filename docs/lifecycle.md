@@ -51,9 +51,9 @@ for event in client.drain_lifecycle_events() {
 |---|---|---|
 | `Connecting` | A handshake attempt has started. | Update connection indicator. |
 | `Connected { fresh: true }` | First successful authorization for this `MoonClient` runtime. | UI status; wait for `Ready` before treating Active Lib state as initialized. |
-| `Connected { fresh: false }` | Re-handshake after reconnect. | UI only; the library refreshes stale indexes after a changed `PeerAppToken`, refreshes markets, and restores saved subscriptions. |
+| `Connected { fresh: false }` | Re-handshake after reconnect. | UI only; the library refreshes stale indexes after a changed `PeerAppToken`, refreshes markets, restores saved subscriptions, and requests a fresh canonical order snapshot. |
 | `Ready` | `MoonClient` finished its one-time connect/init sequence and published the initial snapshot. | UI can treat the Active Lib state as initialized. |
-| `InitStepCompleted { step, elapsed_ms }` | One mandatory startup step finished; `elapsed_ms` is total wall-clock time since runtime startup, not the duration of that single step. Current cold-init steps: `BaseCheck`, `AuthCheck`, `GetMarketsList`, `UpdateMarketsList`, `StrategySchema`, `PostInitFlush`, `StartupSnapshot`, or `StartupEvents`. | Optional progress display/diagnostics only. |
+| `InitStepCompleted { step, elapsed_ms }` | One mandatory startup step finished; `elapsed_ms` is cumulative wall-clock time, not the duration of that single step. For the init-spine steps it counts from transport authorization; for the final `StartupSnapshot`/`StartupEvents` steps it counts from runtime startup, so it also includes connect/handshake time. Current cold-init steps: `BaseCheck`, `AuthCheck`, `GetMarketsList`, `UpdateMarketsList`, `StrategySchema`, `PostInitFlush`, `StartupSnapshot`, or `StartupEvents`. | Optional progress display/diagnostics only. |
 | `ConnectFailed { error }` | Background `MoonClient` startup failed. | Show the error and create a new client when the user retries. |
 | `Reconnecting` | Traffic was silent long enough to trigger soft reconnect. | UI only. |
 | `ServerRestart` | Server app token changed. | UI only; after reconnect the library refetches indexes before indexed streams/price refresh and replays saved subscriptions. |

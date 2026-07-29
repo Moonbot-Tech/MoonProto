@@ -491,7 +491,8 @@ pub(crate) fn send_post_init_resync(
         .lock()
         .mm_orders_sub;
     let mm_orders = cfg
-        .mm_orders_subscribe
+        .subscribe_trades
+        .map(TradesStreamMode::want_market_makers)
         .or(registry_mm_orders)
         .unwrap_or(false);
     client.apply_mm_orders_subscribe_intent(mm_orders);
