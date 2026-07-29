@@ -198,10 +198,19 @@ pub enum Event {
 ```
 
 `Event::KernelHealth` reports the connected core's process CPU, whole-machine
-CPU, process memory, available physical memory, and logical CPU count. CPU is
-sampled every protocol Ping. Memory and CPU-count form a lower-rate profile;
-their `Option` fields are `None` until that profile first arrives and then keep
-the last reported values in `snapshot.kernel_health()`.
+CPU, process memory, available physical memory, logical CPU count, client/core
+UDP round-trip time, and the core's order API latency to the exchange. CPU and
+both latency values are reported on every protocol Ping. Memory and CPU-count
+form a lower-rate profile; their `Option` fields are `None` until that profile
+first arrives and then keep the last reported values in
+`snapshot.kernel_health()`.
+
+The latency fields are also `None` until the core has a corresponding sample.
+
+`core_round_trip_ms` is the full smoothed RTT. Divide it by two only when a UI
+wants a one-way proximity estimate. `order_api_latency_ms` measures actual
+order-related exchange request/response paths; it is not a standalone REST
+ping and not a recommended polling interval.
 
 `Event::News` covers startup history completion, live news, and live tags
 catalog updates. The retained JSON is available through `snapshot.news()`; see

@@ -86,7 +86,7 @@ See [strategies](strats.md), [UI and settings](ui.md), and [events](events.md).
 | Profit counters | Core report-database profit totals for configured windows, not account balance or live order PnL. | Read `snapshot.settings().profit_state`; reset through `client.settings().reset_profit(...)`. |
 | Runtime state | Whether the market runtime is started and whether AutoDetect is active. | Read `snapshot.settings().runtime_state`; `restart_now()` requests the normal start/restart flow. |
 | License and MoonCredits | Current core license/module permissions and MoonCredits balances. | Read `snapshot.settings().kernel_license_state`; refresh with `client.settings().request_kernel_license_state()`. |
-| Core health | Core process CPU/memory, host CPU/free memory, and logical CPU count. | `Event::KernelHealth` and `snapshot.kernel_health()`. |
+| Core health | Core process CPU/memory, host CPU/free memory, logical CPU count, client/core RTT, and core/exchange order API request latency. | `Event::KernelHealth` and `snapshot.kernel_health()`. |
 | News and tags | Retained/live news JSON with same-ID translation updates plus the latest complete tags catalog. | `Event::News` and `snapshot.news()`. |
 | Server logs | Authenticated core log lines for terminal logs. | `Event::ServerLog`. |
 | Remote update and mode switch | Ask the core to run its release/named update flow or switch DEX/Spot selection. | Use `client.settings()` release/version update and DEX/Spot switch methods. |

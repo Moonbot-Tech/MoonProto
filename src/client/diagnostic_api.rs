@@ -105,13 +105,6 @@ impl Client {
         self.net_lag_ping
     }
 
-    /// `Orders cycle ms` from the server — the recommended polling rate for order events.
-    /// Matches Delphi `TMoonProtoNetClient.GlobalTimingOrders`.
-    #[cfg(test)]
-    pub(crate) fn global_timing_orders(&self) -> u16 {
-        self.global_timing_orders
-    }
-
     /// Current `ServerToken` — changes on every hard handshake (Hello->WhoAreYou->Fine).
     /// Soft reconnect (HelloAgain) does NOT change this token. **Used inside the library for
     /// init/API subscription restore** — an external consumer usually does not need it,

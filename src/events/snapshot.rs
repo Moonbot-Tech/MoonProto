@@ -221,7 +221,7 @@ impl MoonStateSnapshot {
         &self.chart_text
     }
 
-    /// Latest CPU and memory telemetry reported by the connected MoonBot core.
+    /// Latest resource and latency telemetry reported by the connected MoonBot core.
     pub fn kernel_health(&self) -> crate::state::KernelHealth {
         self.kernel_health
     }

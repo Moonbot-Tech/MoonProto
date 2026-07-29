@@ -380,7 +380,7 @@ pub enum ArbEvent {
 /// All typed events emitted by the [`crate::MoonClient`] runtime.
 #[derive(Debug)]
 pub enum Event {
-    /// CPU and memory telemetry reported by the connected MoonBot core.
+    /// Resource and latency telemetry reported by the connected MoonBot core.
     KernelHealth(crate::state::KernelHealth),
     /// News JSON, tags catalog, or startup history completion.
     News(crate::state::NewsEvent),

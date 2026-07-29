@@ -3864,6 +3864,7 @@ fn kernel_health_is_complete(health: KernelHealth) -> bool {
         && health.used_memory_mb.is_some()
         && health.free_physical_memory_mb.is_some()
         && health.logical_cpu_count.is_some_and(|cores| cores > 0)
+        && health.core_round_trip_ms.is_some_and(|ms| ms > 0)
 }
 
 fn has_transfer_assets_refresh(st: &SessionStats) -> bool {
@@ -5198,12 +5199,14 @@ fn run_moonclient_public_smoke(
         .kernel_health
         .expect("healthy MoonClient path must retain kernel telemetry");
     println!(
-        "OK: FIRETEST {label}: kernel CPU process={}%, system={}%, memory used={}MB free={}MB cores={}",
+        "OK: FIRETEST {label}: kernel CPU process={}%, system={}%, memory used={}MB free={}MB cores={}, core RTT={:?}ms, order API latency={:?}ms",
         health.process_cpu_percent,
         health.system_cpu_percent,
         health.used_memory_mb.unwrap(),
         health.free_physical_memory_mb.unwrap(),
-        health.logical_cpu_count.unwrap()
+        health.logical_cpu_count.unwrap(),
+        health.core_round_trip_ms,
+        health.order_api_latency_ms
     );
     println!(
         "OK: FIRETEST {label}: news history={} retained={} tags_present={}",
@@ -7864,13 +7867,15 @@ fn fire_test_active_library_health() {
             .kernel_health
             .expect("initial health must retain kernel telemetry");
         println!(
-            "OK: FIRETEST {}: kernel CPU process={}%, system={}%, memory used={}MB free={}MB cores={}; news history={} retained={} tags_present={}",
+            "OK: FIRETEST {}: kernel CPU process={}%, system={}%, memory used={}MB free={}MB cores={}, core RTT={:?}ms, order API latency={:?}ms; news history={} retained={} tags_present={}",
             stats.label,
             health.process_cpu_percent,
             health.system_cpu_percent,
             health.used_memory_mb.unwrap(),
             health.free_physical_memory_mb.unwrap(),
             health.logical_cpu_count.unwrap(),
+            health.core_round_trip_ms,
+            health.order_api_latency_ms,
             stats.news_history_count,
             stats.news_snapshot_count,
             stats.news_tags_present

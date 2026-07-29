@@ -336,7 +336,6 @@ pub(crate) struct Client {
     overheat: u8,
     peer_app_token: u64,    // PeerAppToken from WhoAreYou (detect server restart)
     server_time_delta: f64, // ServerTimeDelta = Ping.InitialTime - Now (for order time correction)
-    global_timing_orders: u16, // GlobalTimingOrders from Ping
     net_lag_ping: i64,      // NetLagPing (ms abs diff between NTP-corrected time and server time)
     kernel_health: crate::state::KernelHealth,
     local_node_telemetry: LocalNodeTelemetryReader,
@@ -618,7 +617,6 @@ impl Client {
             overheat: 0,
             peer_app_token: 0,
             server_time_delta: 0.0,
-            global_timing_orders: 0,
             net_lag_ping: 0,
             kernel_health: crate::state::KernelHealth::default(),
             local_node_telemetry: LocalNodeTelemetryReader::new(),

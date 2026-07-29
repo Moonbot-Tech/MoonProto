@@ -717,14 +717,31 @@ fn reader_handles_ping_response_without_main_loop_tick() {
         u32::from_le_bytes(response[50..54].try_into().unwrap()),
         client.ack_session32_value,
     );
-    assert_raw_events(&events, &[(Command::Ping, &ping)]);
+    assert!(matches!(
+        &events[..],
+        [Event::KernelHealth(health), Event::Raw { cmd, payload }]
+            if *health == client.kernel_health()
+                && *cmd == Command::Ping
+                && payload == &ping
+    ));
     assert_no_inline_reader_events(
         &mut client,
         "single-owner receive applies Ping update and drains callback in the same datagram step",
     );
     assert_eq!(client.round_trip_delay, 123);
     assert_eq!(client.actual_pmtu, 8_224);
-    assert_eq!(client.global_timing_orders, 456);
+    assert_eq!(
+        client.kernel_health(),
+        crate::state::KernelHealth {
+            process_cpu_percent: 0,
+            system_cpu_percent: 0,
+            used_memory_mb: None,
+            free_physical_memory_mb: None,
+            logical_cpu_count: None,
+            core_round_trip_ms: Some(123),
+            order_api_latency_ms: Some(456),
+        }
+    );
     assert_eq!(client.ping_count, 1);
     assert_eq!(client.metrics.total_recv, packet.len() as u64);
     assert_eq!(client.auth_status, AuthStatus::AuthDone);
@@ -732,7 +749,6 @@ fn reader_handles_ping_response_without_main_loop_tick() {
 
     assert_eq!(client.round_trip_delay_ms(), 123);
     assert_eq!(client.actual_pmtu(), 8_224);
-    assert_eq!(client.global_timing_orders(), 456);
     assert_eq!(client.ping_count(), 1);
     assert_eq!(client.total_recv(), packet.len() as u64);
     assert!(!client.need_connect);

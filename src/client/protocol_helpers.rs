@@ -82,6 +82,10 @@ impl Client {
         self.rs = rs;
         self.kernel_health.process_cpu_percent = ping.moment_cpu_percent;
         self.kernel_health.system_cpu_percent = ping.total_cpu_percent;
+        self.kernel_health.core_round_trip_ms =
+            u32::try_from(ping.trip_delay).ok().filter(|&ms| ms != 0);
+        self.kernel_health.order_api_latency_ms =
+            (ping.global_timing_orders != 0).then_some(ping.global_timing_orders);
         if let Some(memory) = ping.memory {
             self.kernel_health.used_memory_mb = Some(memory.used_memory_mb);
             self.kernel_health.free_physical_memory_mb = Some(memory.free_physical_memory_mb);
@@ -119,7 +123,6 @@ impl Client {
 
         // ClientNewData(MPC_Ping): update wall-clock deltas before SendPing.
         self.ping_count = self.ping_count.wrapping_add(1);
-        self.global_timing_orders = ping.global_timing_orders;
         let initial_time = ping.initial_time;
         let server_time = ping.time;
         let server_time_delta = initial_time - raw_now_dt;
