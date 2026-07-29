@@ -15,7 +15,6 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-4C6EF5" alt="License: Apache-2.0"></a>
   <img src="https://img.shields.io/badge/built%20with-Rust-DEA584?logo=rust&logoColor=white" alt="Built with Rust">
   <img src="https://img.shields.io/badge/transport-UDP%20%C2%B7%20V0%20%C2%B7%20V1%20%C2%B7%20V2-8B5CF6" alt="Transport: UDP V0/V1/V2">
-  <img src="https://img.shields.io/badge/status-beta-F59E0B" alt="Status: beta">
 </p>
 
 <p align="center">
