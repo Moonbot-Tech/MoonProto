@@ -356,7 +356,7 @@ pub(crate) const ORDER_COMMANDS: &[CommandDescriptor] = &[
         48,
         "TRepSetRowsDeleted",
         base = Base,
-        priority = High,
+        priority = Sliced,
         direction = Both
     ),
     cmd_desc!(
@@ -1019,7 +1019,7 @@ mod tests {
             (38, CommandPriority::Sliced, CommandDirection::Inbound),
             (39, CommandPriority::Sliced, CommandDirection::Inbound),
             (40, CommandPriority::High, CommandDirection::Outbound),
-            (48, CommandPriority::High, CommandDirection::Both),
+            (48, CommandPriority::Sliced, CommandDirection::Both),
         ];
         for (id, priority, direction) in expected {
             let descriptor = find_descriptor(Command::Order, id).unwrap();

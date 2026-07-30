@@ -619,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_report_set_rows_deleted_uses_the_high_priority_trade_path() {
+    fn runtime_report_set_rows_deleted_uses_the_sliced_trade_path() {
         let mut client = ready_client();
         let mut dispatcher = crate::events::EventDispatcher::new();
         let mut pending = RuntimePending::default();
@@ -637,9 +637,9 @@ mod tests {
         ));
 
         let (sliced, high, low) = client.take_send_queues_for_test();
-        assert!(sliced.is_empty() && low.is_empty());
-        assert_eq!(high.len(), 1);
-        match TradeCommand::parse(&high[0].data).expect("valid report mutation") {
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(sliced.len(), 1);
+        match TradeCommand::parse(&sliced[0].data).expect("valid report mutation") {
             TradeCommand::ReportSetRowsDeleted(command) => {
                 assert!(command.deleted);
                 assert_eq!(command.ranges, [(10, 20)]);
