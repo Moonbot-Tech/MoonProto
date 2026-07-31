@@ -163,8 +163,10 @@ if let Some(snapshot) = client.snapshot() {
 }
 ```
 
-`balances().refresh_transfer_assets()` queues all three Engine API requests and returns
-immediately. Each completed response updates the library-owned state and emits a
+`balances().refresh_transfer_assets()` queues one Spot/Futures/Quarterly refresh batch and
+returns immediately. Repeated full-refresh calls within five seconds are coalesced into that
+requested state and do not create more Engine API calls. Each completed response updates the
+library-owned state and emits a
 per-wallet `Event::TransferAssets::Updated` or `UpdateFailed`. After all three
 requests have answered, Active Lib emits `TransferAssetsEvent::RefreshCompleted`;
 that is the UI-safe point for a complete transfer-assets refresh. Use

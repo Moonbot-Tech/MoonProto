@@ -377,6 +377,7 @@ mod tests {
         BaseCommandHeader, CanonicalOrderState, DelphiBool, OrderCommandPayload, OrderDescription,
         OrderImage, OrderWorkerStatus, StopSettings, TradeCommand, ORDER_SECTION_ALL_MASK,
     };
+    use crate::state::ExchangeKind;
 
     fn dummy_cfg() -> ClientConfig {
         ClientConfig {
@@ -1001,6 +1002,52 @@ mod tests {
             )]
         ));
         assert!(pending.transfer_assets_batches.is_empty());
+    }
+
+    #[test]
+    fn transfer_assets_refresh_burst_queues_one_batch_per_interval() {
+        let mut client = ready_client();
+        let mut pending = RuntimePending::default();
+        let now = Instant::now();
+
+        assert!(schedule_transfer_assets_refresh_at(
+            &mut client,
+            &mut pending,
+            now
+        ));
+        for _ in 1..24 {
+            assert!(!schedule_transfer_assets_refresh_at(
+                &mut client,
+                &mut pending,
+                now
+            ));
+        }
+
+        assert_eq!(pending.transfer_assets_batches.len(), 1);
+        assert_eq!(pending.transfer_assets.len(), ExchangeKind::ALL.len());
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert_eq!(
+            sliced.len() + high.len() + low.len(),
+            ExchangeKind::ALL.len()
+        );
+
+        assert!(!schedule_transfer_assets_refresh_at(
+            &mut client,
+            &mut pending,
+            now + TRANSFER_ASSETS_REFRESH_INTERVAL - Duration::from_millis(1)
+        ));
+        assert!(schedule_transfer_assets_refresh_at(
+            &mut client,
+            &mut pending,
+            now + TRANSFER_ASSETS_REFRESH_INTERVAL
+        ));
+        assert_eq!(pending.transfer_assets_batches.len(), 2);
+        assert_eq!(pending.transfer_assets.len(), ExchangeKind::ALL.len() * 2);
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert_eq!(
+            sliced.len() + high.len() + low.len(),
+            ExchangeKind::ALL.len()
+        );
     }
 
     #[test]

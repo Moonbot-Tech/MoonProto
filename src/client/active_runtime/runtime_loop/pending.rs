@@ -17,6 +17,7 @@ pub(super) struct RuntimePending {
     pub(super) transfer_assets: Vec<PendingTransferAssets>,
     pub(super) transfer_assets_batches: Vec<PendingTransferAssetsBatch>,
     pub(super) next_transfer_assets_batch_id: u64,
+    pub(super) next_transfer_assets_refresh_at: Option<Instant>,
     pub(super) engine_actions: Vec<PendingEngineAction>,
 }
 

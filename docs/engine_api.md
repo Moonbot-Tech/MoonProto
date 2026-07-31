@@ -78,8 +78,9 @@ Normal chart UI does not receive raw zipped chunk payloads.
 
 ## Transfer Assets
 
-`balances().refresh_transfer_assets()` queues Spot, Futures, and Quarterly wallet refreshes
-without blocking other runtime work. Each wallet response updates
+`balances().refresh_transfer_assets()` queues one Spot/Futures/Quarterly wallet refresh batch
+without blocking other runtime work. Repeated full-refresh calls within five seconds are
+coalesced and do not multiply Engine API traffic. Each wallet response updates
 `snapshot().transfer_assets()` and emits `TransferAssetsEvent::Updated`; after
 all requested wallet kinds answer, Active Lib emits
 `TransferAssetsEvent::RefreshCompleted`.

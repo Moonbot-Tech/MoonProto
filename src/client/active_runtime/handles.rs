@@ -639,6 +639,9 @@ impl MoonBalances<'_> {
     }
 
     /// Request transferable asset refresh for Spot, Futures, and Quarterly.
+    ///
+    /// Full-refresh intents are coalesced for five seconds, so repeated UI reads
+    /// cannot multiply exchange API requests while the first refresh is pending.
     pub fn refresh_transfer_assets(&self) -> Result<(), MoonClientError> {
         self.client.refresh_transfer_assets()
     }

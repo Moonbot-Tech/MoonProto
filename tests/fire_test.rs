@@ -133,6 +133,8 @@ const FIRETEST_REPORT_SYNC_TIMEOUT: Duration = Duration::from_secs(180);
 const FIRETEST_REPORT_MUTATION_TIMEOUT: Duration = Duration::from_secs(30);
 const FIRETEST_REPORT_TABLE: &str = "Orders";
 const FIRETEST_REPORT_PARTIAL_FIELDS: usize = 4;
+const FIRETEST_TRANSFER_ASSETS_BURST_CALLS: usize = 24;
+const FIRETEST_TRANSFER_ASSETS_SETTLE: Duration = Duration::from_secs(6);
 
 static FIRETEST_LIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -518,6 +520,7 @@ struct SessionStats {
     transfer_asset_events: u64,
     transfer_asset_updated_mask: u8,
     transfer_asset_failures: u64,
+    transfer_asset_refresh_completed: u64,
     coin_card_events: u64,
     coin_card_updates: u64,
     coin_card_failures: u64,
@@ -602,6 +605,7 @@ impl Clone for SessionStats {
             transfer_asset_events: self.transfer_asset_events,
             transfer_asset_updated_mask: self.transfer_asset_updated_mask,
             transfer_asset_failures: self.transfer_asset_failures,
+            transfer_asset_refresh_completed: self.transfer_asset_refresh_completed,
             coin_card_events: self.coin_card_events,
             coin_card_updates: self.coin_card_updates,
             coin_card_failures: self.coin_card_failures,
@@ -2676,6 +2680,7 @@ fn record_event(
                     failed,
                     revision,
                 } => {
+                    st.transfer_asset_refresh_completed += 1;
                     log_server_event(
                         &st,
                         event_no,
@@ -3869,6 +3874,49 @@ fn kernel_health_is_complete(health: KernelHealth) -> bool {
 
 fn has_transfer_assets_refresh(st: &SessionStats) -> bool {
     st.transfer_asset_updated_mask == 0b111 && st.transfer_asset_failures == 0
+}
+
+fn run_transfer_assets_refresh_coalescing_gate(
+    a: &mut Session,
+    b: &mut Session,
+    timeout: Duration,
+) {
+    let before = a.snapshot().transfer_asset_refresh_completed;
+    for _ in 0..FIRETEST_TRANSFER_ASSETS_BURST_CALLS {
+        a.client
+            .balances()
+            .refresh_transfer_assets()
+            .expect("transfer-assets burst intent must queue");
+    }
+    assert!(
+        pump_pair_until(
+            a,
+            b,
+            timeout,
+            "transfer-assets refresh coalescing",
+            |a, _| a.transfer_asset_refresh_completed > before
+        ),
+        "transfer-assets burst did not complete within {timeout:?}"
+    );
+
+    let settle_started = Instant::now();
+    while settle_started.elapsed() < FIRETEST_TRANSFER_ASSETS_SETTLE {
+        a.pump(PUMP_SLICE);
+        b.pump(PUMP_SLICE);
+    }
+    let completed = a
+        .snapshot()
+        .transfer_asset_refresh_completed
+        .saturating_sub(before);
+    assert_eq!(
+        completed, 1,
+        "{} immediate full-refresh intents must produce one server batch",
+        FIRETEST_TRANSFER_ASSETS_BURST_CALLS
+    );
+    println!(
+        "OK: {} transfer-assets refresh intents produced one server batch",
+        FIRETEST_TRANSFER_ASSETS_BURST_CALLS
+    );
 }
 
 fn has_coin_card_candles(st: &SessionStats) -> bool {
@@ -7964,6 +8012,8 @@ fn fire_test_active_library_health() {
     b.client
         .debug_reset_err_emu_diagnostics()
         .expect("reset B err_emu diagnostics");
+
+    run_transfer_assets_refresh_coalescing_gate(&mut a, &mut b, cfg.connect_timeout);
 
     run_report_database_gate(&cfg, keys, &mut a);
     run_order_lifecycle_gate(&cfg, &mut a, &mut b);

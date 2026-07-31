@@ -4,6 +4,8 @@
 
 use super::*;
 
+pub(super) const TRANSFER_ASSETS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+
 pub(super) fn engine_pending_deadline() -> Instant {
     Instant::now() + Duration::from_millis(crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS as u64)
 }
@@ -367,6 +369,21 @@ pub(super) fn schedule_auto_candles_snapshot(client: &mut Client, pending: &mut 
 }
 
 fn schedule_transfer_assets_refresh(client: &mut Client, pending: &mut RuntimePending) {
+    schedule_transfer_assets_refresh_at(client, pending, Instant::now());
+}
+
+pub(super) fn schedule_transfer_assets_refresh_at(
+    client: &mut Client,
+    pending: &mut RuntimePending,
+    now: Instant,
+) -> bool {
+    if pending
+        .next_transfer_assets_refresh_at
+        .is_some_and(|next| now < next)
+    {
+        return false;
+    }
+    pending.next_transfer_assets_refresh_at = Some(now + TRANSFER_ASSETS_REFRESH_INTERVAL);
     pending.next_transfer_assets_batch_id =
         pending.next_transfer_assets_batch_id.wrapping_add(1).max(1);
     let batch_id = pending.next_transfer_assets_batch_id;
@@ -386,6 +403,7 @@ fn schedule_transfer_assets_refresh(client: &mut Client, pending: &mut RuntimePe
             Some(batch_id),
         );
     }
+    true
 }
 
 fn schedule_transfer_assets_refresh_kind(

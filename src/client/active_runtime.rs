@@ -587,8 +587,10 @@ impl MoonClient {
 
     /// Request transferable asset refresh for Spot, Futures, and Quarterly.
     ///
-    /// This returns as soon as the requests are queued. The runtime applies each
-    /// response to `snapshot().transfer_assets()`, emits per-wallet
+    /// This returns as soon as the intent is queued. Repeated full-refresh intents
+    /// within five seconds share the already requested state and do not generate
+    /// more Engine API calls. The runtime applies each response to
+    /// `snapshot().transfer_assets()`, emits per-wallet
     /// `Event::TransferAssets`, and emits `TransferAssetsEvent::RefreshCompleted`
     /// after all wallet kinds have answered.
     pub(crate) fn refresh_transfer_assets(&self) -> Result<(), MoonClientError> {
