@@ -88,10 +88,11 @@ use moonproto::{
     EngineMethod, EngineResponse, ExchangeKind, ExchangeOrder, FieldValue, ImportedKeys,
     InitConfig, InitialStrategies, KernelHealth, LifecycleEvent, MoonClient, MoonShotStrategy,
     MoonStateSnapshot, MoonTime, NewsEvent, OrderWorkerStatus, ProfitStateCommand,
-    ProtocolMetricsSnapshot, ReportEvent, ReportHistoryDepth, ReportRow, ReportSchema,
-    ReportSyncComplete, ReportSyncRequest, ReportValue, StrategyDynamicPicklist,
-    StrategyFieldLayout, StrategyFieldUiKind, StrategyFields, StrategyKind, StrategySchema,
-    StrategySnapshot, TradesStreamMode, TransportMode,
+    ProtocolMetricsSnapshot, ReportAliveMapComplete, ReportAliveMapOutcome, ReportEvent,
+    ReportHistoryDepth, ReportRow, ReportSchema, ReportSyncCheckpoint, ReportSyncComplete,
+    ReportSyncRequest, ReportValue, StrategyDynamicPicklist, StrategyFieldLayout,
+    StrategyFieldUiKind, StrategyFields, StrategyKind, StrategySchema, StrategySnapshot,
+    TradesStreamMode, TransportMode,
 };
 
 const DEFAULT_FIRETEST_ERR_EMU_PERCENT: u8 = 10;
@@ -436,8 +437,18 @@ struct KernelLicenseProbe {
     moon_credits_auction: i32,
     arb_active: bool,
     can_use_watcher: bool,
-    news_valid_seen: bool,
+    news_valid_until: Option<MoonTime>,
     arb_valid_seen: bool,
+}
+
+impl KernelLicenseProbe {
+    fn news_service_active(self, now: MoonTime) -> bool {
+        news_service_active(self.news_valid_until, now)
+    }
+}
+
+fn news_service_active(news_valid_until: Option<MoonTime>, now: MoonTime) -> bool {
+    news_valid_until.is_some_and(|until| until > now)
 }
 
 impl From<moonproto::KernelLicenseStateCommand> for KernelLicenseProbe {
@@ -451,7 +462,7 @@ impl From<moonproto::KernelLicenseStateCommand> for KernelLicenseProbe {
             moon_credits_auction: value.moon_credits_auction,
             arb_active: value.arb_active,
             can_use_watcher: value.can_use_watcher,
-            news_valid_seen: value.news_valid_until.is_some(),
+            news_valid_until: value.news_valid_until,
             arb_valid_seen: value.arb_valid_until.is_some(),
         }
     }
@@ -3132,9 +3143,10 @@ fn record_event(
                     ticket.sync_id, request.from_rec_id, request.history_depth
                 ),
                 ReportEvent::SyncPage(page) => format!(
-                    "Report SyncPage sync_id={} request_uid={} from={} last={} max={} rows={} recreated={}",
+                    "Report SyncPage sync_id={} request_uid={} epoch={} from={} last={} max={} rows={} recreated={}",
                     page.ticket.sync_id,
                     page.request_uid,
+                    page.epoch,
                     page.from_rec_id,
                     page.last_rec_id,
                     page.max_rec_id,
@@ -3142,13 +3154,29 @@ fn record_event(
                     page.database_recreated
                 ),
                 ReportEvent::SyncComplete(done) => format!(
-                    "Report SyncComplete sync_id={} pages={} rows={} max_rec_id={} next={}",
+                    "Report SyncComplete sync_id={} pages={} rows={} epoch={} max_rec_id={} next={}",
                     done.ticket.sync_id,
                     done.page_count,
                     done.total_rows,
+                    done.epoch,
                     done.max_rec_id,
                     done.next_from_rec_id
                 ),
+                ReportEvent::AliveMapComplete(done) => {
+                    let outcome = match &done.outcome {
+                        moonproto::ReportAliveMapOutcome::DatabaseRecreated => {
+                            "database-recreated".to_string()
+                        }
+                        moonproto::ReportAliveMapOutcome::Snapshot => "snapshot".to_string(),
+                    };
+                    format!(
+                        "Report AliveMapComplete sync_id={} epoch={} covered_up_to={} outcome={}",
+                        done.ticket.sync_id,
+                        done.epoch,
+                        done.covered_up_to,
+                        outcome
+                    )
+                }
                 ReportEvent::OpenRowsCheckStarted { rec_ids } => {
                     format!("Report OpenRowsCheckStarted count={}", rec_ids.len())
                 }
@@ -3846,6 +3874,14 @@ fn pump_pair_until_nonblocking_api_refresh(
 }
 
 fn has_initial_health(st: &SessionStats) -> bool {
+    let news_healthy = st.kernel_license_state.is_some_and(|license| {
+        !license.news_service_active(MoonTime::now())
+            || (st.news_history_events > 0
+                && st.news_history_count > 0
+                && st.news_history_tags_seen
+                && st.news_snapshot_count > 0
+                && st.news_tags_present)
+    });
     st.connected_now
         && st.strategy_snapshot_events > 0
         && st.strategy_schema_events > 0
@@ -3853,11 +3889,7 @@ fn has_initial_health(st: &SessionStats) -> bool {
         && st.strategy_schema_fields > 0
         && st.kernel_health_events > 0
         && st.kernel_health.is_some_and(kernel_health_is_complete)
-        && st.news_history_events > 0
-        && st.news_history_count > 0
-        && st.news_history_tags_seen
-        && st.news_snapshot_count > 0
-        && st.news_tags_present
+        && news_healthy
         && st.trades_apply > 0
         && st.orderbook_apply > 0
         && st.parse_failed == 0
@@ -4676,6 +4708,7 @@ struct MoonClientPathStats {
     first_retained_history_at_s: Option<f64>,
     runtime_state_events: u64,
     runtime_state: Option<RuntimeStateProbe>,
+    kernel_license_state: Option<KernelLicenseProbe>,
     kernel_health_events: u64,
     kernel_health: Option<KernelHealth>,
     news_history_events: u64,
@@ -4894,6 +4927,10 @@ impl MoonClientPathStats {
             .settings()
             .runtime_state
             .map(RuntimeStateProbe::from);
+        self.kernel_license_state = snapshot
+            .settings()
+            .kernel_license_state
+            .map(KernelLicenseProbe::from);
 
         {
             let price = market.price();
@@ -4969,6 +5006,14 @@ impl MoonClientPathStats {
         let Some(market_price) = self.last_market_price else {
             return false;
         };
+        let news_healthy = self.kernel_license_state.is_some_and(|license| {
+            !license.news_service_active(MoonTime::now())
+                || (self.news_history_events > 0
+                    && self.news_history_count > 0
+                    && self.news_history_tags_seen
+                    && self.news_snapshot_count > 0
+                    && self.news_tags_present)
+        });
         // Mandatory Init is a lifecycle/state contract. Some Delphi-style
         // pending steps (notably GetMarketsList) are applied by the owner after
         // response delivery and are not required to surface as raw EngineResponse
@@ -4978,11 +5023,7 @@ impl MoonClientPathStats {
             && self.lifecycle_ready
             && self.kernel_health_events > 0
             && self.kernel_health.is_some_and(kernel_health_is_complete)
-            && self.news_history_events > 0
-            && self.news_history_count > 0
-            && self.news_history_tags_seen
-            && self.news_snapshot_count > 0
-            && self.news_tags_present
+            && news_healthy
             && self.strategy_schema_events > 0
             && self.strategy_schema_kinds > 0
             && self.strategy_schema_fields > 0
@@ -5098,7 +5139,8 @@ impl MoonClientPathStats {
             self.market_invariant_error.as_deref().unwrap_or("none")
         );
         format!(
-            "{base} kernel_health_events={} kernel_health={:?} news_history_events={} news_history_count={} news_history_tags={} news_retained={} news_tags_present={}",
+            "{base} kernel_license={:?} kernel_health_events={} kernel_health={:?} news_history_events={} news_history_count={} news_history_tags={} news_retained={} news_tags_present={}",
+            self.kernel_license_state,
             self.kernel_health_events,
             self.kernel_health,
             self.news_history_events,
@@ -5256,10 +5298,20 @@ fn run_moonclient_public_smoke(
         health.core_round_trip_ms,
         health.order_api_latency_ms
     );
-    println!(
-        "OK: FIRETEST {label}: news history={} retained={} tags_present={}",
-        stats.news_history_count, stats.news_snapshot_count, stats.news_tags_present
-    );
+    let license = stats
+        .kernel_license_state
+        .expect("healthy MoonClient path must retain kernel license state");
+    if license.news_service_active(MoonTime::now()) {
+        println!(
+            "OK: FIRETEST {label}: news history={} retained={} tags_present={}",
+            stats.news_history_count, stats.news_snapshot_count, stats.news_tags_present
+        );
+    } else {
+        println!(
+            "FIRETEST SKIPPED {label}: news history/tags check; no active News service subscription (news_valid_until={:?})",
+            license.news_valid_until
+        );
+    }
     let metrics = client.protocol_metrics_snapshot();
     println!(
         "FIRETEST CPU {label}: {}",
@@ -6119,7 +6171,7 @@ fn wait_report_sync<F>(
     session: &mut Session,
     request: ReportSyncRequest,
     timeout: Duration,
-    mut on_event: F,
+    on_event: F,
 ) -> ReportSyncComplete
 where
     F: FnMut(&ReportEvent),
@@ -6130,6 +6182,43 @@ where
         .reports()
         .sync(request)
         .expect("MoonReports::sync must queue");
+    wait_report_sync_ticket(session, ticket, request.from_rec_id, timeout, on_event)
+}
+
+fn wait_report_sync_from<F>(
+    session: &mut Session,
+    checkpoint: ReportSyncCheckpoint,
+    timeout: Duration,
+    on_event: F,
+) -> ReportSyncComplete
+where
+    F: FnMut(&ReportEvent),
+{
+    session.take_report_events();
+    let ticket = session
+        .client
+        .reports()
+        .sync_from(checkpoint)
+        .expect("MoonReports::sync_from must queue");
+    wait_report_sync_ticket(
+        session,
+        ticket,
+        checkpoint.next_from_rec_id,
+        timeout,
+        on_event,
+    )
+}
+
+fn wait_report_sync_ticket<F>(
+    session: &mut Session,
+    ticket: moonproto::ReportSyncTicket,
+    from_rec_id: i64,
+    timeout: Duration,
+    mut on_event: F,
+) -> ReportSyncComplete
+where
+    F: FnMut(&ReportEvent),
+{
     let started = Instant::now();
     while started.elapsed() < timeout {
         session.pump(PUMP_SLICE);
@@ -6155,11 +6244,12 @@ where
         }
         if let Some(done) = completed {
             println!(
-                "OK: report sync sync_id={} from={} pages={} rows={} max_rec_id={} next={} elapsed={:.2}s",
+                "OK: report sync sync_id={} from={} pages={} rows={} epoch={} max_rec_id={} next={} elapsed={:.2}s",
                 done.ticket.sync_id,
-                request.from_rec_id,
+                from_rec_id,
                 done.page_count,
                 done.total_rows,
+                done.epoch,
                 done.max_rec_id,
                 done.next_from_rec_id,
                 started.elapsed().as_secs_f64()
@@ -6169,8 +6259,81 @@ where
     }
     panic!(
         "report sync sync_id={} from={} did not complete within {:?}",
-        ticket.sync_id, request.from_rec_id, timeout
+        ticket.sync_id, from_rec_id, timeout
     )
+}
+
+fn wait_report_alive_map(
+    session: &mut Session,
+    completed: &ReportSyncComplete,
+    timeout: Duration,
+) -> ReportAliveMapComplete {
+    session.take_report_events();
+    let ticket = session
+        .client
+        .reports()
+        .reconcile_alive(completed)
+        .expect("MoonReports::reconcile_alive must queue");
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        session.pump(PUMP_SLICE);
+        for event in session.take_report_events() {
+            match event {
+                ReportEvent::AliveMapComplete(done) if done.ticket == ticket => {
+                    println!(
+                        "OK: report alive-map sync sync_id={} epoch={} covered_up_to={} outcome={} elapsed={:.2}s",
+                        done.ticket.sync_id,
+                        done.epoch,
+                        done.covered_up_to,
+                        match &done.outcome {
+                            ReportAliveMapOutcome::DatabaseRecreated => "database-recreated",
+                            ReportAliveMapOutcome::Snapshot => "snapshot",
+                        },
+                        started.elapsed().as_secs_f64()
+                    );
+                    return done;
+                }
+                ReportEvent::SchemaRejected { reason } => {
+                    panic!("report schema rejected during alive-map sync: {reason}")
+                }
+                _ => {}
+            }
+        }
+    }
+    panic!(
+        "report alive-map sync sync_id={} did not complete within {:?}",
+        ticket.sync_id, timeout
+    )
+}
+
+fn restore_report_row_for_cleanup(report: &mut Session, rec_id: i64) {
+    const CLEANUP_ATTEMPTS: usize = 3;
+
+    for attempt in 1..=CLEANUP_ATTEMPTS {
+        report.take_report_events();
+        report
+            .client
+            .reports()
+            .restore_rows(&[], &[rec_id])
+            .expect("report cleanup restore must queue");
+        if wait_report_rows_deleted_echo_one(
+            report,
+            rec_id,
+            false,
+            FIRETEST_REPORT_MUTATION_TIMEOUT,
+        ) {
+            println!(
+                "OK: report cleanup restore confirmed for rec_id={} attempt={}",
+                rec_id, attempt
+            );
+            return;
+        }
+    }
+
+    panic!(
+        "report cleanup restore for rec_id={} was not confirmed after {} attempts",
+        rec_id, CLEANUP_ATTEMPTS
+    );
 }
 
 fn sqlite_value(value: &ReportValue) -> rusqlite::types::Value {
@@ -6515,23 +6678,90 @@ fn run_report_database_gate(cfg: &FireConfig, keys: ImportedKeys, pump_peer: &mu
         db_path.display()
     );
 
-    report_a.take_report_events();
-    report_b.take_report_events();
-    let delete_batches = report_a
+    let baseline_alive =
+        wait_report_alive_map(&mut report_b, &complete, FIRETEST_REPORT_SYNC_TIMEOUT);
+    assert!(matches!(
+        &baseline_alive.outcome,
+        ReportAliveMapOutcome::Snapshot
+    ));
+    assert_eq!(baseline_alive.is_alive(closed_row.rec_id), Some(true));
+
+    let reconnect_checkpoint = complete.checkpoint();
+    report_b
         .client
-        .reports()
-        .delete_rows(&[], &[closed_row.rec_id])
-        .expect("MoonReports::delete_rows must queue");
-    assert_eq!(delete_batches, 1);
-    let (delete_a, delete_b) = wait_report_rows_deleted_echo(
-        &mut report_a,
-        &mut report_b,
-        &connection,
-        &b_schema,
-        closed_row.rec_id,
-        true,
-        FIRETEST_REPORT_MUTATION_TIMEOUT,
-    );
+        .disconnect()
+        .expect("ReportDB-B disconnect must queue");
+    report_b
+        .client
+        .wait_finished()
+        .expect("ReportDB-B runtime must stop before the offline mutation");
+    drop(report_b);
+
+    report_a.take_report_events();
+    let deleted_phase = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let delete_batches = report_a
+            .client
+            .reports()
+            .delete_rows(&[], &[closed_row.rec_id])
+            .expect("MoonReports::delete_rows must queue");
+        assert_eq!(delete_batches, 1);
+        let delete_a = wait_report_rows_deleted_echo_one(
+            &mut report_a,
+            closed_row.rec_id,
+            true,
+            FIRETEST_REPORT_MUTATION_TIMEOUT,
+        );
+        let local_before_reconnect = report_deleted_flag(&connection, closed_row.rec_id);
+
+        let mut report_b = Session::connect(
+            "ReportDB-B-Reconnect",
+            cfg,
+            keys,
+            Some(firetest_strategy(cfg)),
+        );
+        let reconnect_complete = wait_report_sync_from(
+            &mut report_b,
+            reconnect_checkpoint,
+            FIRETEST_REPORT_SYNC_TIMEOUT,
+            |event| apply_report_event_to_db(&connection, &b_schema, event),
+        );
+        let local_after_normal_sync = report_deleted_flag(&connection, closed_row.rec_id);
+        let alive_snapshot = wait_report_alive_map(
+            &mut report_b,
+            &reconnect_complete,
+            FIRETEST_REPORT_SYNC_TIMEOUT,
+        );
+        if let Some(alive) = alive_snapshot.is_alive(closed_row.rec_id) {
+            set_report_deleted_flag(&connection, closed_row.rec_id, !alive);
+        }
+        let local_after_alive_map = report_deleted_flag(&connection, closed_row.rec_id);
+
+        (
+            report_b,
+            reconnect_complete,
+            alive_snapshot,
+            delete_a,
+            local_before_reconnect,
+            local_after_normal_sync,
+            local_after_alive_map,
+        )
+    }));
+
+    let (
+        mut report_b,
+        reconnect_complete,
+        alive_snapshot,
+        delete_a,
+        local_before_reconnect,
+        local_after_normal_sync,
+        local_after_alive_map,
+    ) = match deleted_phase {
+        Ok(result) => result,
+        Err(payload) => {
+            restore_report_row_for_cleanup(&mut report_a, closed_row.rec_id);
+            std::panic::resume_unwind(payload);
+        }
+    };
 
     let restore_batches = report_a
         .client
@@ -6548,26 +6778,62 @@ fn run_report_database_gate(cfg: &FireConfig, keys: ImportedKeys, pump_peer: &mu
         false,
         FIRETEST_REPORT_MUTATION_TIMEOUT,
     );
+    if !restore_a && !restore_b {
+        restore_report_row_for_cleanup(&mut report_a, closed_row.rec_id);
+    }
+    assert!(
+        restore_a || restore_b,
+        "report restore commit was not confirmed by either client"
+    );
 
     assert!(
-        delete_a && delete_b && restore_a && restore_b,
-        "report soft-delete/restore echo missing: delete[A={delete_a} B={delete_b}] restore[A={restore_a} B={restore_b}]"
+        delete_a,
+        "deleting client did not receive its committed echo"
     );
-    let restored: i64 = connection
-        .query_row(
-            &format!(
-                "SELECT {} FROM {} WHERE {}=?",
-                quote_sqlite_identifier("deleted"),
-                quote_sqlite_identifier(FIRETEST_REPORT_TABLE),
-                quote_sqlite_identifier("newRecID")
-            ),
-            [closed_row.rec_id],
-            |row| row.get(0),
-        )
-        .expect("FireTest report DB must retain the restored row");
-    assert_eq!(restored, 0);
+    assert_eq!(
+        local_before_reconnect, 0,
+        "offline client replica changed without receiving the delete"
+    );
+    assert_eq!(
+        local_after_normal_sync, 0,
+        "newRecID catch-up unexpectedly repaired an older deleted flag"
+    );
+    assert!(matches!(
+        &alive_snapshot.outcome,
+        ReportAliveMapOutcome::Snapshot
+    ));
+    assert_eq!(
+        alive_snapshot.is_alive(closed_row.rec_id),
+        Some(false),
+        "alive map must include the offline soft-delete"
+    );
+    assert_eq!(
+        local_after_alive_map, 1,
+        "applying the alive map must repair the offline replica"
+    );
+
+    let restored_snapshot = wait_report_alive_map(
+        &mut report_b,
+        &reconnect_complete,
+        FIRETEST_REPORT_SYNC_TIMEOUT,
+    );
+    assert!(matches!(
+        &restored_snapshot.outcome,
+        ReportAliveMapOutcome::Snapshot
+    ));
+    assert_eq!(
+        restored_snapshot.is_alive(closed_row.rec_id),
+        Some(true),
+        "alive map must include the committed restore"
+    );
+
+    assert!(
+        restore_a && restore_b,
+        "report restore echo missing: A={restore_a} B={restore_b}"
+    );
+    assert_eq!(report_deleted_flag(&connection, closed_row.rec_id), 0);
     println!(
-        "OK: report soft-delete + restore committed and echoed to both subscribers for rec_id={}",
+        "OK: offline soft-delete escaped normal catch-up, AliveMap repaired it, and restore returned the report row for rec_id={}",
         closed_row.rec_id
     );
 }
@@ -6607,6 +6873,55 @@ fn wait_report_rows_deleted_echo(
         }
     }
     (seen_a, seen_b)
+}
+
+fn report_deleted_flag(connection: &rusqlite::Connection, rec_id: i64) -> i64 {
+    connection
+        .query_row(
+            &format!(
+                "SELECT {} FROM {} WHERE {}=?",
+                quote_sqlite_identifier("deleted"),
+                quote_sqlite_identifier(FIRETEST_REPORT_TABLE),
+                quote_sqlite_identifier("newRecID")
+            ),
+            [rec_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|err| panic!("FireTest report DB missing rec_id={rec_id}: {err}"))
+}
+
+fn set_report_deleted_flag(connection: &rusqlite::Connection, rec_id: i64, deleted: bool) {
+    connection
+        .execute(
+            &format!(
+                "UPDATE {} SET {}=? WHERE {}=?",
+                quote_sqlite_identifier(FIRETEST_REPORT_TABLE),
+                quote_sqlite_identifier("deleted"),
+                quote_sqlite_identifier("newRecID")
+            ),
+            rusqlite::params![i64::from(deleted), rec_id],
+        )
+        .unwrap_or_else(|err| {
+            panic!("FireTest report DB cannot set deleted={deleted} for rec_id={rec_id}: {err}")
+        });
+}
+
+fn wait_report_rows_deleted_echo_one(
+    session: &mut Session,
+    rec_id: i64,
+    deleted: bool,
+    timeout: Duration,
+) -> bool {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        session.pump(PUMP_SLICE);
+        if session.take_report_events().into_iter().any(|event| {
+            matches!(event, ReportEvent::RowsDeleted(change) if change.deleted == deleted && change.affects(rec_id))
+        }) {
+            return true;
+        }
+    }
+    false
 }
 
 fn run_order_lifecycle_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
@@ -7716,6 +8031,21 @@ fn firetest_percent(part: u64, total: u64) -> f64 {
 }
 
 #[test]
+fn news_service_gate_uses_license_expiration() {
+    let now = MoonTime::from_unix_millis(10_000);
+    assert!(!news_service_active(None, now));
+    assert!(!news_service_active(Some(now), now));
+    assert!(!news_service_active(
+        Some(MoonTime::from_unix_millis(9_999)),
+        now
+    ));
+    assert!(news_service_active(
+        Some(MoonTime::from_unix_millis(10_001)),
+        now
+    ));
+}
+
+#[test]
 #[ignore = "live MoonBot server required; measures TStratRuntimeState delivery"]
 fn fire_test_strategy_runtime_state_delivery_stats() {
     let _live_test_lock = firetest_live_test_lock();
@@ -7915,7 +8245,7 @@ fn fire_test_active_library_health() {
             .kernel_health
             .expect("initial health must retain kernel telemetry");
         println!(
-            "OK: FIRETEST {}: kernel CPU process={}%, system={}%, memory used={}MB free={}MB cores={}, core RTT={:?}ms, order API latency={:?}ms; news history={} retained={} tags_present={}",
+            "OK: FIRETEST {}: kernel CPU process={}%, system={}%, memory used={}MB free={}MB cores={}, core RTT={:?}ms, order API latency={:?}ms",
             stats.label,
             health.process_cpu_percent,
             health.system_cpu_percent,
@@ -7923,11 +8253,25 @@ fn fire_test_active_library_health() {
             health.free_physical_memory_mb.unwrap(),
             health.logical_cpu_count.unwrap(),
             health.core_round_trip_ms,
-            health.order_api_latency_ms,
-            stats.news_history_count,
-            stats.news_snapshot_count,
-            stats.news_tags_present
+            health.order_api_latency_ms
         );
+        let license = stats
+            .kernel_license_state
+            .expect("initial health must retain kernel license state");
+        if license.news_service_active(MoonTime::now()) {
+            println!(
+                "OK: FIRETEST {}: news history={} retained={} tags_present={}",
+                stats.label,
+                stats.news_history_count,
+                stats.news_snapshot_count,
+                stats.news_tags_present
+            );
+        } else {
+            println!(
+                "FIRETEST SKIPPED {}: news history/tags check; no active News service subscription (news_valid_until={:?})",
+                stats.label, license.news_valid_until
+            );
+        }
     }
     if a_initial.lev_manage_events == 0 || b_initial.lev_manage_events == 0 {
         println!(

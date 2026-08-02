@@ -55,6 +55,17 @@ impl EventDispatcher {
                 self.reports.apply_rows_deleted(change, &mut events);
                 out.extend(events.into_iter().map(Event::Report));
             }
+            Some(TradeCommand::ReportAliveMap(report)) => {
+                let mut events = Vec::new();
+                if self
+                    .reports
+                    .apply_alive_map(report, &mut events, &mut self.report_controls)
+                {
+                    out.extend(events.into_iter().map(Event::Report));
+                } else {
+                    Self::push_parse_failed(out, Command::Order, payload);
+                }
+            }
             Some(TradeCommand::ReportSyncPage(report)) => {
                 let mut events = Vec::new();
                 if self
@@ -139,7 +150,10 @@ impl EventDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{ReportEvent, ReportRecIdRange, ReportRowsDeleted};
+    use crate::state::{
+        ReportAliveMapOutcome, ReportAliveMapRequest, ReportAliveMapTicket, ReportEvent,
+        ReportRecIdRange, ReportRowsDeleted,
+    };
 
     #[test]
     fn set_rows_deleted_packet_becomes_a_typed_report_event() {
@@ -157,6 +171,42 @@ mod tests {
         match out.as_slice() {
             [Event::Report(ReportEvent::RowsDeleted(actual))] => {
                 assert_eq!(actual, &expected);
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn alive_map_packet_completes_the_matching_operation() {
+        let mut dispatcher = EventDispatcher::new();
+        let request_uid = dispatcher.begin_report_alive_map(
+            ReportAliveMapTicket { sync_id: 78 },
+            ReportAliveMapRequest {
+                epoch: 91,
+                up_to_rec_id: 9,
+            },
+        );
+        let mut data = vec![2, 0];
+        data.extend_from_slice(&crate::compression::synlz_compress(&[0x01, 0x00]));
+        let mut payload = vec![crate::commands::report::CMD_ALIVE_MAP];
+        payload.extend_from_slice(&crate::commands::registry::CURRENT_PROTO_CMD_VER.to_le_bytes());
+        payload.extend_from_slice(&79u64.to_le_bytes());
+        payload.extend_from_slice(&request_uid.to_le_bytes());
+        payload.extend_from_slice(&91i32.to_le_bytes());
+        payload.extend_from_slice(&9i64.to_le_bytes());
+        payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&data);
+        let mut out = Vec::new();
+
+        dispatcher.client_new_data_order(&payload, 0, &mut out);
+
+        match out.as_slice() {
+            [Event::Report(ReportEvent::AliveMapComplete(done))] => {
+                assert_eq!(done.ticket.sync_id, 78);
+                assert_eq!(done.epoch, 91);
+                assert_eq!(done.outcome, ReportAliveMapOutcome::Snapshot);
+                assert_eq!(done.is_alive(1), Some(true));
+                assert_eq!(done.is_alive(9), Some(false));
             }
             other => panic!("unexpected events: {other:?}"),
         }

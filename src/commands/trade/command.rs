@@ -3,8 +3,8 @@
 use super::*;
 use crate::commands::registry::CURRENT_PROTO_CMD_VER;
 use crate::commands::report::{
-    CMD_CHECK_ROWS_REQUEST, CMD_ROW_DELETE, CMD_ROW_UPSERT, CMD_SCHEMA, CMD_SCHEMA_REQUEST,
-    CMD_SET_ROWS_DELETED, CMD_SYNC_PAGE, CMD_SYNC_REQUEST,
+    CMD_ALIVE_MAP, CMD_ALIVE_MAP_REQUEST, CMD_CHECK_ROWS_REQUEST, CMD_ROW_DELETE, CMD_ROW_UPSERT,
+    CMD_SCHEMA, CMD_SCHEMA_REQUEST, CMD_SET_ROWS_DELETED, CMD_SYNC_PAGE, CMD_SYNC_REQUEST,
 };
 use std::convert::TryInto;
 
@@ -33,6 +33,9 @@ pub enum TradeCommand {
     #[allow(dead_code)] // Request shape is parsed for registry parity; clients only send it.
     ReportCheckRowsRequest(crate::commands::report::RepCheckRowsRequest),
     ReportSetRowsDeleted(crate::commands::report::RepSetRowsDeleted),
+    #[allow(dead_code)] // Request shape is parsed for registry parity; clients only send it.
+    ReportAliveMapRequest(crate::commands::report::RepAliveMapRequest),
+    ReportAliveMap(crate::commands::report::RepAliveMap),
     OrderImage(OrderImage),
     OrderPatch(OrderPatch),
     OrdersSnapshot(OrdersSnapshot),
@@ -100,6 +103,12 @@ impl TradeCommand {
             CMD_SET_ROWS_DELETED => Some(Self::ReportSetRowsDeleted(
                 crate::commands::report::RepSetRowsDeleted::read(input)?,
             )),
+            CMD_ALIVE_MAP_REQUEST => Some(Self::ReportAliveMapRequest(
+                crate::commands::report::RepAliveMapRequest::read(input)?,
+            )),
+            CMD_ALIVE_MAP => Some(Self::ReportAliveMap(
+                crate::commands::report::RepAliveMap::read(input)?,
+            )),
             41 => Some(Self::OrderImage(OrderImage::read(input)?)),
             42 => Some(Self::OrderPatch(OrderPatch::read(input)?)),
             43 => Some(Self::OrdersSnapshot(OrdersSnapshot::read(input)?)),
@@ -129,6 +138,8 @@ impl TradeCommand {
             Self::ReportSyncPage(c) => c.header.uid,
             Self::ReportCheckRowsRequest(c) => c.header.uid,
             Self::ReportSetRowsDeleted(c) => c.header.uid,
+            Self::ReportAliveMapRequest(c) => c.header.uid,
+            Self::ReportAliveMap(c) => c.header.uid,
             Self::OrderImage(c) => c.header.uid,
             Self::OrderPatch(c) => c.header.uid,
             Self::OrdersSnapshot(c) => c.header.uid,

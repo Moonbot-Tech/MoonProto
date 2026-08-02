@@ -52,10 +52,15 @@ pub(super) enum RuntimeCommand {
     ReportSync {
         ticket: crate::state::ReportSyncTicket,
         request: crate::state::ReportSyncRequest,
+        expected_epoch: Option<i32>,
     },
     ReportPageApplied(crate::state::ReportSyncPage),
     ReportCheckOpenRows(Arc<[i64]>),
     ReportSetRowsDeleted(Arc<[crate::state::ReportRowsDeleted]>),
+    ReportAliveMap {
+        ticket: crate::state::ReportAliveMapTicket,
+        request: crate::state::ReportAliveMapRequest,
+    },
     #[cfg(any(test, feature = "diagnostics"))]
     DebugOutgoingBlackhole(bool),
     #[cfg(any(test, feature = "diagnostics"))]
@@ -221,6 +226,7 @@ impl RuntimeCommand {
             Self::ReportPageApplied(_) => (59, 1),
             Self::ReportCheckOpenRows(rec_ids) => (60, rec_ids.len()),
             Self::ReportSetRowsDeleted(batches) => (61, batches.len()),
+            Self::ReportAliveMap { .. } => (62, 1),
             #[cfg(any(test, feature = "diagnostics"))]
             Self::DebugOutgoingBlackhole(_) => (56, 0),
             #[cfg(any(test, feature = "diagnostics"))]

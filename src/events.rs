@@ -375,17 +375,22 @@ impl EventDispatcher {
         &mut self,
         ticket: ReportSyncTicket,
         request: ReportSyncRequest,
+        expected_epoch: Option<i32>,
     ) {
-        self.reports.defer_sync_until_schema(ticket, request);
+        self.reports
+            .defer_sync_until_schema(ticket, request, expected_epoch);
     }
 
     pub(crate) fn begin_report_sync(
         &mut self,
         ticket: ReportSyncTicket,
         request: ReportSyncRequest,
+        expected_epoch: Option<i32>,
     ) -> u64 {
         let mut events = Vec::with_capacity(1);
-        let request_uid = self.reports.begin_sync(ticket, request, &mut events);
+        let request_uid = self
+            .reports
+            .begin_sync(ticket, request, expected_epoch, &mut events);
         self.queued_events
             .extend(events.into_iter().map(Event::Report));
         request_uid
@@ -408,6 +413,20 @@ impl EventDispatcher {
         self.queued_events
             .extend(events.into_iter().map(Event::Report));
         action
+    }
+
+    pub(crate) fn begin_report_alive_map(
+        &mut self,
+        ticket: crate::state::ReportAliveMapTicket,
+        request: crate::state::ReportAliveMapRequest,
+    ) -> u64 {
+        self.reports.begin_alive_map(ticket, request)
+    }
+
+    pub(crate) fn retry_active_report_alive_map(
+        &self,
+    ) -> Option<(u64, crate::state::ReportAliveMapRequest)> {
+        self.reports.retry_active_alive_map()
     }
 
     pub(crate) fn defer_report_open_rows_check_until_schema(&mut self, rec_ids: Arc<[i64]>) {

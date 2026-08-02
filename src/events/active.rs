@@ -100,6 +100,10 @@ pub(crate) enum ActiveAction {
     ReportOpenRowsCheckCompleted {
         server_token: u64,
     },
+    ReportAliveMapReceived {
+        request_uid: u64,
+        server_token: u64,
+    },
     CandleTimeframeChanged {
         market_name: String,
         kind: Option<crate::commands::candles::DeepHistoryKind>,
@@ -286,6 +290,12 @@ impl EventDispatcher {
                 }
                 crate::state::ReportControl::OpenRowsCheckCompleted => {
                     actions.push(ActiveAction::ReportOpenRowsCheckCompleted {
+                        server_token: ctx.server_token,
+                    });
+                }
+                crate::state::ReportControl::AliveMapReceived { request_uid } => {
+                    actions.push(ActiveAction::ReportAliveMapReceived {
+                        request_uid,
                         server_token: ctx.server_token,
                     });
                 }

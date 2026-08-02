@@ -73,6 +73,12 @@ impl Client {
                 crate::events::ActiveAction::ReportOpenRowsCheckCompleted { server_token } => {
                     self.complete_report_open_rows_check(server_token);
                 }
+                crate::events::ActiveAction::ReportAliveMapReceived {
+                    request_uid,
+                    server_token,
+                } => {
+                    self.record_report_alive_map_received(request_uid, server_token);
+                }
                 crate::events::ActiveAction::CandleTimeframeChanged { market_name, kind } => {
                     let unsubscribe = {
                         let mut registry = self.subscriptions.subscription_registry.lock();

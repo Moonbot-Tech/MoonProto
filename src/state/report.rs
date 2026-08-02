@@ -2,7 +2,7 @@
 
 use crate::commands::registry::decode_utf8_delphi;
 use crate::commands::report::{RepSchema as WireSchema, RepSyncPage as WireSyncPage};
-use crate::compression::synlz_decompress;
+use crate::compression::{rlelz_decompress_exact, synlz_decompress};
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
@@ -477,6 +477,8 @@ pub struct ReportSyncTicket {
 pub struct ReportSyncPage {
     pub ticket: ReportSyncTicket,
     pub request_uid: u64,
+    /// Stable identity of the core report database used for this page.
+    pub epoch: i32,
     pub from_rec_id: i64,
     pub last_rec_id: i64,
     pub max_rec_id: i64,
@@ -511,8 +513,102 @@ pub struct ReportSyncComplete {
     pub ticket: ReportSyncTicket,
     pub page_count: u32,
     pub total_rows: u32,
+    /// Stable identity of the core report database used for this catch-up.
+    pub epoch: i32,
     pub max_rec_id: i64,
     pub next_from_rec_id: i64,
+}
+
+/// Durable report-replica cursor stored atomically with the application's rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportSyncCheckpoint {
+    /// Stable identity of the core report database.
+    pub epoch: i32,
+    /// First `newRecID` not yet requested from this database.
+    pub next_from_rec_id: i64,
+}
+
+impl ReportSyncCheckpoint {
+    pub(crate) fn is_valid(self) -> bool {
+        self.epoch != 0 && self.next_from_rec_id >= 0
+    }
+}
+
+impl ReportSyncComplete {
+    /// Return the durable cursor to commit with the local report replica.
+    pub const fn checkpoint(&self) -> ReportSyncCheckpoint {
+        ReportSyncCheckpoint {
+            epoch: self.epoch,
+            next_from_rec_id: self.next_from_rec_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReportAliveMapRequest {
+    pub epoch: i32,
+    pub up_to_rec_id: i64,
+}
+
+impl ReportAliveMapRequest {
+    pub(crate) fn is_valid(self) -> bool {
+        self.epoch != 0 && self.up_to_rec_id >= 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ReportAliveMapTicket {
+    /// Client-local operation identifier used to match completion events.
+    pub sync_id: u64,
+}
+
+/// Result of reconciling row visibility after normal report catch-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportAliveMapOutcome {
+    /// The core uses another report database. Clear the local replica and sync it again.
+    DatabaseRecreated,
+    /// Complete alive state for `newRecID=1..=covered_up_to` is available.
+    Snapshot,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct ReportAliveMapComplete {
+    /// Client-local operation identifier returned by `reconcile_alive`.
+    pub ticket: ReportAliveMapTicket,
+    /// Core report-database identity returned with the map.
+    pub epoch: i32,
+    /// Highest `newRecID` covered by this map.
+    pub covered_up_to: i64,
+    /// Whether the map is usable or belongs to another database.
+    pub outcome: ReportAliveMapOutcome,
+    bitmap: Option<Arc<[u8]>>,
+}
+
+impl std::fmt::Debug for ReportAliveMapComplete {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReportAliveMapComplete")
+            .field("ticket", &self.ticket)
+            .field("epoch", &self.epoch)
+            .field("covered_up_to", &self.covered_up_to)
+            .field("outcome", &self.outcome)
+            .field("bitmap_len", &self.bitmap.as_deref().map(<[u8]>::len))
+            .finish()
+    }
+}
+
+impl ReportAliveMapComplete {
+    /// Return whether a row exists and has `deleted=0` in the authoritative database.
+    pub fn is_alive(&self, rec_id: i64) -> Option<bool> {
+        if self.outcome != ReportAliveMapOutcome::Snapshot {
+            return None;
+        }
+        let bitmap = self.bitmap.as_ref()?;
+        if rec_id <= 0 || rec_id > self.covered_up_to {
+            return None;
+        }
+        let bit = usize::try_from(rec_id - 1).ok()?;
+        Some(bitmap.get(bit / 8)? & (1 << (bit % 8)) != 0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -530,6 +626,7 @@ pub enum ReportEvent {
     },
     SyncPage(Arc<ReportSyncPage>),
     SyncComplete(ReportSyncComplete),
+    AliveMapComplete(ReportAliveMapComplete),
     OpenRowsCheckStarted {
         rec_ids: Arc<[i64]>,
     },
@@ -547,6 +644,8 @@ struct ActiveSync {
     initial_history_depth: ReportHistoryDepth,
     current_request: ReportSyncRequest,
     current_request_uid: u64,
+    expected_epoch: Option<i32>,
+    current_epoch: Option<i32>,
     page_count: u32,
     total_rows: u32,
     awaiting_apply: Option<Arc<ReportSyncPage>>,
@@ -554,13 +653,128 @@ struct ActiveSync {
     deleted_overrides: Vec<ReportRowsDeleted>,
 }
 
+#[derive(Debug)]
+struct ActiveAliveMap {
+    ticket: ReportAliveMapTicket,
+    request: ReportAliveMapRequest,
+    request_uid: u64,
+    overrides: Vec<ReportAliveOverride>,
+}
+
+#[derive(Debug)]
+enum ReportAliveOverride {
+    RowsDeleted(ReportRowsDeleted),
+    Row { rec_id: i64, alive: bool },
+}
+
+fn report_alive_bitmap_len(up_to_rec_id: i64) -> Option<usize> {
+    let bits = up_to_rec_id.checked_add(7)? / 8;
+    usize::try_from(bits).ok()
+}
+
+fn report_alive_tail_is_zero(bitmap: &[u8], up_to_rec_id: i64) -> bool {
+    let used_bits = u32::try_from(up_to_rec_id.rem_euclid(8)).unwrap_or(0);
+    if used_bits == 0 || bitmap.is_empty() {
+        return true;
+    }
+    let used_mask = (1u8 << used_bits) - 1;
+    bitmap.last().is_some_and(|last| last & !used_mask == 0)
+}
+
+fn set_alive_bit(bitmap: &mut [u8], rec_id: i64, alive: bool) {
+    let Ok(bit) = usize::try_from(rec_id - 1) else {
+        return;
+    };
+    let Some(byte) = bitmap.get_mut(bit / 8) else {
+        return;
+    };
+    let mask = 1 << (bit % 8);
+    if alive {
+        *byte |= mask;
+    } else {
+        *byte &= !mask;
+    }
+}
+
+fn set_alive_range(
+    bitmap: &mut [u8],
+    up_to_rec_id: i64,
+    mut from_rec_id: i64,
+    mut to_rec_id: i64,
+    alive: bool,
+) {
+    from_rec_id = from_rec_id.max(1);
+    to_rec_id = to_rec_id.min(up_to_rec_id);
+    if from_rec_id > to_rec_id {
+        return;
+    }
+    while from_rec_id <= to_rec_id && (from_rec_id - 1) % 8 != 0 {
+        set_alive_bit(bitmap, from_rec_id, alive);
+        from_rec_id += 1;
+    }
+    let full_bytes = (to_rec_id - from_rec_id + 1) / 8;
+    if full_bytes > 0 {
+        let Ok(first_byte) = usize::try_from((from_rec_id - 1) / 8) else {
+            return;
+        };
+        let Ok(byte_count) = usize::try_from(full_bytes) else {
+            return;
+        };
+        let Some(end) = first_byte.checked_add(byte_count) else {
+            return;
+        };
+        let Some(bytes) = bitmap.get_mut(first_byte..end) else {
+            return;
+        };
+        bytes.fill(if alive { u8::MAX } else { 0 });
+        from_rec_id += full_bytes * 8;
+    }
+    while from_rec_id <= to_rec_id {
+        set_alive_bit(bitmap, from_rec_id, alive);
+        from_rec_id += 1;
+    }
+}
+
+fn apply_alive_override(bitmap: &mut [u8], up_to_rec_id: i64, change: &ReportAliveOverride) {
+    match change {
+        ReportAliveOverride::RowsDeleted(change) => {
+            for range in change.ranges.iter() {
+                set_alive_range(
+                    bitmap,
+                    up_to_rec_id,
+                    range.from_rec_id,
+                    range.to_rec_id,
+                    !change.deleted,
+                );
+            }
+            for &rec_id in change.singles.iter() {
+                if rec_id > 0 && rec_id <= up_to_rec_id {
+                    set_alive_bit(bitmap, rec_id, !change.deleted);
+                }
+            }
+        }
+        ReportAliveOverride::Row { rec_id, alive } => {
+            if *rec_id > 0 && *rec_id <= up_to_rec_id {
+                set_alive_bit(bitmap, *rec_id, *alive);
+            }
+        }
+    }
+}
+
 impl ActiveSync {
-    fn new(ticket: ReportSyncTicket, request: ReportSyncRequest, request_uid: u64) -> Self {
+    fn new(
+        ticket: ReportSyncTicket,
+        request: ReportSyncRequest,
+        request_uid: u64,
+        expected_epoch: Option<i32>,
+    ) -> Self {
         Self {
             ticket,
             initial_history_depth: request.history_depth,
             current_request: request,
             current_request_uid: request_uid,
+            expected_epoch,
+            current_epoch: None,
             page_count: 0,
             total_rows: 0,
             awaiting_apply: None,
@@ -590,10 +804,12 @@ pub(crate) enum ReportPageApplyAction {
     SendNext {
         request_uid: u64,
         request: ReportSyncRequest,
+        expected_epoch: Option<i32>,
     },
     Complete {
         received_request_uid: u64,
         durable_request: ReportSyncRequest,
+        epoch: i32,
     },
     Ignored,
 }
@@ -612,15 +828,19 @@ pub(crate) enum ReportControl {
     },
     SchemaReceived,
     OpenRowsCheckCompleted,
+    AliveMapReceived {
+        request_uid: u64,
+    },
 }
 
 #[derive(Default)]
 pub(crate) struct ReportReplicationState {
     schema: Option<Arc<ReportSchema>>,
-    pending_after_schema: Option<(ReportSyncTicket, ReportSyncRequest)>,
+    pending_after_schema: Option<(ReportSyncTicket, ReportSyncRequest, Option<i32>)>,
     pending_check_after_schema: Option<Arc<[i64]>>,
     active: Option<ActiveSync>,
     active_check: Option<ActiveOpenRowsCheck>,
+    active_alive_map: Option<ActiveAliveMap>,
 }
 
 impl ReportReplicationState {
@@ -632,8 +852,9 @@ impl ReportReplicationState {
         &mut self,
         ticket: ReportSyncTicket,
         request: ReportSyncRequest,
+        expected_epoch: Option<i32>,
     ) {
-        self.pending_after_schema = Some((ticket, request));
+        self.pending_after_schema = Some((ticket, request, expected_epoch));
         self.active = None;
     }
 
@@ -641,11 +862,17 @@ impl ReportReplicationState {
         &mut self,
         ticket: ReportSyncTicket,
         request: ReportSyncRequest,
+        expected_epoch: Option<i32>,
         out: &mut Vec<ReportEvent>,
     ) -> u64 {
         let request_uid = random_nonzero_u64();
         self.pending_after_schema = None;
-        self.active = Some(ActiveSync::new(ticket, request, request_uid));
+        self.active = Some(ActiveSync::new(
+            ticket,
+            request,
+            request_uid,
+            expected_epoch,
+        ));
         out.push(ReportEvent::SyncStarted { ticket, request });
         request_uid
     }
@@ -662,6 +889,26 @@ impl ReportReplicationState {
             return None;
         }
         Some((active.current_request_uid, active.current_request))
+    }
+
+    pub(crate) fn begin_alive_map(
+        &mut self,
+        ticket: ReportAliveMapTicket,
+        request: ReportAliveMapRequest,
+    ) -> u64 {
+        let request_uid = random_nonzero_u64();
+        self.active_alive_map = Some(ActiveAliveMap {
+            ticket,
+            request,
+            request_uid,
+            overrides: Vec::new(),
+        });
+        request_uid
+    }
+
+    pub(crate) fn retry_active_alive_map(&self) -> Option<(u64, ReportAliveMapRequest)> {
+        let active = self.active_alive_map.as_ref()?;
+        Some((active.request_uid, active.request))
     }
 
     pub(crate) fn defer_open_rows_check_until_schema(&mut self, rec_ids: Arc<[i64]>) {
@@ -713,8 +960,8 @@ impl ReportReplicationState {
         self.schema = Some(Arc::clone(&schema));
         out.push(ReportEvent::Schema(schema));
         controls.push(ReportControl::SchemaReceived);
-        if let Some((ticket, request)) = self.pending_after_schema.take() {
-            let request_uid = self.begin_sync(ticket, request, out);
+        if let Some((ticket, request, expected_epoch)) = self.pending_after_schema.take() {
+            let request_uid = self.begin_sync(ticket, request, expected_epoch, out);
             controls.push(ReportControl::SendSync {
                 request_uid,
                 request,
@@ -744,8 +991,17 @@ impl ReportReplicationState {
         let Some(row) = ReportRow::parse(raw, schema.rec_id_field_index, Some(rec_id)) else {
             return false;
         };
+        let alive = row
+            .integer_by_name(schema, REPORT_DELETED_FIELD_NAME)
+            .unwrap_or(0)
+            == 0;
         if let Some(active) = self.active.as_mut() {
             active.live_touched.insert(rec_id);
+        }
+        if let Some(active) = self.active_alive_map.as_mut() {
+            active
+                .overrides
+                .push(ReportAliveOverride::Row { rec_id, alive });
         }
         out.push(ReportEvent::RowUpsert(row));
         self.resolve_open_row_check(rec_id, out, controls);
@@ -767,6 +1023,12 @@ impl ReportReplicationState {
         if let Some(active) = self.active.as_mut() {
             active.live_touched.insert(rec_id);
         }
+        if let Some(active) = self.active_alive_map.as_mut() {
+            active.overrides.push(ReportAliveOverride::Row {
+                rec_id,
+                alive: false,
+            });
+        }
         out.push(ReportEvent::RowDelete { rec_id });
         self.resolve_open_row_check(rec_id, out, controls);
         true
@@ -780,7 +1042,82 @@ impl ReportReplicationState {
         if let Some(active) = self.active.as_mut() {
             active.deleted_overrides.push(change.clone());
         }
+        if let Some(active) = self.active_alive_map.as_mut() {
+            active
+                .overrides
+                .push(ReportAliveOverride::RowsDeleted(change.clone()));
+        }
         out.push(ReportEvent::RowsDeleted(change));
+    }
+
+    pub(crate) fn apply_alive_map(
+        &mut self,
+        wire: crate::commands::report::RepAliveMap,
+        out: &mut Vec<ReportEvent>,
+        controls: &mut Vec<ReportControl>,
+    ) -> bool {
+        let Some(active) = self.active_alive_map.as_ref() else {
+            return true;
+        };
+        if wire.request_uid != active.request_uid {
+            return true;
+        }
+        if wire.epoch == 0 || wire.covered_up_to < 0 {
+            return false;
+        }
+
+        let request = active.request;
+        let database_recreated = request.epoch != wire.epoch;
+        if !database_recreated && wire.covered_up_to != request.up_to_rec_id {
+            return false;
+        }
+
+        let bitmap = if database_recreated {
+            None
+        } else {
+            let Some(expected_len) = report_alive_bitmap_len(wire.covered_up_to) else {
+                return false;
+            };
+            let mut bitmap = if expected_len == 0 {
+                if !wire.data.is_empty() {
+                    return false;
+                }
+                Vec::new()
+            } else {
+                let Some(bitmap) = rlelz_decompress_exact(&wire.data, expected_len) else {
+                    return false;
+                };
+                bitmap
+            };
+            if !report_alive_tail_is_zero(&bitmap, wire.covered_up_to) {
+                return false;
+            }
+            for change in &active.overrides {
+                apply_alive_override(&mut bitmap, wire.covered_up_to, change);
+            }
+            Some(bitmap.into())
+        };
+
+        let active = self
+            .active_alive_map
+            .take()
+            .expect("active alive map checked above");
+        let outcome = if database_recreated {
+            ReportAliveMapOutcome::DatabaseRecreated
+        } else {
+            ReportAliveMapOutcome::Snapshot
+        };
+        out.push(ReportEvent::AliveMapComplete(ReportAliveMapComplete {
+            ticket: active.ticket,
+            epoch: wire.epoch,
+            covered_up_to: wire.covered_up_to,
+            outcome,
+            bitmap,
+        }));
+        controls.push(ReportControl::AliveMapReceived {
+            request_uid: wire.request_uid,
+        });
+        true
     }
 
     pub(crate) fn apply_sync_page(
@@ -801,6 +1138,13 @@ impl ReportReplicationState {
         if active.awaiting_apply.is_some() {
             return true;
         }
+        if wire.epoch == 0 {
+            return false;
+        }
+        let epoch_recreated = active
+            .current_epoch
+            .or(active.expected_epoch)
+            .is_some_and(|epoch| epoch != wire.epoch);
         let mut rows = if wire.row_count == 0 {
             if wire.last_rec_id != 0 || !wire.blob.is_empty() {
                 return false;
@@ -829,13 +1173,19 @@ impl ReportReplicationState {
         {
             return false;
         }
-        let database_recreated = active.current_request.from_rec_id > 0
+        let highwater_recreated = active.current_request.from_rec_id > 0
             && wire.max_rec_id < active.current_request.from_rec_id.saturating_sub(1);
-        if database_recreated && !rows.is_empty() {
+        let database_recreated = epoch_recreated || highwater_recreated;
+        if highwater_recreated && !epoch_recreated && !rows.is_empty() {
             return false;
         }
         if !database_recreated && wire.last_rec_id > wire.max_rec_id {
             return false;
+        }
+        if database_recreated {
+            rows.clear();
+        } else {
+            active.current_epoch = Some(wire.epoch);
         }
         if let Some(deleted_field) = schema
             .field_by_name(REPORT_DELETED_FIELD_NAME)
@@ -856,6 +1206,7 @@ impl ReportReplicationState {
         let page = Arc::new(ReportSyncPage {
             ticket: active.ticket,
             request_uid: wire.request_uid,
+            epoch: wire.epoch,
             from_rec_id: active.current_request.from_rec_id,
             last_rec_id: wire.last_rec_id,
             max_rec_id: wire.max_rec_id,
@@ -884,6 +1235,7 @@ impl ReportReplicationState {
         };
         if awaiting.ticket != page.ticket
             || awaiting.request_uid != page.request_uid
+            || awaiting.epoch != page.epoch
             || awaiting.from_rec_id != page.from_rec_id
             || awaiting.last_rec_id != page.last_rec_id
             || awaiting.max_rec_id != page.max_rec_id
@@ -904,11 +1256,14 @@ impl ReportReplicationState {
             let request_uid = random_nonzero_u64();
             active.current_request = request;
             active.current_request_uid = request_uid;
+            active.expected_epoch = Some(applied.epoch);
+            active.current_epoch = None;
             active.live_touched.clear();
             active.deleted_overrides.clear();
             return ReportPageApplyAction::SendNext {
                 request_uid,
                 request,
+                expected_epoch: Some(applied.epoch),
             };
         }
 
@@ -916,16 +1271,21 @@ impl ReportReplicationState {
             let active = self.active.take().expect("active sync checked above");
             let next_from_rec_id = applied.max_rec_id.saturating_add(1);
             let durable_request = ReportSyncRequest::resume(next_from_rec_id);
+            let epoch = active
+                .current_epoch
+                .expect("accepted report page establishes epoch");
             out.push(ReportEvent::SyncComplete(ReportSyncComplete {
                 ticket: active.ticket,
                 page_count: active.page_count,
                 total_rows: active.total_rows,
+                epoch,
                 max_rec_id: applied.max_rec_id,
                 next_from_rec_id,
             }));
             return ReportPageApplyAction::Complete {
                 received_request_uid: applied.request_uid,
                 durable_request,
+                epoch,
             };
         }
 
@@ -937,6 +1297,7 @@ impl ReportReplicationState {
         ReportPageApplyAction::SendNext {
             request_uid,
             request,
+            expected_epoch: Some(applied.epoch),
         }
     }
 
@@ -1094,6 +1455,13 @@ mod tests {
         raw
     }
 
+    fn rlelz_blob(raw: &[u8]) -> Vec<u8> {
+        assert!(raw.len() < 128);
+        let mut encoded = vec![raw.len() as u8, 0];
+        encoded.extend_from_slice(&synlz_compress(raw));
+        encoded
+    }
+
     fn ready_state() -> ReportReplicationState {
         let mut state = ReportReplicationState::default();
         let mut out = Vec::new();
@@ -1179,6 +1547,117 @@ mod tests {
     }
 
     #[test]
+    fn alive_map_is_strict_and_all_live_changes_win() {
+        let mut state = ready_state_with_deleted();
+        let ticket = ReportAliveMapTicket { sync_id: 71 };
+        let request = ReportAliveMapRequest {
+            epoch: 9001,
+            up_to_rec_id: 20,
+        };
+        let request_uid = state.begin_alive_map(ticket, request);
+        let mut out = Vec::new();
+        let mut controls = Vec::new();
+
+        state.apply_rows_deleted(
+            ReportRowsDeleted::new(true, [ReportRecIdRange::new(9, 16)], [2]),
+            &mut out,
+        );
+        assert!(state.apply_live_delete(3, &mut out, &mut controls));
+        assert!(state.apply_live_upsert(4, &row_with_deleted(4, 1, 1), &mut out, &mut controls,));
+        assert!(state.apply_live_upsert(5, &row_with_deleted(5, 1, 0), &mut out, &mut controls,));
+        out.clear();
+        controls.clear();
+
+        assert!(state.apply_alive_map(
+            crate::commands::report::RepAliveMap {
+                header: header(crate::commands::report::CMD_ALIVE_MAP),
+                request_uid,
+                epoch: 9001,
+                covered_up_to: 20,
+                data: rlelz_blob(&[0xff, 0xff, 0x0f]),
+            },
+            &mut out,
+            &mut controls,
+        ));
+        let ReportEvent::AliveMapComplete(done) = &out[0] else {
+            panic!("expected alive-map completion")
+        };
+        assert_eq!(done.ticket, ticket);
+        assert_eq!(done.epoch, 9001);
+        assert_eq!(done.is_alive(1), Some(true));
+        assert_eq!(done.is_alive(2), Some(false));
+        assert_eq!(done.is_alive(3), Some(false));
+        assert_eq!(done.is_alive(4), Some(false));
+        assert_eq!(done.is_alive(5), Some(true));
+        for rec_id in 9..=16 {
+            assert_eq!(done.is_alive(rec_id), Some(false));
+        }
+        assert_eq!(done.is_alive(21), None);
+        assert!(matches!(
+            controls.as_slice(),
+            [ReportControl::AliveMapReceived { request_uid: uid }] if *uid == request_uid
+        ));
+    }
+
+    #[test]
+    fn alive_map_detects_another_database_epoch() {
+        let mut state = ready_state();
+        let mut out = Vec::new();
+        let mut controls = Vec::new();
+        let request_uid = state.begin_alive_map(
+            ReportAliveMapTicket { sync_id: 73 },
+            ReportAliveMapRequest {
+                epoch: 111,
+                up_to_rec_id: 100,
+            },
+        );
+        assert!(state.apply_alive_map(
+            crate::commands::report::RepAliveMap {
+                header: header(crate::commands::report::CMD_ALIVE_MAP),
+                request_uid,
+                epoch: 222,
+                covered_up_to: 80,
+                data: vec![1, 2, 3],
+            },
+            &mut out,
+            &mut controls,
+        ));
+        assert!(matches!(
+            out.as_slice(),
+            [ReportEvent::AliveMapComplete(ReportAliveMapComplete {
+                outcome: ReportAliveMapOutcome::DatabaseRecreated,
+                ..
+            })]
+        ));
+    }
+
+    #[test]
+    fn malformed_alive_map_does_not_cancel_the_retryable_request() {
+        let mut state = ready_state();
+        let request = ReportAliveMapRequest {
+            epoch: 333,
+            up_to_rec_id: 9,
+        };
+        let request_uid = state.begin_alive_map(ReportAliveMapTicket { sync_id: 74 }, request);
+        let mut out = Vec::new();
+        let mut controls = Vec::new();
+
+        assert!(!state.apply_alive_map(
+            crate::commands::report::RepAliveMap {
+                header: header(crate::commands::report::CMD_ALIVE_MAP),
+                request_uid,
+                epoch: 333,
+                covered_up_to: 9,
+                data: rlelz_blob(&[0xff, 0x80]),
+            },
+            &mut out,
+            &mut controls,
+        ));
+        assert!(out.is_empty());
+        assert_eq!(state.retry_active_alive_map(), Some((request_uid, request)));
+    }
+
+    #[test]
     fn schema_rejects_changes_to_existing_sql_declaration() {
         let mut state = ready_state();
         let mut out = Vec::new();
@@ -1216,12 +1695,13 @@ mod tests {
         let request = ReportSyncRequest::fresh(ReportHistoryDepth::ServerDefault);
         let mut out = Vec::new();
         let mut controls = Vec::new();
-        let request_uid = state.begin_sync(ticket, request, &mut out);
+        let request_uid = state.begin_sync(ticket, request, None, &mut out);
         out.clear();
 
         let page = WireSyncPage {
             header: header(39),
             request_uid,
+            epoch: 123,
             last_rec_id: 7,
             max_rec_id: 9,
             row_count: 1,
@@ -1258,13 +1738,14 @@ mod tests {
         let request = ReportSyncRequest::resume(7);
         let mut out = Vec::new();
         let mut controls = Vec::new();
-        let request_uid = state.begin_sync(ticket, request, &mut out);
+        let request_uid = state.begin_sync(ticket, request, None, &mut out);
         out.clear();
 
         assert!(state.apply_sync_page(
             WireSyncPage {
                 header: header(39),
                 request_uid,
+                epoch: 123,
                 last_rec_id: 7,
                 max_rec_id: 7,
                 row_count: 1,
@@ -1293,7 +1774,15 @@ mod tests {
         assert_eq!(done.ticket, ticket);
         assert_eq!(done.page_count, 1);
         assert_eq!(done.total_rows, 1);
+        assert_eq!(done.epoch, 123);
         assert_eq!(done.next_from_rec_id, 8);
+        assert_eq!(
+            done.checkpoint(),
+            ReportSyncCheckpoint {
+                epoch: 123,
+                next_from_rec_id: 8,
+            }
+        );
     }
 
     #[test]
@@ -1302,7 +1791,7 @@ mod tests {
         let ticket = ReportSyncTicket { sync_id: 45 };
         let mut out = Vec::new();
         let mut controls = Vec::new();
-        let request_uid = state.begin_sync(ticket, ReportSyncRequest::resume(5), &mut out);
+        let request_uid = state.begin_sync(ticket, ReportSyncRequest::resume(5), None, &mut out);
         out.clear();
 
         assert!(state.apply_live_upsert(7, &row(7, 1), &mut out, &mut controls));
@@ -1314,6 +1803,7 @@ mod tests {
             WireSyncPage {
                 header: header(39),
                 request_uid,
+                epoch: 123,
                 last_rec_id: 8,
                 max_rec_id: 9,
                 row_count: 2,
@@ -1340,7 +1830,7 @@ mod tests {
         let ticket = ReportSyncTicket { sync_id: 46 };
         let mut out = Vec::new();
         let mut controls = Vec::new();
-        let request_uid = state.begin_sync(ticket, ReportSyncRequest::resume(5), &mut out);
+        let request_uid = state.begin_sync(ticket, ReportSyncRequest::resume(5), None, &mut out);
         out.clear();
 
         let change = ReportRowsDeleted::new(true, [], [7]);
@@ -1352,6 +1842,7 @@ mod tests {
             WireSyncPage {
                 header: header(39),
                 request_uid,
+                epoch: 123,
                 last_rec_id: 7,
                 max_rec_id: 8,
                 row_count: 1,
@@ -1372,13 +1863,14 @@ mod tests {
         let ticket = ReportSyncTicket { sync_id: 51 };
         let mut out = Vec::new();
         let mut controls = Vec::new();
-        let request_uid = state.begin_sync(ticket, ReportSyncRequest::resume(5), &mut out);
+        let request_uid = state.begin_sync(ticket, ReportSyncRequest::resume(5), None, &mut out);
         out.clear();
 
         assert!(state.apply_sync_page(
             WireSyncPage {
                 header: header(39),
                 request_uid: request_uid.wrapping_add(1),
+                epoch: 123,
                 last_rec_id: 7,
                 max_rec_id: 7,
                 row_count: 1,
@@ -1397,7 +1889,7 @@ mod tests {
         let request = ReportSyncRequest::resume(5);
         let mut out = Vec::new();
         let mut controls = Vec::new();
-        let request_uid = state.begin_sync(ticket, request, &mut out);
+        let request_uid = state.begin_sync(ticket, request, None, &mut out);
         out.clear();
 
         let (retry_uid, retry_request) = state.retry_active_page().unwrap();
@@ -1408,6 +1900,7 @@ mod tests {
             WireSyncPage {
                 header: header(39),
                 request_uid,
+                epoch: 123,
                 last_rec_id: 7,
                 max_rec_id: 7,
                 row_count: 1,
@@ -1426,13 +1919,14 @@ mod tests {
         let request = ReportSyncRequest::resume(100);
         let mut out = Vec::new();
         let mut controls = Vec::new();
-        let request_uid = state.begin_sync(ticket, request, &mut out);
+        let request_uid = state.begin_sync(ticket, request, None, &mut out);
         out.clear();
 
         assert!(state.apply_sync_page(
             WireSyncPage {
                 header: header(39),
                 request_uid,
+                epoch: 123,
                 last_rec_id: 0,
                 max_rec_id: 50,
                 row_count: 0,
@@ -1454,6 +1948,49 @@ mod tests {
             ReportSyncRequest::fresh(ReportHistoryDepth::ServerDefault)
         );
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn persisted_epoch_detects_recreated_database_even_when_highwater_grew() {
+        let mut state = ready_state();
+        let ticket = ReportSyncTicket { sync_id: 62 };
+        let request = ReportSyncRequest::resume(100);
+        let mut out = Vec::new();
+        let mut controls = Vec::new();
+        let request_uid = state.begin_sync(ticket, request, Some(777), &mut out);
+        out.clear();
+
+        assert!(state.apply_sync_page(
+            WireSyncPage {
+                header: header(39),
+                request_uid,
+                epoch: 888,
+                last_rec_id: 100,
+                max_rec_id: 500,
+                row_count: 1,
+                blob: synlz_compress(&row(100, 1)),
+            },
+            &mut out,
+            &mut controls,
+        ));
+        let ReportEvent::SyncPage(page) = out.pop().unwrap() else {
+            panic!("expected recreate page")
+        };
+        assert!(page.database_recreated);
+        assert!(page.rows.is_empty());
+        let ReportPageApplyAction::SendNext {
+            request,
+            expected_epoch,
+            ..
+        } = state.page_applied(&page, &mut out)
+        else {
+            panic!("expected fresh restart")
+        };
+        assert_eq!(
+            request,
+            ReportSyncRequest::fresh(ReportHistoryDepth::ServerDefault)
+        );
+        assert_eq!(expected_epoch, Some(888));
     }
 
     #[test]

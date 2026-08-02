@@ -12,7 +12,7 @@ the durable historical database model.
 
 ## Recommended Flow
 
-Start from the cursor already committed in the local replica:
+Start from the checkpoint committed with the local replica:
 
 ```rust
 use moonproto::{ReportHistoryDepth, ReportSyncRequest};
@@ -22,9 +22,7 @@ let ticket = if local_db_is_empty() {
         ReportHistoryDepth::ServerDefault,
     ))?
 } else {
-    client.reports().sync(ReportSyncRequest::resume(
-        local_max_rec_id + 1,
-    ))?
+    client.reports().sync_from(load_report_checkpoint()?)?
 };
 ```
 
@@ -54,7 +52,23 @@ match event {
         set_local_deleted_flag(&change)?;
     }
     moonproto::Event::Report(moonproto::ReportEvent::SyncComplete(done)) => {
-        persist_cursor(done.next_from_rec_id)?;
+        // Catch-up is durable, but offline delete/retention state is reconciled next.
+        pending_sync_complete = Some(done.clone());
+        client.reports().reconcile_alive(&done)?;
+    }
+    moonproto::Event::Report(moonproto::ReportEvent::AliveMapComplete(map)) => {
+        match map.outcome {
+            moonproto::ReportAliveMapOutcome::Snapshot => {
+                let done = pending_sync_complete.take().unwrap();
+                let tx = db.transaction()?;
+                apply_alive_map_as_visibility(&tx, &map)?;
+                store_report_checkpoint(&tx, done.checkpoint())?;
+                tx.commit()?;
+            }
+            moonproto::ReportAliveMapOutcome::DatabaseRecreated => {
+                clear_local_replica_and_start_fresh_sync()?;
+            }
+        }
     }
     _ => {}
 }
@@ -67,6 +81,8 @@ writer the natural backpressure boundary.
 
 `SyncComplete` is emitted only after the final page has been acknowledged. It
 therefore describes durably applied catch-up, not merely parsed network data.
+After it, reconcile older row visibility as described below and only then
+advance the durable checkpoint.
 
 `sync(...)` loads/revalidates the schema automatically. Use
 `refresh_schema()` only for an explicit manual schema refresh.
@@ -76,10 +92,13 @@ therefore describes durably applied catch-up, not merely parsed network data.
 `ReportSyncPage` contains:
 
 - `rows`: the complete typed page;
+- `epoch`: stable identity of the core report database;
 - `from_rec_id`: the cursor used for this page;
 - `last_rec_id`: the last row in this page, or zero for an empty page;
-- `max_rec_id`: the core database's global maximum at response time;
-- `database_recreated`: the core database is behind the local cursor;
+- `max_rec_id`: the core database's persistent high-water, which does not move
+  backwards after physical tail retention;
+- `database_recreated`: the core is serving another report database, detected
+  by its epoch or by the legacy high-water fallback;
 - `is_complete()`: no further page is needed for this catch-up pass.
 
 Pages are idempotent by `newRecID`. If the application cannot commit a page,
@@ -92,6 +111,8 @@ whole-sync reconciliation set.
 
 When `database_recreated` is true, discard the stale local replica and then
 call `page_applied`. Active Lib restarts the same operation from a fresh cursor.
+This is detected by the persisted database epoch even when the replacement
+database has already grown beyond the old numeric cursor.
 
 Missing page responses are retried automatically. A retry repeats only the
 current page, not the complete history, and keeps that page request's wire UID.
@@ -114,7 +135,7 @@ let batches = client.reports().delete_rows(
 ```
 
 `restore_rows` performs the same operation with `deleted=0`. Active Lib splits
-large selections into High-priority commands near 1 KiB and returns the number
+large selections into Sliced commands near 1 KiB and returns the number
 of non-empty batches. An empty selection returns zero and sends nothing.
 Reversed ranges are preserved and select no rows, matching the core's SQL
 `BETWEEN` semantics.
@@ -136,14 +157,62 @@ older rows from later sync pages. Rows already delivered to the application are
 kept correct by applying the event before subsequent queued report work.
 
 The application can hide `deleted=1` rows by default and offer an explicit
-"show deleted" view. Physical retention deletes remain `RowDelete` events and
-cannot be requested through this API.
+"show deleted" view. Per-row physical removals reported live arrive as
+`RowDelete`; bulk retention cleanup may be visible only through the alive map.
+Physical deletion cannot be requested through this API.
+
+## Offline Visibility Reconciliation
+
+Normal catch-up advances by `newRecID`, so it cannot discover a soft-delete,
+restore, or physical retention delete of an older row that happened while the
+terminal was offline. After each `SyncComplete`, request the core's compact
+alive map:
+
+```rust
+client.reports().reconcile_alive(&sync_complete)?;
+
+if let moonproto::ReportEvent::AliveMapComplete(map) = event {
+    match map.outcome {
+        moonproto::ReportAliveMapOutcome::Snapshot => {
+            let tx = db.transaction()?;
+            for rec_id in local_report_ids_up_to(&tx, map.covered_up_to)? {
+                // A clear bit combines soft-delete and physical absence.
+                // Preserve the local row but hide it; a later restore/upsert can revive it.
+                set_local_deleted(&tx, rec_id, !map.is_alive(rec_id).unwrap())?;
+            }
+            store_report_checkpoint(&tx, sync_complete.checkpoint())?;
+            tx.commit()?;
+        }
+        moonproto::ReportAliveMapOutcome::DatabaseRecreated => {
+            clear_local_replica_and_start_fresh_sync()?;
+        }
+    }
+}
+```
+
+`Snapshot` is authoritative for `newRecID=1..=covered_up_to`. A set bit means
+the row exists on the core and has `deleted=0`; a clear bit means the row is
+soft-deleted or physically absent. `is_alive(rec_id)` reads one bit in O(1).
+Rows outside the covered range return `None`.
+
+Persist `ReportSyncComplete::checkpoint()` in the same transaction that applies
+the map. It contains both the database epoch and the next numeric cursor. If the
+transaction fails, retain the previous checkpoint and repeat catch-up. Starting
+with `sync_from(checkpoint)` makes database replacement detectable even when the
+new database has already reused or exceeded old numeric IDs.
+
+Active Lib retries a lost response with the same request UID and repeats the
+request after a hard reconnect. Live upserts, physical deletes, and
+`RowsDeleted` echoes received while the Sliced map is in flight are overlaid on
+the map before `AliveMapComplete`, so one serialized report writer can apply
+events in delivery order without another race-recovery layer.
 
 ## Open Rows After Reconnect
 
-Report rows are not fully append-only. An open deal can close or be deleted
-while the client is offline, even though its `newRecID` is below the committed
-cursor. Keep the current open-row IDs registered with Active Lib:
+Report rows are not fully append-only. An open deal can close, change, or be
+physically removed while the client is offline, even though its `newRecID` is
+below the committed cursor. Keep the current open-row IDs registered with
+Active Lib:
 
 ```rust
 client.reports().check_open_rows(&open_rec_ids)?;
@@ -178,7 +247,7 @@ For each page, use one SQLite transaction and reuse one prepared upsert
 statement. Preparing SQL for every row can turn the local writer into the
 bottleneck that page-level flow control is designed to avoid.
 
-## Reconnect And Cursor
+## Reconnect And Checkpoint
 
 Report subscription belongs to the hard server session. Active Lib tracks the
 server session token. After a hard reconnect it resumes from the last page that
@@ -188,8 +257,10 @@ The append-only schema is revalidated once per new hard session before page or
 check traffic resumes, so newly appended fields are migrated before their rows
 are applied.
 
-The durable cursor is always `max(newRecID) + 1`. Never move it merely because
-a page event arrived; the page must first be committed and acknowledged.
+The durable checkpoint is `{ epoch, next_from_rec_id }`, where the numeric
+cursor is the core's persistent high-water plus one. Never advance it merely
+because a page arrived. Commit pages first, finish the alive-map reconciliation,
+then store the checkpoint in the same local transaction as the visibility state.
 
 For an empty replica, `ReportHistoryDepth::ServerDefault` uses the core's
 default retained depth, `Days(n)` requests an explicit depth, and `All`

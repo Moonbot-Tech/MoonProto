@@ -224,6 +224,28 @@ impl ProtocolCore<'_> {
         {
             return;
         }
+        if let Some((request_uid, request)) = mode.dispatcher.retry_active_report_alive_map() {
+            let pending_uid = self
+                .client
+                .reconnect
+                .pending_report_alive_map_uid
+                .load(Ordering::Relaxed);
+            let sent_token = self
+                .client
+                .reconnect
+                .pending_report_alive_map_server_token
+                .load(Ordering::Relaxed);
+            let timed_out = cur_tm.saturating_sub(
+                self.client
+                    .reconnect
+                    .last_report_alive_map_request_ms
+                    .load(Ordering::Relaxed),
+            ) >= crate::client::domain_report::REPORT_RESPONSE_TIMEOUT_MS;
+            if pending_uid != request_uid || sent_token != self.client.server_token || timed_out {
+                self.client
+                    .send_report_alive_map_at(request_uid, request, cur_tm);
+            }
+        }
         let sync_intent = self.client.report_sync_intent();
         let open_rows_intent = self.client.report_open_rows_intent();
         if sync_intent.is_none() && open_rows_intent.is_empty() {
@@ -240,10 +262,10 @@ impl ProtocolCore<'_> {
             {
                 return;
             }
-            if let Some(request) = sync_intent {
+            if let Some((request, expected_epoch)) = sync_intent {
                 let ticket = Client::next_report_sync_ticket();
                 mode.dispatcher
-                    .defer_report_sync_until_schema(ticket, request);
+                    .defer_report_sync_until_schema(ticket, request, expected_epoch);
             }
             if !open_rows_intent.is_empty() {
                 mode.dispatcher
@@ -265,7 +287,7 @@ impl ProtocolCore<'_> {
             return;
         }
 
-        if let Some(request) = sync_intent {
+        if let Some((request, expected_epoch)) = sync_intent {
             let waiting_for_apply = mode.dispatcher.report_waiting_for_page_apply()
                 || self
                     .client
@@ -297,7 +319,8 @@ impl ProtocolCore<'_> {
                     if let Some((request_uid, active_request)) =
                         mode.dispatcher.retry_active_report_page()
                     {
-                        self.client.set_report_sync_intent(active_request);
+                        self.client
+                            .set_report_sync_intent(active_request, expected_epoch);
                         self.client
                             .send_report_sync_at(request_uid, active_request, cur_tm);
                     } else if self
@@ -308,7 +331,9 @@ impl ProtocolCore<'_> {
                         != self.client.server_token
                     {
                         let ticket = Client::next_report_sync_ticket();
-                        let request_uid = mode.dispatcher.begin_report_sync(ticket, request);
+                        let request_uid =
+                            mode.dispatcher
+                                .begin_report_sync(ticket, request, expected_epoch);
                         self.client
                             .send_report_sync_at(request_uid, request, cur_tm);
                     }

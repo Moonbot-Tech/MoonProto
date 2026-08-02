@@ -78,11 +78,14 @@ pub use orders::{
     PositionProtectionSide, SellReason,
 };
 pub(crate) use orders::{OrderRepair, OrderState};
-pub(crate) use report::{ReportControl, ReportPageApplyAction, ReportReplicationState};
 pub use report::{
-    ReportEvent, ReportFieldKind, ReportFieldValue, ReportHistoryDepth, ReportRecIdRange,
-    ReportRow, ReportRowsDeleted, ReportSchema, ReportSchemaField, ReportSyncComplete,
+    ReportAliveMapComplete, ReportAliveMapOutcome, ReportAliveMapTicket, ReportEvent,
+    ReportFieldKind, ReportFieldValue, ReportHistoryDepth, ReportRecIdRange, ReportRow,
+    ReportRowsDeleted, ReportSchema, ReportSchemaField, ReportSyncCheckpoint, ReportSyncComplete,
     ReportSyncPage, ReportSyncRequest, ReportSyncTicket, ReportValue,
+};
+pub(crate) use report::{
+    ReportAliveMapRequest, ReportControl, ReportPageApplyAction, ReportReplicationState,
 };
 #[cfg(test)]
 pub(crate) use seq_ring::SeqRingWriter;

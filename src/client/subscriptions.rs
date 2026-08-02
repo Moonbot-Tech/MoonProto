@@ -108,6 +108,7 @@ pub(crate) struct SubscriptionRegistry {
     pub mm_orders_sub: Option<bool>,
     pub candle_subs: HashMap<String, DeepHistoryKind>,
     pub report_sync: Option<crate::state::ReportSyncRequest>,
+    pub(crate) report_sync_expected_epoch: Option<i32>,
     pub report_open_rows: Arc<[i64]>,
 }
 
@@ -412,6 +413,11 @@ pub(crate) struct ReconnectRestore {
     pub(crate) last_report_check_request_ms: AtomicI64,
     pub(crate) pending_report_check_server_token: AtomicU64,
     pub(crate) subscribed_report_check_server_token: AtomicU64,
+    /// Pending alive-map anti-entropy request. Its UID is retained across
+    /// retries so a delayed sliced response remains valid.
+    pub(crate) last_report_alive_map_request_ms: AtomicI64,
+    pub(crate) pending_report_alive_map_uid: AtomicU64,
+    pub(crate) pending_report_alive_map_server_token: AtomicU64,
 
     /// Delayed `DoSubscribeAllTrades(false)` after Delphi `Sleep(100)` in
     /// `BMarketHistoryWorker.Execute` reconnect branch.
@@ -464,6 +470,9 @@ impl ReconnectRestore {
             last_report_check_request_ms: AtomicI64::new(super::constants::NEVER_TIME_MS),
             pending_report_check_server_token: AtomicU64::new(0),
             subscribed_report_check_server_token: AtomicU64::new(0),
+            last_report_alive_map_request_ms: AtomicI64::new(super::constants::NEVER_TIME_MS),
+            pending_report_alive_map_uid: AtomicU64::new(0),
+            pending_report_alive_map_server_token: AtomicU64::new(0),
             pending_trades_unsubscribe: None,
             pending_trades_resubscribe_after_ms: None,
             last_trades_tick_ms: i64::MIN / 2,

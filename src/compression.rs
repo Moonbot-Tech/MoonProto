@@ -66,6 +66,10 @@ thread_local! {
 /// - For a **back-ref**: before copying, the back-ref hashes positions `< dst` (NOT `dst + t`!), then
 ///   `inc(dst, t); last_hashed := dst - 1` — the copied t bytes are NOT hashed in this iteration.
 pub(crate) fn synlz_decompress(src: &[u8]) -> Option<Vec<u8>> {
+    synlz_decompress_bounded(src, MAX_DECOMPRESSED_SIZE)
+}
+
+fn synlz_decompress_bounded(src: &[u8], max_output: usize) -> Option<Vec<u8>> {
     if src.len() < 2 {
         return None;
     }
@@ -88,7 +92,7 @@ pub(crate) fn synlz_decompress(src: &[u8]) -> Option<Vec<u8>> {
         first_word as usize
     };
 
-    if out_size > MAX_DECOMPRESSED_SIZE {
+    if out_size > max_output {
         return None;
     }
 
@@ -121,6 +125,72 @@ pub(crate) fn synlz_decompress(src: &[u8]) -> Option<Vec<u8>> {
         }
         DecompressResult::Corrupt => None,
     }
+}
+
+/// Decode mORMot `TAlgoRleLZ.AlgoCompress` output to one exact-size buffer.
+///
+/// The format is `[plain_len: varuint32][rle_mode: u8][SynLZ payload]`.
+/// `rle_mode=0` means the SynLZ result is already final; `rle_mode=1`
+/// applies mORMot's `RleUnCompress` (`0x5a,count,value`) as the final pass.
+pub(crate) fn rlelz_decompress_exact(data: &[u8], expected_len: usize) -> Option<Vec<u8>> {
+    if expected_len > MAX_DECOMPRESSED_SIZE {
+        return None;
+    }
+    let (declared_len, pos) = read_var_u32(data)?;
+    if usize::try_from(declared_len).ok()? != expected_len {
+        return None;
+    }
+    let (&rle_mode, synlz) = data.get(pos..)?.split_first()?;
+    let intermediate = synlz_decompress_bounded(synlz, expected_len)?;
+    match rle_mode {
+        0 => (intermediate.len() == expected_len).then_some(intermediate),
+        1 => rle_decompress_exact(&intermediate, expected_len),
+        _ => None,
+    }
+}
+
+fn read_var_u32(data: &[u8]) -> Option<(u32, usize)> {
+    let mut value = 0u32;
+    for shift in (0..=28).step_by(7) {
+        let pos = shift / 7;
+        let byte = *data.get(pos)?;
+        if shift == 28 && byte > 0x0f {
+            return None;
+        }
+        value |= u32::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Some((value, pos + 1));
+        }
+    }
+    None
+}
+
+fn rle_decompress_exact(data: &[u8], expected_len: usize) -> Option<Vec<u8>> {
+    const RLE_CONTROL: u8 = 0x5a;
+
+    let mut out = Vec::new();
+    out.try_reserve_exact(expected_len).ok()?;
+    let mut pos = 0usize;
+    while pos < data.len() {
+        let value = data[pos];
+        if value != RLE_CONTROL {
+            if out.len() == expected_len {
+                return None;
+            }
+            out.push(value);
+            pos += 1;
+            continue;
+        }
+
+        let count = usize::from(*data.get(pos + 1)?);
+        let repeated = *data.get(pos + 2)?;
+        if count == 0 || count > expected_len.saturating_sub(out.len()) {
+            return None;
+        }
+        out.resize(out.len() + count, repeated);
+        pos += 3;
+    }
+    (out.len() == expected_len).then_some(out)
 }
 
 enum DecompressResult {
@@ -338,7 +408,7 @@ fn synlz_compress_inner(
     dst.extend_from_slice(&0u32.to_le_bytes());
 
     // Main loop
-    while src_pos <= srcendmatch {
+    while src_pos <= srcendmatch && src_pos + 3 < srcend {
         let v = u32::from_le_bytes([
             src[src_pos],
             src[src_pos + 1],
@@ -481,5 +551,49 @@ mod tests {
     fn synlz_decompress_rejects_declared_size_above_protocol_cap() {
         let bomb_header = [0xFF, 0xFF, 0xFF, 0xFF];
         assert!(synlz_decompress(&bomb_header).is_none());
+    }
+
+    #[test]
+    fn rlelz_decodes_both_mormot_modes() {
+        assert_eq!(
+            rlelz_decompress_exact(&hex_to_bytes("0300030000000000ffff0f"), 3),
+            Some(vec![0xff, 0xff, 0x0f])
+        );
+        assert_eq!(
+            rlelz_decompress_exact(&hex_to_bytes("20010300000000005a2000"), 32),
+            Some(vec![0; 32])
+        );
+
+        let plain = [1u8, 2, 3, 4, 5, 6, 7];
+        let mut direct = vec![plain.len() as u8, 0];
+        direct.extend_from_slice(&synlz_compress(&plain));
+        assert_eq!(
+            rlelz_decompress_exact(&direct, plain.len()),
+            Some(plain.to_vec())
+        );
+
+        let rle = [0x5a, 5, 0xaa, 1, 2];
+        let expected = [0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 1, 2];
+        let mut encoded = vec![expected.len() as u8, 1];
+        encoded.extend_from_slice(&synlz_compress(&rle));
+        assert_eq!(
+            rlelz_decompress_exact(&encoded, expected.len()),
+            Some(expected.to_vec())
+        );
+    }
+
+    #[test]
+    fn rlelz_rejects_wrong_size_mode_and_rle_overflow() {
+        let mut wrong_size = vec![3, 0];
+        wrong_size.extend_from_slice(&synlz_compress(&[1, 2, 3]));
+        assert!(rlelz_decompress_exact(&wrong_size, 4).is_none());
+
+        let mut wrong_mode = vec![3, 2];
+        wrong_mode.extend_from_slice(&synlz_compress(&[1, 2, 3]));
+        assert!(rlelz_decompress_exact(&wrong_mode, 3).is_none());
+
+        let mut overflow = vec![4, 1];
+        overflow.extend_from_slice(&synlz_compress(&[0x5a, 5, 1]));
+        assert!(rlelz_decompress_exact(&overflow, 4).is_none());
     }
 }

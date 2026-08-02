@@ -50,7 +50,36 @@ impl MoonReports {
             sync_id: random_nonzero_u64(),
         };
         self.tx
-            .send(RuntimeCommand::ReportSync { ticket, request })
+            .send(RuntimeCommand::ReportSync {
+                ticket,
+                request,
+                expected_epoch: None,
+            })
+            .map_err(|_| MoonClientError::RuntimeStopped)?;
+        Ok(ticket)
+    }
+
+    /// Resume from a cursor committed atomically with the local report replica.
+    ///
+    /// If the core reports another database epoch, Active Lib emits one
+    /// `database_recreated` page. After the application clears its replica and
+    /// acknowledges that page, catch-up restarts from zero automatically.
+    pub fn sync_from(
+        &self,
+        checkpoint: crate::state::ReportSyncCheckpoint,
+    ) -> Result<crate::state::ReportSyncTicket, MoonClientError> {
+        if !checkpoint.is_valid() {
+            return Err(MoonClientError::InvalidReportSyncCheckpoint);
+        }
+        let ticket = crate::state::ReportSyncTicket {
+            sync_id: random_nonzero_u64(),
+        };
+        self.tx
+            .send(RuntimeCommand::ReportSync {
+                ticket,
+                request: crate::state::ReportSyncRequest::resume(checkpoint.next_from_rec_id),
+                expected_epoch: Some(checkpoint.epoch),
+            })
             .map_err(|_| MoonClientError::RuntimeStopped)?;
         Ok(ticket)
     }
@@ -63,6 +92,29 @@ impl MoonReports {
         self.tx
             .send(RuntimeCommand::ReportPageApplied(page.clone()))
             .map_err(|_| MoonClientError::RuntimeStopped)
+    }
+
+    /// Reconcile visible rows after a completed normal report catch-up.
+    ///
+    /// The returned map covers `1..=completed.max_rec_id`. A set bit means the
+    /// row exists on the core and has `deleted=0`; a clear bit means the local
+    /// row must be hidden. Active Lib retries across packet loss/reconnect and
+    /// emits [`crate::ReportEvent::AliveMapComplete`].
+    pub fn reconcile_alive(
+        &self,
+        completed: &crate::state::ReportSyncComplete,
+    ) -> Result<crate::state::ReportAliveMapTicket, MoonClientError> {
+        let request = crate::state::ReportAliveMapRequest {
+            epoch: completed.epoch,
+            up_to_rec_id: completed.max_rec_id,
+        };
+        let ticket = crate::state::ReportAliveMapTicket {
+            sync_id: random_nonzero_u64(),
+        };
+        self.tx
+            .send(RuntimeCommand::ReportAliveMap { ticket, request })
+            .map_err(|_| MoonClientError::RuntimeStopped)?;
+        Ok(ticket)
     }
 
     /// Reconcile the newest open report rows and retain the set for hard-reconnect recovery.
@@ -86,7 +138,7 @@ impl MoonReports {
 
     /// Set or clear the report `deleted` flag and return the number of queued batches.
     ///
-    /// The runtime keeps each High-priority command near 1 KiB. The core echoes
+    /// The runtime keeps each Sliced command near 1 KiB. The core echoes
     /// every non-empty committed batch as [`crate::ReportEvent::RowsDeleted`]
     /// to all report subscribers, including this client. A zero return means the
     /// selection was empty, so no packet or echo exists.

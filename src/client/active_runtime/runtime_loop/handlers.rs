@@ -220,20 +220,24 @@ pub(super) fn handle_command(
             client.request_report_schema_at(client.now_ms());
             false
         }
-        RuntimeCommand::ReportSync { ticket, request } => {
-            client.set_report_sync_intent(request);
+        RuntimeCommand::ReportSync {
+            ticket,
+            request,
+            expected_epoch,
+        } => {
+            client.set_report_sync_intent(request, expected_epoch);
             let can_send = matches!(client.auth_status, crate::client::AuthStatus::AuthDone)
                 && client.subscriptions.domain_ready
                 && client.server_token != 0;
             if !can_send {
-                dispatcher.defer_report_sync_until_schema(ticket, request);
+                dispatcher.defer_report_sync_until_schema(ticket, request, expected_epoch);
                 return false;
             }
             if dispatcher.report_schema().is_some() && client.report_schema_is_current() {
-                let request_uid = dispatcher.begin_report_sync(ticket, request);
+                let request_uid = dispatcher.begin_report_sync(ticket, request, expected_epoch);
                 client.send_report_sync_at(request_uid, request, client.now_ms());
             } else {
-                dispatcher.defer_report_sync_until_schema(ticket, request);
+                dispatcher.defer_report_sync_until_schema(ticket, request, expected_epoch);
                 client.request_report_schema_at(client.now_ms());
             }
             false
@@ -252,9 +256,10 @@ pub(super) fn handle_command(
                 crate::state::ReportPageApplyAction::SendNext {
                     request_uid,
                     request,
+                    expected_epoch,
                 } => {
                     if client.finish_report_page_apply(page.request_uid, None) {
-                        client.set_report_sync_intent(request);
+                        client.set_report_sync_intent(request, expected_epoch);
                         if client.report_schema_is_current() {
                             client.send_report_sync_at(request_uid, request, client.now_ms());
                         } else {
@@ -265,8 +270,12 @@ pub(super) fn handle_command(
                 crate::state::ReportPageApplyAction::Complete {
                     received_request_uid,
                     durable_request,
+                    epoch,
                 } => {
-                    client.finish_report_page_apply(received_request_uid, Some(durable_request));
+                    client.finish_report_page_apply(
+                        received_request_uid,
+                        Some((durable_request, epoch)),
+                    );
                 }
                 crate::state::ReportPageApplyAction::Ignored => {
                     log::warn!(
@@ -276,6 +285,16 @@ pub(super) fn handle_command(
                         page.request_uid
                     );
                 }
+            }
+            false
+        }
+        RuntimeCommand::ReportAliveMap { ticket, request } => {
+            let request_uid = dispatcher.begin_report_alive_map(ticket, request);
+            if matches!(client.auth_status, crate::client::AuthStatus::AuthDone)
+                && client.subscriptions.domain_ready
+                && client.server_token != 0
+            {
+                client.send_report_alive_map_at(request_uid, request, client.now_ms());
             }
             false
         }

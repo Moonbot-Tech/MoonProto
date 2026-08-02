@@ -96,7 +96,7 @@ impl Client {
     pub(crate) fn finish_report_page_apply(
         &self,
         request_uid: u64,
-        durable_request: Option<crate::state::ReportSyncRequest>,
+        durable: Option<(crate::state::ReportSyncRequest, i32)>,
     ) -> bool {
         if self
             .reconnect
@@ -106,8 +106,8 @@ impl Client {
         {
             return false;
         }
-        if let Some(request) = durable_request {
-            self.set_report_sync_intent(request);
+        if let Some((request, epoch)) = durable {
+            self.set_report_sync_intent(request, Some(epoch));
         }
         true
     }
@@ -119,12 +119,23 @@ impl Client {
             == request_uid
     }
 
-    pub(crate) fn report_sync_intent(&self) -> Option<crate::state::ReportSyncRequest> {
-        self.subscriptions.subscription_registry.lock().report_sync
+    pub(crate) fn report_sync_intent(
+        &self,
+    ) -> Option<(crate::state::ReportSyncRequest, Option<i32>)> {
+        let registry = self.subscriptions.subscription_registry.lock();
+        registry
+            .report_sync
+            .map(|request| (request, registry.report_sync_expected_epoch))
     }
 
-    pub(crate) fn set_report_sync_intent(&self, request: crate::state::ReportSyncRequest) {
-        self.subscriptions.subscription_registry.lock().report_sync = Some(request);
+    pub(crate) fn set_report_sync_intent(
+        &self,
+        request: crate::state::ReportSyncRequest,
+        expected_epoch: Option<i32>,
+    ) {
+        let mut registry = self.subscriptions.subscription_registry.lock();
+        registry.report_sync = Some(request);
+        registry.report_sync_expected_epoch = expected_epoch;
     }
 
     pub(crate) fn report_open_rows_intent(&self) -> Arc<[i64]> {
@@ -179,6 +190,48 @@ impl Client {
             change,
         );
         self.send_trade(payload)
+    }
+
+    pub(crate) fn send_report_alive_map_at(
+        &self,
+        request_uid: u64,
+        request: crate::state::ReportAliveMapRequest,
+        now_ms: i64,
+    ) -> bool {
+        if !request.is_valid() {
+            return false;
+        }
+        let payload = crate::commands::report::build_alive_map_request(request_uid, request);
+        let sent = self.send_trade(payload);
+        if sent {
+            self.reconnect
+                .last_report_alive_map_request_ms
+                .store(now_ms, Ordering::Relaxed);
+            self.reconnect
+                .pending_report_alive_map_uid
+                .store(request_uid, Ordering::Relaxed);
+            self.reconnect
+                .pending_report_alive_map_server_token
+                .store(self.server_token, Ordering::Relaxed);
+        }
+        sent
+    }
+
+    pub(crate) fn record_report_alive_map_received(&self, request_uid: u64, server_token: u64) {
+        if self.server_token == 0
+            || self.server_token != server_token
+            || self
+                .reconnect
+                .pending_report_alive_map_server_token
+                .load(Ordering::Relaxed)
+                != server_token
+        {
+            return;
+        }
+        let _ = self
+            .reconnect
+            .pending_report_alive_map_uid
+            .compare_exchange(request_uid, 0, Ordering::Relaxed, Ordering::Relaxed);
     }
 
     pub(crate) fn complete_report_open_rows_check(&self, server_token: u64) {

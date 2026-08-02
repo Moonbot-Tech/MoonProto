@@ -12,6 +12,8 @@ pub(crate) const CMD_SCHEMA: u8 = 38;
 pub(crate) const CMD_SYNC_PAGE: u8 = 39;
 pub(crate) const CMD_CHECK_ROWS_REQUEST: u8 = 40;
 pub(crate) const CMD_SET_ROWS_DELETED: u8 = 48;
+pub(crate) const CMD_ALIVE_MAP_REQUEST: u8 = 49;
+pub(crate) const CMD_ALIVE_MAP: u8 = 50;
 pub(crate) const MAX_CHECK_ROW_IDS: usize = 100;
 pub(crate) const MAX_SET_ROWS_DELETED_WIRE_BYTES: usize = 1000;
 
@@ -86,6 +88,7 @@ pub struct RepSyncPage {
     // Parsed as part of the complete wire envelope; sync matches request_uid below.
     pub(crate) header: BaseCommandHeader,
     pub(crate) request_uid: u64,
+    pub(crate) epoch: i32,
     pub(crate) last_rec_id: i64,
     pub(crate) max_rec_id: i64,
     pub(crate) row_count: u16,
@@ -97,6 +100,7 @@ impl RepSyncPage {
         let header = BaseCommandHeader::read(r)?;
         let mut pos = 0usize;
         let request_uid = read_u64(r, &mut pos)?;
+        let epoch = super::strict_read::read_i32(r, &mut pos)?;
         let last_rec_id = read_i64(r, &mut pos)?;
         let max_rec_id = read_i64(r, &mut pos)?;
         let row_count = read_u16(r, &mut pos)?;
@@ -105,6 +109,7 @@ impl RepSyncPage {
         Some(Self {
             header,
             request_uid,
+            epoch,
             last_rec_id,
             max_rec_id,
             row_count,
@@ -147,6 +152,56 @@ pub struct RepSetRowsDeleted {
     pub(crate) deleted: bool,
     pub(crate) ranges: Vec<(i64, i64)>,
     pub(crate) singles: Vec<i64>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Parsed for command-registry parity; clients only send this command.
+pub struct RepAliveMapRequest {
+    pub(crate) header: BaseCommandHeader,
+    pub(crate) up_to_rec_id: i64,
+}
+
+impl RepAliveMapRequest {
+    pub(crate) fn read(r: &mut &[u8]) -> Option<Self> {
+        let header = BaseCommandHeader::read(r)?;
+        let mut pos = 0usize;
+        let up_to_rec_id = read_i64(r, &mut pos)?;
+        *r = &r[pos..];
+        Some(Self {
+            header,
+            up_to_rec_id,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RepAliveMap {
+    #[allow(dead_code)]
+    // Parsed as part of the complete wire envelope; request_uid matches the active request.
+    pub(crate) header: BaseCommandHeader,
+    pub(crate) request_uid: u64,
+    pub(crate) epoch: i32,
+    pub(crate) covered_up_to: i64,
+    pub(crate) data: Vec<u8>,
+}
+
+impl RepAliveMap {
+    pub(crate) fn read(r: &mut &[u8]) -> Option<Self> {
+        let header = BaseCommandHeader::read(r)?;
+        let mut pos = 0usize;
+        let request_uid = read_u64(r, &mut pos)?;
+        let epoch = super::strict_read::read_i32(r, &mut pos)?;
+        let covered_up_to = read_i64(r, &mut pos)?;
+        let data = read_len_bytes(r, &mut pos)?;
+        *r = &r[pos..];
+        Some(Self {
+            header,
+            request_uid,
+            epoch,
+            covered_up_to,
+            data,
+        })
+    }
 }
 
 impl RepSetRowsDeleted {
@@ -252,6 +307,16 @@ pub(crate) fn build_set_rows_deleted(
     out
 }
 
+pub(crate) fn build_alive_map_request(
+    uid: u64,
+    request: crate::state::ReportAliveMapRequest,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(19);
+    write_base_command_header(&mut out, CMD_ALIVE_MAP_REQUEST, uid);
+    out.extend_from_slice(&request.up_to_rec_id.to_le_bytes());
+    out
+}
+
 fn read_len_bytes(data: &[u8], pos: &mut usize) -> Option<Vec<u8>> {
     let len = usize::try_from(read_u32(data, pos)?).ok()?;
     let end = pos.checked_add(len)?;
@@ -321,6 +386,15 @@ mod tests {
         expected.extend_from_slice(&30i64.to_le_bytes());
         expected.extend_from_slice(&40i64.to_le_bytes());
         assert_eq!(set_deleted, expected);
+
+        let request = crate::state::ReportAliveMapRequest {
+            epoch: 17,
+            up_to_rec_id: 9_999,
+        };
+        let alive = build_alive_map_request(0x5152_5354_5556_5758, request);
+        let mut expected = header(CMD_ALIVE_MAP_REQUEST, 0x5152_5354_5556_5758);
+        expected.extend_from_slice(&request.up_to_rec_id.to_le_bytes());
+        assert_eq!(alive, expected);
     }
 
     #[test]
@@ -355,6 +429,7 @@ mod tests {
 
         let mut page_raw = header(CMD_SYNC_PAGE, uid);
         page_raw.extend_from_slice(&0x2122_2324_2526_2728u64.to_le_bytes());
+        page_raw.extend_from_slice(&1234i32.to_le_bytes());
         page_raw.extend_from_slice(&77i64.to_le_bytes());
         page_raw.extend_from_slice(&99i64.to_le_bytes());
         page_raw.extend_from_slice(&17u16.to_le_bytes());
@@ -363,6 +438,7 @@ mod tests {
         let page = RepSyncPage::read(&mut input).unwrap();
         assert_eq!(page.header.uid, uid);
         assert_eq!(page.request_uid, 0x2122_2324_2526_2728);
+        assert_eq!(page.epoch, 1234);
         assert_eq!(page.last_rec_id, 77);
         assert_eq!(page.max_rec_id, 99);
         assert_eq!(page.row_count, 17);
@@ -388,6 +464,31 @@ mod tests {
         assert!(!set_deleted.deleted);
         assert_eq!(set_deleted.ranges, [(90, 80)]);
         assert_eq!(set_deleted.singles, [70]);
+        assert!(input.is_empty());
+
+        let alive_request_raw = build_alive_map_request(
+            uid,
+            crate::state::ReportAliveMapRequest {
+                epoch: 92,
+                up_to_rec_id: 93,
+            },
+        );
+        let mut input = alive_request_raw.as_slice();
+        let alive_request = RepAliveMapRequest::read(&mut input).unwrap();
+        assert_eq!(alive_request.up_to_rec_id, 93);
+        assert!(input.is_empty());
+
+        let mut alive_raw = header(CMD_ALIVE_MAP, uid);
+        alive_raw.extend_from_slice(&0x3132_3334_3536_3738u64.to_le_bytes());
+        alive_raw.extend_from_slice(&101i32.to_le_bytes());
+        alive_raw.extend_from_slice(&102i64.to_le_bytes());
+        alive_raw.extend_from_slice(&len_bytes(&[0x55, 0x01]));
+        let mut input = alive_raw.as_slice();
+        let alive = RepAliveMap::read(&mut input).unwrap();
+        assert_eq!(alive.request_uid, 0x3132_3334_3536_3738);
+        assert_eq!(alive.epoch, 101);
+        assert_eq!(alive.covered_up_to, 102);
+        assert_eq!(alive.data, [0x55, 0x01]);
         assert!(input.is_empty());
 
         let schema_request_raw = build_schema_request(uid);
@@ -420,6 +521,7 @@ mod tests {
     fn sync_page_reads_global_cursor_fields() {
         let mut raw = header(CMD_SYNC_PAGE, 9);
         raw.extend_from_slice(&55u64.to_le_bytes());
+        raw.extend_from_slice(&123i32.to_le_bytes());
         raw.extend_from_slice(&998i64.to_le_bytes());
         raw.extend_from_slice(&999i64.to_le_bytes());
         raw.extend_from_slice(&0u16.to_le_bytes());
@@ -428,6 +530,7 @@ mod tests {
         let page = RepSyncPage::read(&mut slice).unwrap();
         assert_eq!(page.header.uid, 9);
         assert_eq!(page.request_uid, 55);
+        assert_eq!(page.epoch, 123);
         assert_eq!(page.last_rec_id, 998);
         assert_eq!(page.max_rec_id, 999);
         assert_eq!(page.row_count, 0);

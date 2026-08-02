@@ -256,11 +256,12 @@ the retained `Orders` model. New report databases should not consume it.
 
 `ReportEvent` is the typed, resumable report-database replication domain. It
 delivers the append-only schema, one transaction-sized catch-up page at a time,
-typed live row upserts/deletes, and open-row reconciliation. The application
-must commit each `SyncPage` and call `MoonReports::page_applied` before the next
-page can be requested. See `reports.md` for cursor, transaction, retry, and
-hard-reconnect rules. Do not write the deprecated SQL stream and `ReportEvent`
-into the same replica.
+typed live row upserts/deletes, open-row reconciliation, and compact offline
+reconciliation of older row visibility. The application must commit each
+`SyncPage` and call `MoonReports::page_applied` before the next page can be
+requested. See `reports.md` for checkpoint, transaction, retry, and hard-reconnect
+rules. Do not write the deprecated SQL stream and `ReportEvent` into the same
+replica.
 
 `ArbEvent` is only a change signal/summary. Incoming arb data is applied to the
 selected market state, so UI code reads
