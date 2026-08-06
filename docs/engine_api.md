@@ -40,7 +40,11 @@ if let Some(snapshot) = client.snapshot() {
 
 `snapshot().account().api_expiration()` returns `ApiExpirationTime`: use
 `time()`, `system_time()`, or `days_until(now)` for UI labels instead of
-carrying legacy wire-time doubles through the UI.
+carrying legacy wire-time doubles through the UI. Current cores report the
+remaining duration, so the normalized expiration is not shifted when the core
+and terminal use different time zones. `reported_days_left()` exposes the
+core's rounded value for the refresh; `is_known() == false` after a successful
+refresh means that the key has no reported expiration.
 
 ## Account And Exchange Actions
 

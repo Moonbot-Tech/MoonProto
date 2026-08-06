@@ -186,26 +186,41 @@ mod parse_engine_response_tests {
     }
 
     #[test]
-    fn parse_api_expiration_time_response_reads_delphi_datetime() {
-        let mut data = 45_000.25f64.to_le_bytes().to_vec();
-        data.extend_from_slice(&[0xAA, 0xBB]);
-
+    fn parse_api_expiration_time_response_reads_legacy_datetime() {
+        let data = 45_000.25f64.to_le_bytes();
         let parsed = parse_api_expiration_time_response(&data).unwrap();
         assert_eq!(parsed.delphi_time(), 45_000.25);
-        let mut short = [0u8; 8];
-        short[..7].copy_from_slice(&data[..7]);
+        assert_eq!(parsed.reported_days_left(), None);
+        assert!(parse_api_expiration_time_response(&data[..7]).is_none());
+        assert!(parse_api_expiration_time_response(&[]).is_none());
+    }
+
+    #[test]
+    fn parse_api_expiration_time_response_uses_timezone_safe_remaining_duration() {
+        let client_now = MoonTime::from_unix_millis(1_700_000_000_000);
+        let mut data = 60_000.0f64.to_le_bytes().to_vec();
+        data.extend_from_slice(&3i32.to_le_bytes());
+        data.extend_from_slice(&2.5f64.to_le_bytes());
+
+        let parsed = parse_api_expiration_time_response_at(&data, client_now).unwrap();
         assert_eq!(
-            parse_api_expiration_time_response(&data[..7])
-                .unwrap()
-                .delphi_time(),
-            f64::from_le_bytes(short)
+            parsed.time().unwrap().unix_millis(),
+            client_now.unix_millis() + 2 * 86_400_000 + 12 * 3_600_000
         );
-        assert_eq!(
-            parse_api_expiration_time_response(&[])
-                .unwrap()
-                .delphi_time(),
-            0.0
-        );
+        assert_eq!(parsed.reported_days_left(), Some(3));
+    }
+
+    #[test]
+    fn parse_api_expiration_time_response_distinguishes_no_expiration_and_malformed_tail() {
+        let client_now = MoonTime::from_unix_millis(1_700_000_000_000);
+        let mut no_expiration = 0.0f64.to_le_bytes().to_vec();
+        no_expiration.extend_from_slice(&0i32.to_le_bytes());
+        no_expiration.extend_from_slice(&0.0f64.to_le_bytes());
+
+        let parsed = parse_api_expiration_time_response_at(&no_expiration, client_now).unwrap();
+        assert!(!parsed.is_known());
+        assert_eq!(parsed.reported_days_left(), Some(0));
+        assert!(parse_api_expiration_time_response_at(&no_expiration[..19], client_now).is_none());
     }
 
     #[test]

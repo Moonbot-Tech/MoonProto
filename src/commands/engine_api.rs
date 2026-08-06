@@ -62,24 +62,37 @@ pub(crate) fn parse_query_hedge_mode_response(data: &[u8]) -> Option<bool> {
 
 /// API-key expiration time returned by `emk_CheckAPIExpirationTime`.
 ///
-/// The raw wire value is a legacy day-count timestamp: days since 1899-12-30
-/// with a fractional day part. A value of `0.0` means that the server did not
-/// report an expiration time.
+/// Current cores append a timezone-safe remaining duration to the legacy
+/// server-local timestamp. MoonProto normalizes that duration to the client's
+/// clock at the wire boundary. A value with no known time means that the check
+/// succeeded and the API key has no reported expiration.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ApiExpirationTime {
     delphi_time: f64,
+    reported_days_left: Option<i32>,
 }
 
 impl ApiExpirationTime {
     pub fn from_time(time: MoonTime) -> Self {
         Self {
             delphi_time: time.to_delphi_days(),
+            reported_days_left: None,
         }
     }
 
     /// Build from the raw legacy day-count timestamp.
     pub(crate) fn from_delphi_time(delphi_time: f64) -> Self {
-        Self { delphi_time }
+        Self {
+            delphi_time,
+            reported_days_left: None,
+        }
+    }
+
+    fn from_delphi_time_with_reported_days(delphi_time: f64, days_left: i32) -> Self {
+        Self {
+            delphi_time,
+            reported_days_left: Some(days_left),
+        }
     }
 
     /// API expiration time when the server reported a known value.
@@ -96,7 +109,7 @@ impl ApiExpirationTime {
         DelphiTime::from_days(self.delphi_time)
     }
 
-    /// Raw legacy day-count value retained for exact diagnostics.
+    /// Normalized day-count value retained for exact diagnostics.
     #[cfg(any(test, feature = "diagnostics"))]
     #[doc(hidden)]
     pub fn delphi_time(&self) -> f64 {
@@ -106,6 +119,15 @@ impl ApiExpirationTime {
     /// Returns false when the server reported no known expiration time.
     pub fn is_known(&self) -> bool {
         self.delphi_time.is_finite() && self.delphi_time > 0.0
+    }
+
+    /// Rounded day count calculated by the core for this refresh.
+    ///
+    /// Returns `None` only for a legacy response that predates this field.
+    /// A successful no-expiration response reports `Some(0)` and is
+    /// distinguished by [`Self::is_known`].
+    pub fn reported_days_left(&self) -> Option<i32> {
+        self.reported_days_left
     }
 
     /// Convert to whole Unix seconds when the value is known and representable
@@ -138,14 +160,50 @@ impl ApiExpirationTime {
 /// Parse `EngineResponse.data` for `emk_CheckAPIExpirationTime`
 /// (`EngineMethod::CheckAPIExpirationTime`).
 ///
-/// The server writes exactly one little-endian `Double` on success. Extra
-/// trailing bytes are ignored so newer servers can append fields without
-/// breaking old consumers.
+/// Current payload: `[server_local_time:f64][days_left:i32][remaining_days:f64]`.
+/// The first field is retained for old clients; current clients reconstruct the
+/// absolute time from `remaining_days`, so different server/client time zones
+/// cannot shift the result. An exact 8-byte payload remains supported for old
+/// cores.
 pub(crate) fn parse_api_expiration_time_response(data: &[u8]) -> Option<ApiExpirationTime> {
-    let mut pos = 0usize;
-    Some(ApiExpirationTime::from_delphi_time(f64::from_le_bytes(
-        read_zero_tail::<8>(data, &mut pos),
-    )))
+    parse_api_expiration_time_response_at(data, MoonTime::now())
+}
+
+fn parse_api_expiration_time_response_at(
+    data: &[u8],
+    client_now: MoonTime,
+) -> Option<ApiExpirationTime> {
+    const LEGACY_SIZE: usize = 8;
+    const CURRENT_SIZE: usize = 8 + 4 + 8;
+
+    if data.len() < LEGACY_SIZE {
+        return None;
+    }
+
+    let server_local_time = f64::from_le_bytes(data[..8].try_into().ok()?);
+    if data.len() == LEGACY_SIZE {
+        return Some(ApiExpirationTime::from_delphi_time(server_local_time));
+    }
+    if data.len() < CURRENT_SIZE {
+        return None;
+    }
+
+    let reported_days_left = i32::from_le_bytes(data[8..12].try_into().ok()?);
+    let remaining_days = f64::from_le_bytes(data[12..20].try_into().ok()?);
+    let normalized_time = if server_local_time.is_finite() && server_local_time > 0.0 {
+        let local_days = client_now.to_delphi_days() + remaining_days;
+        if !remaining_days.is_finite() || !local_days.is_finite() {
+            return None;
+        }
+        local_days
+    } else {
+        0.0
+    };
+
+    Some(ApiExpirationTime::from_delphi_time_with_reported_days(
+        normalized_time,
+        reported_days_left,
+    ))
 }
 
 /// One transferable asset row returned by `emk_UpdateTransferAssets`.
