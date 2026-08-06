@@ -334,6 +334,19 @@ fn rolling_trade_volumes_maintain_one_three_five_minute_windows() {
 }
 
 #[test]
+fn trades_packet_time_shift_preserves_fractional_timezone_minutes() {
+    let base_time = 45_000.0;
+    let fractional_zone = 5.5 / 24.0;
+    let now_time = base_time + fractional_zone + 20.0 / SECONDS_PER_DAY;
+    let mut shift = TradesPacketTimeShift::new();
+
+    let shifted = shift.shifted_time(base_time, 0, now_time);
+
+    assert_eq!(shift.shift_days(), Some(fractional_zone));
+    assert_eq!(shifted, mt(base_time + fractional_zone));
+}
+
+#[test]
 fn rolling_price_ranges_maintain_fixed_one_hour_baskets() {
     let now = 45_000.0;
     let mut ranges = RollingPriceRanges::default();

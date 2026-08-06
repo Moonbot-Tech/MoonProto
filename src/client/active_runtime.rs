@@ -19,7 +19,7 @@ use crate::commands::ui::SpotMarketKind;
 use commands::{RuntimeCommand, StratRuntimeCommand, UiRuntimeCommand};
 pub use handles::{
     MoonAccount, MoonBalances, MoonCandles, MoonChartAlerts, MoonChartText, MoonEmulator,
-    MoonOrders, MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade,
+    MoonHistory, MoonOrders, MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade,
 };
 use runtime_loop::runtime_loop;
 pub use types::{
@@ -432,6 +432,11 @@ impl MoonClient {
         MoonCandles { client: self }
     }
 
+    /// Demand-driven accumulated chart history from the connected core.
+    pub fn history(&self) -> MoonHistory<'_> {
+        MoonHistory { client: self }
+    }
+
     /// Strategy-state command API.
     pub fn strategies(&self) -> MoonStrategies<'_> {
         MoonStrategies { client: self }
@@ -741,6 +746,29 @@ impl MoonClient {
             ticket: ticket.clone(),
             payload,
         })?;
+        Ok(ticket)
+    }
+
+    pub(crate) fn request_market_history(
+        &self,
+        market: String,
+    ) -> Result<crate::state::MarketHistoryTicket, MoonClientError> {
+        let snapshot = self.snapshot().ok_or(MoonClientError::StateUnavailable(
+            "market state is not published yet",
+        ))?;
+        if snapshot.market_history_readers(&market).is_none() {
+            return Err(MoonClientError::StateUnavailable(
+                "market is outside the retained trades scope",
+            ));
+        }
+        let request_id = loop {
+            let value = rand::random::<u64>();
+            if value != 0 {
+                break value;
+            }
+        };
+        let ticket = crate::state::MarketHistoryTicket::new(market, request_id);
+        self.send_no_reply(RuntimeCommand::MarketHistory(ticket.clone()))?;
         Ok(ticket)
     }
 

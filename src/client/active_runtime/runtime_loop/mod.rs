@@ -147,6 +147,8 @@ pub(super) fn runtime_loop(
             if !pending.auto_candles_requested && client.trade_storage_intent().is_some() {
                 schedule_auto_candles_snapshot(&mut client, &mut pending);
             }
+            let market_history_changed =
+                poll_market_history(&mut client, &mut pending, &mut dispatcher);
             #[cfg(any(test, feature = "diagnostics"))]
             let coin_card_start = Instant::now();
             let coin_card_changed = poll_coin_card_candles(
@@ -223,12 +225,18 @@ pub(super) fn runtime_loop(
                     u8::MAX,
                     pending.auto_candles.len()
                         + pending.auto_candles_apply.len()
+                        + pending.market_history.len()
+                        + pending.market_history_apply.len()
                         + pending.coin_card_candles.len()
                         + pending.account_refreshes.len()
                         + pending.transfer_assets.len()
                         + pending.engine_actions.len(),
                 );
-            candles_changed || coin_card_changed || transfer_assets_changed || account_changed
+            candles_changed
+                || market_history_changed
+                || coin_card_changed
+                || transfer_assets_changed
+                || account_changed
         };
         if state_changed && startup.is_none() {
             publish_snapshot_profiled(&client, &dispatcher, &snapshot);

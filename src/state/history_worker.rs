@@ -143,6 +143,12 @@ enum MarketHistoryCommand {
         now_time: MoonTime,
         markets: Vec<MarketHistoryCandlesSnapshot>,
     },
+    MarketArchive {
+        market_name: String,
+        archive: crate::commands::market_history::MarketHistoryArchive,
+        now_time: MoonTime,
+        reply: mpsc::SyncSender<Result<crate::state::MarketHistoryApplySummary, String>>,
+    },
     #[cfg(any(test, feature = "diagnostics"))]
     DiagFillMarketHistoryToCapacity {
         market_name: String,
@@ -254,6 +260,24 @@ impl MarketHistoryHandle {
         self.tx
             .send(MarketHistoryCommand::SetEpsProfile(eps_profile))
             .is_ok()
+    }
+
+    pub(crate) fn apply_market_archive_async(
+        &self,
+        market_name: String,
+        archive: crate::commands::market_history::MarketHistoryArchive,
+        now_time: MoonTime,
+    ) -> Option<mpsc::Receiver<Result<crate::state::MarketHistoryApplySummary, String>>> {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.tx
+            .send(MarketHistoryCommand::MarketArchive {
+                market_name,
+                archive,
+                now_time,
+                reply: reply_tx,
+            })
+            .ok()?;
+        Some(reply_rx)
     }
 
     pub(crate) fn set_deltas_by_trades(&self, enabled: bool) -> bool {
@@ -527,6 +551,21 @@ fn handle_worker_command(
         }
         Ok(MarketHistoryCommand::CandlesSnapshot { now_time, markets }) => {
             process_candles_snapshot(registry, now_time, markets);
+        }
+        Ok(MarketHistoryCommand::MarketArchive {
+            market_name,
+            archive,
+            now_time,
+            reply,
+        }) => {
+            *last_now_time = now_time;
+            let result = registry
+                .get_mut(&market_name)
+                .map(|store| store.merge_market_history_archive(&archive, now_time))
+                .ok_or_else(|| {
+                    format!("retained history is not configured for market {market_name}")
+                });
+            let _ = reply.send(result);
         }
         #[cfg(any(test, feature = "diagnostics"))]
         Ok(MarketHistoryCommand::DiagFillMarketHistoryToCapacity {

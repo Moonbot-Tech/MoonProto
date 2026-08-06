@@ -149,6 +149,28 @@ impl EventDispatcher {
         self.market_history.as_ref()?.barrier_async()
     }
 
+    pub(crate) fn apply_market_history_archive_async(
+        &mut self,
+        market_name: String,
+        archive: crate::commands::market_history::MarketHistoryArchive,
+    ) -> Option<std::sync::mpsc::Receiver<Result<crate::state::MarketHistoryApplySummary, String>>>
+    {
+        self.sync_market_history_storage();
+        if !self.active_trade_storage_allows_market(&market_name) {
+            return None;
+        }
+        self.market_history.as_ref()?.apply_market_archive_async(
+            market_name,
+            archive,
+            crate::MoonTime::now(),
+        )
+    }
+
+    pub(crate) fn queue_market_history_event(&mut self, event: crate::state::MarketHistoryEvent) {
+        self.queued_events
+            .extend([crate::events::Event::MarketHistory(event)]);
+    }
+
     #[cfg(any(test, feature = "diagnostics"))]
     pub(crate) fn diag_fill_market_history_to_capacity(
         &mut self,

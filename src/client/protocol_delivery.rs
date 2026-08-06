@@ -48,7 +48,7 @@ impl ProtocolCore<'_> {
         cmd: u8,
         payload: Vec<u8>,
         api_pending_consumed_by_reader: bool,
-        candles_chunk_consumed_by_reader: bool,
+        chunked_response_consumed_by_reader: bool,
         cur_tm: i64,
         mode: &mut RunMode<'_>,
     ) {
@@ -121,7 +121,7 @@ impl ProtocolCore<'_> {
                 cmd,
                 payload,
                 api_pending_consumed_by_reader,
-                candles_chunk_consumed_by_reader,
+                chunked_response_consumed_by_reader,
                 &mut mode.payload_buf,
             );
         }));

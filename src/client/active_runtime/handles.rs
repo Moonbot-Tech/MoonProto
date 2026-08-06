@@ -1301,6 +1301,32 @@ pub struct MoonCandles<'a> {
     pub(super) client: &'a MoonClient,
 }
 
+/// Demand-driven retained chart-history requests.
+pub struct MoonHistory<'a> {
+    pub(super) client: &'a MoonClient,
+}
+
+impl MoonHistory<'_> {
+    /// Request the core's accumulated chart archive for a retained market.
+    pub fn request_chart_for(
+        &self,
+        market: &crate::state::MarketHandle,
+    ) -> Result<crate::state::MarketHistoryTicket, MoonClientError> {
+        self.request_chart(market.name())
+    }
+
+    /// String-keyed chart archive request for scripts and tools.
+    ///
+    /// The market must already belong to the retained trades scope. Completion
+    /// arrives as [`crate::Event::MarketHistory`].
+    pub fn request_chart(
+        &self,
+        market: impl Into<String>,
+    ) -> Result<crate::state::MarketHistoryTicket, MoonClientError> {
+        self.client.request_market_history(market.into())
+    }
+}
+
 impl MoonCandles<'_> {
     /// Request CoinCard deep-history candles for a retained market handle.
     ///

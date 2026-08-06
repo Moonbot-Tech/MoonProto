@@ -849,7 +849,7 @@ fn decoded_batch_uses_receive_timestamp_for_active_timers() {
 #[test]
 fn data_read_candles_chunks_complete_receiver_from_background_parse_worker() {
     let mut client = Client::new(dummy_cfg());
-    let (uid, rx) = client.api_request_candles_data_async_registered();
+    let (uid, rx, _progress) = client.api_request_candles_data_async_registered();
     let chunk0 = [0u8, 0, 2, 0, 1, 2];
     let chunk1 = [1u8, 0, 2, 0, 3, 4];
     let payload0 = build_engine_response_payload(uid, EngineMethod::RequestCandlesData, &chunk0);
@@ -894,6 +894,72 @@ fn data_read_candles_chunks_complete_receiver_from_background_parse_worker() {
     assert_eq!(merged.uid, uid);
     assert!(merged.markets.is_empty());
     assert!(client.pending_api.pending_candles.is_empty());
+}
+
+#[test]
+fn market_history_chunks_keep_parallel_requests_separate() {
+    let mut client = Client::new(dummy_cfg());
+    let (btc_uid, btc_rx, btc_progress) =
+        client.api_request_market_history_async_registered("BTCUSDT");
+    let (eth_uid, eth_rx, eth_progress) =
+        client.api_request_market_history_async_registered("ETHUSDT");
+    assert_ne!(btc_uid, eth_uid);
+
+    let raw = [1u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let compressed = deflate_raw(&raw);
+    let split = compressed.len() / 2;
+    let chunk = |index: u16, data: &[u8]| {
+        let mut out = Vec::with_capacity(4 + data.len());
+        out.extend_from_slice(&index.to_le_bytes());
+        out.extend_from_slice(&2u16.to_le_bytes());
+        out.extend_from_slice(data);
+        out
+    };
+    let btc0 = build_engine_response_payload(
+        btc_uid,
+        EngineMethod::RequestMarketHistory,
+        &chunk(0, &compressed[..split]),
+    );
+    let btc1 = build_engine_response_payload(
+        btc_uid,
+        EngineMethod::RequestMarketHistory,
+        &chunk(1, &compressed[split..]),
+    );
+    let eth0 = build_engine_response_payload(
+        eth_uid,
+        EngineMethod::RequestMarketHistory,
+        &chunk(0, &compressed[..split]),
+    );
+    let eth1 = build_engine_response_payload(
+        eth_uid,
+        EngineMethod::RequestMarketHistory,
+        &chunk(1, &compressed[split..]),
+    );
+
+    for payload in [btc0, eth0, eth1, btc1] {
+        assert!(Client::dispatch_chunked_api_response(
+            &mut client.pending_api,
+            Command::API.to_byte(),
+            &payload,
+            10,
+        ));
+    }
+
+    assert_eq!(btc_progress.generation(), 2);
+    assert_eq!(eth_progress.generation(), 2);
+    assert!(client.pending_api.pending_market_history.is_empty());
+
+    let btc = btc_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("BTC archive should complete")
+        .expect("BTC archive should parse");
+    let eth = eth_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("ETH archive should complete")
+        .expect("ETH archive should parse");
+    assert_eq!(btc.uid, btc_uid);
+    assert_eq!(eth.uid, eth_uid);
+    assert_eq!(btc.archive, eth.archive);
 }
 
 #[test]

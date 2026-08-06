@@ -79,7 +79,8 @@ use moonproto::commands::{
 };
 use moonproto::events::Event;
 use moonproto::state::{
-    ApplyResult, BalanceEvent, LastPricePoint, MarkPricePoint, MarketPrice, Order, OrderBookEvent,
+    ApplyResult, BalanceEvent, LastPricePoint, MarkPricePoint, MarketHistoryApplySummary,
+    MarketHistoryCounts, MarketHistoryEvent, MarketPrice, MiniCandle, Order, OrderBookEvent,
     OrderBookKind, OrderEvent, SettingsEvent, StratEvent, TradeHistoryRow, TradesEvent,
 };
 use moonproto::Command;
@@ -777,6 +778,7 @@ struct Session {
     stats: Arc<Mutex<SessionStats>>,
     parse_failure_correlations_logged: usize,
     report_events: Vec<ReportEvent>,
+    market_history_events: Vec<MarketHistoryEvent>,
     order_state_events: Option<Vec<FireTestOrderStateEvent>>,
     candle_tf_state_events: Vec<moonproto::CandleTimeframeStateEvent>,
 }
@@ -893,6 +895,7 @@ impl Session {
             stats,
             parse_failure_correlations_logged: 0,
             report_events: Vec::new(),
+            market_history_events: Vec::new(),
             order_state_events: None,
             candle_tf_state_events: Vec::new(),
         };
@@ -935,6 +938,9 @@ impl Session {
             if let Event::Report(report) = &event {
                 self.report_events.push(report.clone());
             }
+            if let Event::MarketHistory(history) = &event {
+                self.market_history_events.push(history.clone());
+            }
             if let Event::Order(order) = &event {
                 if let (Some(captured), Some(state)) = (
                     self.order_state_events.as_mut(),
@@ -952,6 +958,10 @@ impl Session {
 
     fn take_report_events(&mut self) -> Vec<ReportEvent> {
         std::mem::take(&mut self.report_events)
+    }
+
+    fn take_market_history_events(&mut self) -> Vec<MarketHistoryEvent> {
+        std::mem::take(&mut self.market_history_events)
     }
 
     fn begin_order_state_capture(&mut self) {
@@ -1738,6 +1748,285 @@ fn firetest_retained_markets(cfg: &FireConfig) -> Vec<String> {
         }
     }
     markets
+}
+
+fn market_history_event_id(event: &MarketHistoryEvent) -> u64 {
+    match event {
+        MarketHistoryEvent::Ready { ticket, .. } | MarketHistoryEvent::Failed { ticket, .. } => {
+            ticket.id()
+        }
+    }
+}
+
+fn validate_chart_section<T, FT, FP>(
+    market: &str,
+    section: &str,
+    rows: &[T],
+    row_time: FT,
+    row_price_range: FP,
+) -> Option<f64>
+where
+    FT: Fn(&T) -> MoonTime,
+    FP: Fn(&T) -> (f64, f64),
+{
+    let now_ms = MoonTime::now().unix_millis();
+    let oldest_plausible_ms = 1_262_304_000_000i64; // 2010-01-01 UTC
+    let mut previous_ms = i64::MIN;
+    for row in rows {
+        let time_ms = row_time(row).unix_millis();
+        assert!(
+            time_ms >= oldest_plausible_ms && time_ms <= now_ms.saturating_add(5 * 60 * 1000),
+            "FireTest {market} {section}: implausible timestamp {time_ms} (now={now_ms})"
+        );
+        assert!(
+            time_ms >= previous_ms,
+            "FireTest {market} {section}: rows are not chronological: {time_ms} after {previous_ms}"
+        );
+        previous_ms = time_ms;
+
+        let (low, high) = row_price_range(row);
+        assert!(
+            low.is_finite() && high.is_finite() && low > 0.0 && high >= low,
+            "FireTest {market} {section}: invalid price range {low}..{high}"
+        );
+    }
+    let newest = rows.last().map(|row| {
+        let (low, high) = row_price_range(row);
+        (low + high) * 0.5
+    });
+    println!(
+        "FIRETEST chart archive market={} section={} rows={} first_time_ms={:?} last_time_ms={:?} newest_price={:?}",
+        market,
+        section,
+        rows.len(),
+        rows.first().map(|row| row_time(row).unix_millis()),
+        rows.last().map(|row| row_time(row).unix_millis()),
+        newest
+    );
+    newest
+}
+
+fn market_reference_price(price: MarketPrice) -> Option<f64> {
+    if price.p_last.is_finite() && price.p_last > 0.0 {
+        Some(price.p_last)
+    } else if price.bid.is_finite()
+        && price.ask.is_finite()
+        && price.bid > 0.0
+        && price.ask >= price.bid
+    {
+        Some((price.bid + price.ask) * 0.5)
+    } else if price.mark_price_found && price.mark_price.is_finite() && price.mark_price > 0.0 {
+        Some(price.mark_price)
+    } else {
+        None
+    }
+}
+
+fn assert_market_history_layout(
+    session: &Session,
+    market_name: &str,
+    current_price: f64,
+    summary: MarketHistoryApplySummary,
+) {
+    let snapshot = session.state_snapshot();
+    let market = snapshot
+        .markets()
+        .get(market_name)
+        .unwrap_or_else(|| panic!("FireTest chart market disappeared: {market_name}"));
+    let readers = snapshot
+        .market_history_readers_for(&market)
+        .unwrap_or_else(|| panic!("FireTest chart readers missing for {market_name}"));
+
+    let futures_reader = readers
+        .futures_trades
+        .expect("futures-trades reader must be configured");
+    let mini_reader = readers
+        .mini_candles
+        .expect("mini-candles reader must be configured");
+    let prices_reader = readers
+        .last_prices
+        .expect("LastPrice reader must be configured");
+    let liquidations_reader = readers
+        .liquidations
+        .expect("liquidations reader must be configured");
+
+    let retained = MarketHistoryCounts {
+        futures_trades: futures_reader.bounds().len,
+        mini_candles: mini_reader.bounds().len,
+        last_prices: prices_reader.bounds().len,
+        liquidations: liquidations_reader.bounds().len,
+    };
+    for (section, current, applied, capacity) in [
+        (
+            "futures_trades",
+            retained.futures_trades,
+            summary.retained.futures_trades,
+            futures_reader.capacity(),
+        ),
+        (
+            "mini_candles",
+            retained.mini_candles,
+            summary.retained.mini_candles,
+            mini_reader.capacity(),
+        ),
+        (
+            "last_prices",
+            retained.last_prices,
+            summary.retained.last_prices,
+            prices_reader.capacity(),
+        ),
+        (
+            "liquidations",
+            retained.liquidations,
+            summary.retained.liquidations,
+            liquidations_reader.capacity(),
+        ),
+    ] {
+        assert!(
+            current >= applied && current <= capacity,
+            "FireTest {market_name} {section}: retained len {current} is outside applied..capacity {applied}..{capacity}"
+        );
+    }
+
+    let mut futures = Vec::new();
+    futures_reader.copy_last(retained.futures_trades, &mut futures);
+    assert!(
+        futures.iter().all(|row| row.qty.is_finite()),
+        "FireTest {market_name} futures trades contain non-finite quantity"
+    );
+    let futures_price = validate_chart_section(
+        market_name,
+        "futures_trades",
+        &futures,
+        |row| row.time(),
+        |row| (f64::from(row.price), f64::from(row.price)),
+    );
+
+    let mut minis = Vec::<MiniCandle>::new();
+    mini_reader.copy_last(retained.mini_candles, &mut minis);
+    assert!(
+        minis
+            .iter()
+            .all(|row| { row.cnt >= 0 && row.buy_vol.is_finite() && row.sell_vol.is_finite() }),
+        "FireTest {market_name} mini candles contain invalid counts/volumes"
+    );
+    let mini_price = validate_chart_section(
+        market_name,
+        "mini_candles",
+        &minis,
+        |row| row.time(),
+        |row| (f64::from(row.min_price), f64::from(row.max_price)),
+    );
+
+    let mut prices = Vec::<LastPricePoint>::new();
+    prices_reader.copy_last(retained.last_prices, &mut prices);
+    let last_price = validate_chart_section(
+        market_name,
+        "last_prices",
+        &prices,
+        |row| row.time(),
+        |row| (f64::from(row.price()), f64::from(row.price())),
+    );
+
+    let mut liquidations = Vec::new();
+    liquidations_reader.copy_last(retained.liquidations, &mut liquidations);
+    assert!(
+        liquidations.iter().all(|row| row.qty.is_finite()),
+        "FireTest {market_name} liquidations contain non-finite quantity"
+    );
+    validate_chart_section(
+        market_name,
+        "liquidations",
+        &liquidations,
+        |row| row.time(),
+        |row| (f64::from(row.price), f64::from(row.price)),
+    );
+
+    let chart_price = futures_price
+        .or(last_price)
+        .or(mini_price)
+        .unwrap_or_else(|| {
+            panic!("FireTest {market_name}: chart archive has no price-bearing rows")
+        });
+    let ratio = chart_price / current_price;
+    assert!(
+        ratio.is_finite() && (0.1..=10.0).contains(&ratio),
+        "FireTest {market_name}: newest archive price {chart_price} is not plausible against current price {current_price} (ratio={ratio})"
+    );
+    println!(
+        "OK: chart archive market={} tapes=4 received={:?} applied={:?} current={:?} newest/current={:.6}",
+        market_name, summary.received, summary.retained, retained, ratio
+    );
+}
+
+fn run_market_history_archive_gate(
+    cfg: &FireConfig,
+    a: &mut Session,
+    b: &mut Session,
+    timeout: Duration,
+) {
+    a.take_market_history_events();
+    let snapshot = a.state_snapshot();
+    let markets = firetest_retained_markets(cfg);
+    assert_eq!(
+        markets.len(),
+        3,
+        "FireTest chart gate requires three distinct markets"
+    );
+    let mut requests = Vec::with_capacity(markets.len());
+    for market_name in markets {
+        let market = snapshot
+            .markets()
+            .get(&market_name)
+            .unwrap_or_else(|| panic!("FireTest chart market not found: {market_name}"));
+        let current_price = market_reference_price(market.price())
+            .unwrap_or_else(|| panic!("FireTest chart market has no current price: {market_name}"));
+        let ticket = a
+            .client
+            .history()
+            .request_chart_for(&market)
+            .unwrap_or_else(|err| panic!("FireTest chart request failed for {market_name}: {err}"));
+        println!(
+            "FIRETEST chart archive queued market={} ticket={} current_price={:.8}",
+            market_name,
+            ticket.id(),
+            current_price
+        );
+        requests.push((ticket, current_price));
+    }
+
+    assert!(
+        pump_pair_until_sessions(a, b, timeout, "three market chart archives", |a, _| {
+            requests.iter().all(|(ticket, _)| {
+                a.market_history_events
+                    .iter()
+                    .any(|event| market_history_event_id(event) == ticket.id())
+            })
+        }),
+        "FireTest did not receive all three market chart archives within {timeout:?}"
+    );
+
+    let events = a.take_market_history_events();
+    for (requested, current_price) in requests {
+        let event = events
+            .iter()
+            .find(|event| market_history_event_id(event) == requested.id())
+            .unwrap_or_else(|| panic!("FireTest chart event missing for {}", requested.market));
+        match event {
+            MarketHistoryEvent::Ready { ticket, summary } => {
+                assert_eq!(ticket.market, requested.market);
+                assert_market_history_layout(a, &ticket.market, current_price, *summary);
+            }
+            MarketHistoryEvent::Failed { ticket, error } => {
+                panic!(
+                    "FireTest chart archive failed for {} ticket={}: {}",
+                    ticket.market,
+                    ticket.id(),
+                    error
+                );
+            }
+        }
+    }
 }
 
 fn write_strategy_info_dump(
@@ -2807,6 +3096,9 @@ fn record_event(
                 );
             }
         },
+        Event::MarketHistory(event) => {
+            log_server_event(&st, event_no, format!("MarketHistory {event:?}"));
+        }
         Event::Markets(ev) => {
             st.market_events += 1;
             if let Some(dispatcher) = dispatcher {
@@ -8347,6 +8639,9 @@ fn fire_test_active_library_health() {
         );
     }
     log_protocol_cpu_pair("after candles 10% gate", &a, &b);
+    err_emu.reset("initial chunked response gates");
+    run_market_history_archive_gate(&cfg, &mut a, &mut b, cfg.candles_timeout);
+    log_protocol_cpu_pair("after three-market chart archive gate", &a, &b);
     run_high_loss_simple_ops_gate(&mut a, &mut b, &mut err_emu, cfg.high_loss_timeout);
     log_protocol_cpu_pair("after high-loss simple ops gate", &a, &b);
     err_emu.reset("high-loss simple ops gate");

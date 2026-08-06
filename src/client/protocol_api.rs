@@ -122,7 +122,7 @@ impl Client {
         api_pending.dispatch_registered_with(uid, || parse_engine_response(payload))
     }
 
-    pub(crate) fn dispatch_candles_chunk(
+    pub(crate) fn dispatch_chunked_api_response(
         pending_api: &mut PendingApi,
         cmd: u8,
         payload: &[u8],
@@ -131,21 +131,34 @@ impl Client {
         if cmd != Command::API.to_byte() {
             return false;
         }
-        if Self::engine_response_method_from_payload(payload)
-            != Some(EngineMethod::RequestCandlesData)
-        {
+        let Some(method) = Self::engine_response_method_from_payload(payload) else {
             return false;
-        }
+        };
         let Some(uid) = Self::engine_response_request_uid_from_payload(payload) else {
             return false;
         };
-        if !pending_api.pending_candles.contains_key(&uid) {
+        let registered = match method {
+            EngineMethod::RequestCandlesData => pending_api.pending_candles.contains_key(&uid),
+            EngineMethod::RequestMarketHistory => {
+                pending_api.pending_market_history.contains_key(&uid)
+            }
+            _ => false,
+        };
+        if !registered {
             return false;
         }
         let Some(resp) = parse_engine_response(payload) else {
             return false;
         };
-        Self::handle_candles_chunk_in_pending(pending_api, &resp, now_ms)
+        match method {
+            EngineMethod::RequestCandlesData => {
+                Self::handle_candles_chunk_in_pending(pending_api, &resp, now_ms)
+            }
+            EngineMethod::RequestMarketHistory => {
+                Self::handle_market_history_chunk_in_pending(pending_api, &resp)
+            }
+            _ => false,
+        }
     }
 
     pub(crate) fn client_new_data_decoded(
@@ -153,14 +166,14 @@ impl Client {
         cmd: u8,
         payload: Vec<u8>,
         api_pending_consumed_by_reader: bool,
-        candles_chunk_consumed_by_reader: bool,
+        chunked_response_consumed_by_reader: bool,
         payload_buf: &mut Vec<(Command, Vec<u8>)>,
     ) {
         if cmd == Command::API.to_byte() {
             match self.process_api_command_decoded(
                 payload,
                 api_pending_consumed_by_reader,
-                candles_chunk_consumed_by_reader,
+                chunked_response_consumed_by_reader,
                 payload_buf,
             ) {
                 Ok(()) => {
@@ -180,19 +193,17 @@ impl Client {
         &mut self,
         payload: Vec<u8>,
         api_pending_consumed_by_reader: bool,
-        candles_chunk_consumed_by_reader: bool,
+        chunked_response_consumed_by_reader: bool,
         payload_buf: &mut Vec<(Command, Vec<u8>)>,
     ) -> Result<(), Vec<u8>> {
-        // Engine API responses: try to deliver to the pending registry / chunked
-        // candles aggregator / internal recovery flags. If the UID is not
-        // registered, pass it through as an ordinary data callback.
-        if candles_chunk_consumed_by_reader {
+        // Engine API responses first enter their registered pending collector.
+        // Unregistered responses remain available to the ordinary data path.
+        if chunked_response_consumed_by_reader {
             return Ok(());
         }
         if let Some(meta) = Self::engine_response_meta_from_payload(&payload) {
-            // 1. Chunked candles (RequestCandlesData) — the aggregator supports
-            // multiple response packets with the same UID. Do not drop the slot
-            // until assembly is complete.
+            // Chunked responses keep their pending slot until every packet with
+            // the same UID has been assembled.
             let now_ms = self.now_ms();
             if meta.method == EngineMethod::RequestCandlesData {
                 if let Some(resp) = parse_engine_response(&payload) {
@@ -204,8 +215,15 @@ impl Client {
                     }
                 }
             }
-            // If the slot is not registered — fall back to the pending registry /
-            // on_data for fire-and-forget API users.
+            if meta.method == EngineMethod::RequestMarketHistory {
+                if let Some(resp) = parse_engine_response(&payload) {
+                    if Self::handle_market_history_chunk_in_pending(&mut self.pending_api, &resp) {
+                        return Ok(());
+                    }
+                }
+            }
+            // An unregistered response falls back to the ordinary pending/event
+            // path used by fire-and-forget API callers.
 
             let pending_side_effect_owner =
                 api_pending_consumed_by_reader && method_applies_after_pending(meta.method);
@@ -239,7 +257,7 @@ impl Client {
     }
 
     /// Absorb a candles chunk through the pending aggregator. Returns `true` if the
-    /// slot was found and the chunk was processed (even if merged is not ready yet —
+    /// slot was found and the chunk was processed (even if merged is not ready yet;
     /// keep accumulating); `false` if the UID is not registered (the consumer does
     /// not use the async API).
     ///
@@ -252,7 +270,7 @@ impl Client {
         resp: &EngineResponse,
         _now_ms: i64,
     ) -> bool {
-        // Check the slot with a separate lookup — then full removal via remove() if merged.
+        // Keep the slot until the response is complete or explicitly fails.
         if !resp.success {
             if let Some(partial) = pending_api.pending_candles.remove(&resp.request_uid) {
                 log::warn!(target: "moonproto::client",
@@ -274,18 +292,57 @@ impl Client {
                 chunk_result,
                 CandlesChunkResult::Stored | CandlesChunkResult::Complete(_)
             ) {
-                // Delphi updates `Markets.LastChunkTime` for the UI waiting
-                // thread, but does not cancel the protocol-side collector on
-                // that timeout. Rust keeps the pending slot until explicit
-                // complete/error/reset/caller timeout.
+                partial.progress.mark_stored();
             }
             chunk_result
         };
         if let CandlesChunkResult::Complete(zipped_data) = chunk_result {
             if let Some(partial) = pending_api.pending_candles.remove(&uid) {
                 pending_api
-                    .candles_parse
-                    .submit(uid, zipped_data, partial.sender);
+                    .chunked_parse
+                    .submit_candles(uid, zipped_data, partial.sender);
+            }
+        }
+        true
+    }
+
+    pub(crate) fn handle_market_history_chunk_in_pending(
+        pending_api: &mut PendingApi,
+        resp: &EngineResponse,
+    ) -> bool {
+        let uid = resp.request_uid;
+        if !resp.success {
+            if let Some(partial) = pending_api.pending_market_history.remove(&uid) {
+                let _ = partial.sender.send(Err(format!(
+                    "RequestMarketHistory failed with code {}: {}",
+                    resp.error_code, resp.error_msg
+                )));
+                return true;
+            }
+            return false;
+        }
+
+        let chunk_result = {
+            let Some(partial) = pending_api.pending_market_history.get_mut(&uid) else {
+                return false;
+            };
+            let result = partial.aggregator.on_chunk(&resp.data);
+            if matches!(
+                result,
+                crate::commands::chunked_response::ChunkedResponseResult::Stored
+                    | crate::commands::chunked_response::ChunkedResponseResult::Complete(_)
+            ) {
+                partial.progress.mark_stored();
+            }
+            result
+        };
+        if let crate::commands::chunked_response::ChunkedResponseResult::Complete(compressed) =
+            chunk_result
+        {
+            if let Some(partial) = pending_api.pending_market_history.remove(&uid) {
+                pending_api
+                    .chunked_parse
+                    .submit_market_history(uid, compressed, partial.sender);
             }
         }
         true

@@ -170,10 +170,10 @@ pub use client::{
     ConnectError, EngineActionTicket, InitConfig, InitError, InitialStrategies, LifecycleEvent,
     LiveCandleSubscription, MoonAccount, MoonBalances, MoonCandles, MoonChartAlerts, MoonChartText,
     MoonClient, MoonClientError, MoonClientEvent, MoonClientSnapshot, MoonEmulator, MoonEventQueue,
-    MoonEventSink, MoonOrders, MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade,
-    NewOrderParams, NewOrderTicket, OrderSide, OrderTarget, RefreshConfig, SellOrderParams,
-    SplitOrderParams, TradeContextError, TradesStreamMode, TradesSubscription, TransportMode,
-    VStopParams,
+    MoonEventSink, MoonHistory, MoonOrders, MoonReports, MoonSettings, MoonStrategies, MoonStreams,
+    MoonTrade, NewOrderParams, NewOrderTicket, OrderSide, OrderTarget, RefreshConfig,
+    SellOrderParams, SplitOrderParams, TradeContextError, TradesStreamMode, TradesSubscription,
+    TransportMode, VStopParams,
 };
 #[cfg(feature = "diagnostics")]
 #[doc(hidden)]
@@ -230,8 +230,9 @@ pub use key_import::{
 pub use protocol::Command;
 pub use state::{
     ChartAlertEvent, ChartAlertObject, ChartAlertsState, ChartTextSnapshot, ChartTextState,
-    CoinCardCandlesEvent, CoinCardCandlesState, ExchangeKind, KernelHealth, NewsEvent, NewsState,
-    TransferAssetsEvent, TransferAssetsState,
+    CoinCardCandlesEvent, CoinCardCandlesState, ExchangeKind, KernelHealth,
+    MarketHistoryApplySummary, MarketHistoryCounts, MarketHistoryEvent, MarketHistoryTicket,
+    NewsEvent, NewsState, TransferAssetsEvent, TransferAssetsState,
 };
 pub use state::{
     ReportAliveMapComplete, ReportAliveMapOutcome, ReportAliveMapTicket, ReportEvent,

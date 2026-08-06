@@ -328,5 +328,10 @@ pub(crate) fn request_candles_data() -> Vec<u8> {
     build_engine_request(EngineMethod::RequestCandlesData, "", &[])
 }
 
+/// `emk_RequestMarketHistory`: request the chart archive for one market.
+pub(crate) fn request_market_history(market_name: &str) -> Vec<u8> {
+    build_engine_request(EngineMethod::RequestMarketHistory, market_name, &[])
+}
+
 // `emk_GetCoinCardCandles` lives in `commands::candles::get_coin_card_candles`
 // together with DeepPrice and CandlesAggregator.

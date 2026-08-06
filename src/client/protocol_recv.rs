@@ -680,7 +680,7 @@ impl ProtocolCore<'_> {
             cmd,
             &payload,
         );
-        let candles_chunk_consumed = Client::dispatch_candles_chunk(
+        let chunked_response_consumed = Client::dispatch_chunked_api_response(
             &mut self.client.pending_api,
             cmd,
             &payload,
@@ -733,7 +733,7 @@ impl ProtocolCore<'_> {
                 })
                 .unwrap_or_default();
             eprintln!(
-                "[mp-dataread] t={} cmd={:?} raw={} payload_len={} payload_hash={:016X} payload_head={} api_pending_consumed={} candles_chunk_consumed={}{}{}{}{}",
+                "[mp-dataread] t={} cmd={:?} raw={} payload_len={} payload_hash={:016X} payload_head={} api_pending_consumed={} chunked_response_consumed={}{}{}{}{}",
                 trace_elapsed_ms(),
                 cmd_kind,
                 cmd,
@@ -741,7 +741,7 @@ impl ProtocolCore<'_> {
                 fnv1a64(&payload),
                 trace_head(&payload, 16),
                 api_pending_consumed,
-                candles_chunk_consumed,
+                chunked_response_consumed,
                 sliced,
                 api,
                 strat,
@@ -761,7 +761,7 @@ impl ProtocolCore<'_> {
             cmd,
             payload,
             api_pending_consumed,
-            candles_chunk_consumed,
+            chunked_response_consumed,
             timestamp_ms,
             mode,
         );

@@ -112,6 +112,32 @@ they are domain events rather than retained trade-history rows. The event carrie
 a shared market name; use `event.market_name.as_ref()` when matching it with UI
 state.
 
+## Load The Core Chart Archive
+
+A live trades subscription starts filling retained history after the client
+connects. When a user opens a chart, request the older history already held by
+the core:
+
+```rust
+let ticket = client.history().request_chart_for(&market)?;
+
+// Match Event::MarketHistory by ticket.id().
+```
+
+`MarketHistoryEvent::Ready` is emitted only after the archive has been merged
+into the market's retained readers. The archive contains detailed futures
+trades, compact mini-candles, LastPrice points, and liquidations. Rows are
+decoded oldest first; live rows received while the archive is in flight are
+preserved, overlapping rows are deduplicated, and the configured ring
+capacities are applied. Restart that chart's cursors from the oldest retained
+row after `Ready` so the newly prepended history is included.
+
+Requests for different markets may run concurrently. MoonProto assembles each
+response by request identity, extends its wait after every new chunk, and
+retries the complete request after 15 seconds without progress. Applications
+do not assemble chunks or retry protocol packets themselves. The market must
+already be part of the retained trades scope.
+
 ## Retained Readers
 
 Read retained history from the latest snapshot:

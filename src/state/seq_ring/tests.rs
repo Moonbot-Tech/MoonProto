@@ -95,6 +95,23 @@ fn copies_last_rows_in_sequence_order() {
 }
 
 #[test]
+fn replace_batch_publishes_one_monotonic_sequence() {
+    let (mut writer, reader) = SeqRingWriter::<u64>::new(4).unwrap();
+    writer.push_batch(&[10, 11]);
+    let before = reader.bounds();
+
+    writer.replace_batch(&[20, 21, 22]);
+
+    let after = reader.bounds();
+    let mut rows = Vec::new();
+    reader.copy_last(4, &mut rows);
+    assert_eq!(rows, vec![20, 21, 22]);
+    assert_eq!(after.oldest_seq, before.next_seq);
+    assert_eq!(after.next_seq, before.next_seq + 3);
+    assert!(after.revision > before.revision);
+}
+
+#[test]
 fn replace_seq_updates_retained_slot_without_advancing_sequence() {
     let (mut writer, reader) = SeqRingWriter::<u64>::new(4).unwrap();
     writer.push_batch(&[10, 11, 12]);

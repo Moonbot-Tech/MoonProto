@@ -5,6 +5,7 @@
 //! handles; the dense retained rings use short read/write locks, but the UDP
 //! protocol receive path is not the history writer.
 
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::state::eps::EpsProfile;
@@ -354,6 +355,68 @@ impl MarketHistoryStore {
         });
     }
 
+    pub(crate) fn merge_market_history_archive(
+        &mut self,
+        archive: &crate::commands::market_history::MarketHistoryArchive,
+        now_time: MoonTime,
+    ) -> crate::state::MarketHistoryApplySummary {
+        let futures = merge_retained_rows(
+            &mut self.futures_trades,
+            self.readers.futures_trades.as_ref(),
+            &archive.futures_trades,
+            cmp_trade_row,
+        );
+        let minis = merge_retained_rows(
+            &mut self.mini_candles,
+            self.readers.mini_candles.as_ref(),
+            &archive.mini_candles,
+            cmp_mini_candle,
+        );
+        let prices = merge_retained_rows(
+            &mut self.last_prices,
+            self.readers.last_prices.as_ref(),
+            &archive.last_prices,
+            cmp_last_price,
+        );
+        let liquidations = merge_retained_rows(
+            &mut self.liquidations,
+            self.readers.liquidations.as_ref(),
+            &archive.liquidations,
+            cmp_trade_row,
+        );
+
+        self.rolling_volumes = RollingTradeVolumes::default();
+        for row in &futures {
+            self.rolling_volumes
+                .add_trade_with_quantity(*row, row.quantity());
+        }
+        self.rolling_volumes_publish_dirty = true;
+        self.rolling_last_price_ranges = RollingPriceRanges::default();
+        for row in &prices {
+            self.rolling_last_price_ranges
+                .add_price(row.time, row.current);
+        }
+        self.evicted_futures_for_compaction.clear();
+        self.trade_analytics_dirty = true;
+        self.last_price_analytics_dirty = true;
+        self.refresh_derived_analytics(now_time);
+
+        crate::state::MarketHistoryApplySummary {
+            received: crate::state::MarketHistoryCounts {
+                futures_trades: archive.futures_trades.len(),
+                mini_candles: archive.mini_candles.len(),
+                last_prices: archive.last_prices.len(),
+                liquidations: archive.liquidations.len(),
+            },
+            retained: crate::state::MarketHistoryCounts {
+                futures_trades: futures.len(),
+                mini_candles: minis.len(),
+                last_prices: prices.len(),
+                liquidations: liquidations.len(),
+            },
+        }
+    }
+
     /// Retained LastPrice row from market-price updates.
     ///
     /// The caller passes `p_last = (Bid + Ask) / 2` from `UpdateMarketsList`.
@@ -634,6 +697,57 @@ impl MarketHistoryStore {
             companion_writer.push_batch(&companions);
         }
     }
+}
+
+fn merge_retained_rows<T, F>(
+    writer: &mut Option<SeqRingWriter<T>>,
+    reader: Option<&SeqRingReader<T>>,
+    archive: &[T],
+    compare: F,
+) -> Vec<T>
+where
+    T: crate::state::seq_ring::SeqRingRow,
+    F: Fn(&T, &T) -> Ordering,
+{
+    let (Some(writer), Some(reader)) = (writer.as_mut(), reader) else {
+        return Vec::new();
+    };
+    let capacity = reader.capacity();
+    let mut rows = Vec::with_capacity(archive.len().saturating_add(capacity));
+    rows.extend_from_slice(archive);
+    let mut live = Vec::new();
+    reader.copy_last(capacity, &mut live);
+    rows.extend_from_slice(&live);
+    rows.sort_unstable_by(&compare);
+    rows.dedup_by(|left, right| compare(left, right) == Ordering::Equal);
+    if rows.len() > capacity {
+        rows.drain(..rows.len() - capacity);
+    }
+    writer.replace_batch(&rows);
+    rows
+}
+
+fn cmp_trade_row(left: &TradeHistoryRow, right: &TradeHistoryRow) -> Ordering {
+    left.time
+        .cmp(&right.time)
+        .then_with(|| left.price.to_bits().cmp(&right.price.to_bits()))
+        .then_with(|| left.qty.to_bits().cmp(&right.qty.to_bits()))
+}
+
+fn cmp_mini_candle(left: &MiniCandle, right: &MiniCandle) -> Ordering {
+    left.time
+        .cmp(&right.time)
+        .then_with(|| left.cnt.cmp(&right.cnt))
+        .then_with(|| left.min_price.to_bits().cmp(&right.min_price.to_bits()))
+        .then_with(|| left.max_price.to_bits().cmp(&right.max_price.to_bits()))
+        .then_with(|| left.buy_vol.to_bits().cmp(&right.buy_vol.to_bits()))
+        .then_with(|| left.sell_vol.to_bits().cmp(&right.sell_vol.to_bits()))
+}
+
+fn cmp_last_price(left: &LastPricePoint, right: &LastPricePoint) -> Ordering {
+    left.time
+        .cmp(&right.time)
+        .then_with(|| left.current.to_bits().cmp(&right.current.to_bits()))
 }
 
 pub(crate) fn candles_snapshot_is_stale(last_time: MoonTime, now_time: MoonTime) -> bool {

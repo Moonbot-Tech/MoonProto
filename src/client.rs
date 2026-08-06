@@ -84,9 +84,10 @@ pub use active_runtime::DIAG_MARKET_HISTORY_FILL_SPAN_MS;
 pub use active_runtime::{
     ClosePositionParams, CoinCardCandlesTicket, EngineActionTicket, MoonAccount, MoonBalances,
     MoonCandles, MoonChartAlerts, MoonChartText, MoonClient, MoonClientError, MoonClientEvent,
-    MoonClientSnapshot, MoonEmulator, MoonEventQueue, MoonEventSink, MoonOrders, MoonReports,
-    MoonSettings, MoonStrategies, MoonStreams, MoonTrade, NewOrderParams, NewOrderTicket,
-    OrderSide, OrderTarget, SellOrderParams, SplitOrderParams, TradesStreamMode, VStopParams,
+    MoonClientSnapshot, MoonEmulator, MoonEventQueue, MoonEventSink, MoonHistory, MoonOrders,
+    MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade, NewOrderParams,
+    NewOrderTicket, OrderSide, OrderTarget, SellOrderParams, SplitOrderParams, TradesStreamMode,
+    VStopParams,
 };
 pub(crate) use candles::MergedCandles;
 pub(crate) use clock::set_ntp_offset;
@@ -112,7 +113,9 @@ pub(crate) use sender::{ClientSender, SubscribeError};
 pub use subscriptions::{ActiveSubscriptions, LiveCandleSubscription, TradesSubscription};
 
 use app_dispatch::{metric_api_method, RunMode};
-pub(crate) use candles::{EngineResponseMeta, PartialCandles};
+pub(crate) use candles::{
+    ChunkProgress, EngineResponseMeta, MergedMarketHistory, PartialCandles, PartialMarketHistory,
+};
 pub(crate) use clock::{
     current_utc_hour_slot, delphi_now, delphi_now_raw, get_server_time_delta_global,
     set_server_time_delta_global,

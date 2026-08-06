@@ -6,12 +6,16 @@
 
 use super::*;
 
+const CHUNK_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+
 #[derive(Default)]
 pub(super) struct RuntimePending {
     pub(super) auto_candles_scope: Option<std::sync::Arc<crate::state::TradeStorageScope>>,
     pub(super) auto_candles_requested: bool,
     pub(super) auto_candles: Vec<PendingAutoCandles>,
     pub(super) auto_candles_apply: Vec<PendingAutoCandlesApply>,
+    pub(super) market_history: Vec<PendingMarketHistory>,
+    pub(super) market_history_apply: Vec<PendingMarketHistoryApply>,
     pub(super) coin_card_candles: Vec<PendingCoinCardCandles>,
     pub(super) account_refreshes: Vec<PendingAccountRefresh>,
     pub(super) transfer_assets: Vec<PendingTransferAssets>,
@@ -24,7 +28,24 @@ pub(super) struct RuntimePending {
 pub(super) struct PendingAutoCandles {
     pub(super) uid: u64,
     pub(super) deadline: Instant,
+    pub(super) progress: crate::client::ChunkProgress,
+    pub(super) seen_progress: u64,
     pub(super) rx: mpsc::Receiver<crate::client::MergedCandles>,
+}
+
+pub(super) struct PendingMarketHistory {
+    pub(super) ticket: crate::state::MarketHistoryTicket,
+    pub(super) uid: u64,
+    pub(super) deadline: Instant,
+    pub(super) progress: crate::client::ChunkProgress,
+    pub(super) seen_progress: u64,
+    pub(super) rx: mpsc::Receiver<Result<crate::client::MergedMarketHistory, String>>,
+}
+
+pub(super) struct PendingMarketHistoryApply {
+    pub(super) ticket: crate::state::MarketHistoryTicket,
+    pub(super) deadline: Instant,
+    pub(super) rx: mpsc::Receiver<Result<crate::state::MarketHistoryApplySummary, String>>,
 }
 
 pub(super) struct PendingAutoCandlesApply {
@@ -79,6 +100,23 @@ fn engine_pending_deadline() -> Instant {
     Instant::now() + Duration::from_millis(crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS as u64)
 }
 
+pub(super) fn chunk_idle_deadline() -> Instant {
+    Instant::now() + CHUNK_IDLE_TIMEOUT
+}
+
+fn extend_chunk_deadline(
+    deadline: &mut Instant,
+    seen_progress: &mut u64,
+    progress: &crate::client::ChunkProgress,
+    now: Instant,
+) {
+    let generation = progress.generation();
+    if generation != *seen_progress {
+        *seen_progress = generation;
+        *deadline = now + CHUNK_IDLE_TIMEOUT;
+    }
+}
+
 pub(super) fn clear_auto_candles_pending(client: &mut Client, pending: &mut RuntimePending) {
     for item in pending.auto_candles.drain(..) {
         client.pending_api.pending_candles.remove(&item.uid);
@@ -103,6 +141,13 @@ pub(super) fn poll_auto_candles(
     let mut i = 0;
     let now = Instant::now();
     while i < pending.auto_candles.len() {
+        let item = &mut pending.auto_candles[i];
+        extend_chunk_deadline(
+            &mut item.deadline,
+            &mut item.seen_progress,
+            &item.progress,
+            now,
+        );
         match pending.auto_candles[i].rx.try_recv() {
             Ok(merged) => {
                 #[cfg(any(test, feature = "diagnostics"))]
@@ -232,6 +277,138 @@ pub(super) fn poll_auto_candles(
                     i += 1;
                 }
             }
+        }
+    }
+    changed
+}
+
+pub(super) fn poll_market_history(
+    client: &mut Client,
+    pending: &mut RuntimePending,
+    dispatcher: &mut crate::events::EventDispatcher,
+) -> bool {
+    let mut changed = false;
+    let now = Instant::now();
+    let mut i = 0;
+    while i < pending.market_history.len() {
+        let item = &mut pending.market_history[i];
+        extend_chunk_deadline(
+            &mut item.deadline,
+            &mut item.seen_progress,
+            &item.progress,
+            now,
+        );
+        match pending.market_history[i].rx.try_recv() {
+            Ok(Ok(merged)) => {
+                let item = pending.market_history.swap_remove(i);
+                if merged.uid != item.uid {
+                    dispatcher.queue_market_history_event(
+                        crate::state::MarketHistoryEvent::Failed {
+                            ticket: item.ticket,
+                            error: "market-history parser returned a mismatched request UID"
+                                .to_string(),
+                        },
+                    );
+                    changed = true;
+                    continue;
+                }
+                if let Some(rx) = dispatcher
+                    .apply_market_history_archive_async(item.ticket.market.clone(), merged.archive)
+                {
+                    pending
+                        .market_history_apply
+                        .push(PendingMarketHistoryApply {
+                            ticket: item.ticket,
+                            deadline: engine_pending_deadline(),
+                            rx,
+                        });
+                } else {
+                    dispatcher.queue_market_history_event(
+                        crate::state::MarketHistoryEvent::Failed {
+                            ticket: item.ticket,
+                            error: "retained history is not configured for this market".to_string(),
+                        },
+                    );
+                    changed = true;
+                }
+            }
+            Ok(Err(error)) => {
+                let item = pending.market_history.swap_remove(i);
+                dispatcher.queue_market_history_event(crate::state::MarketHistoryEvent::Failed {
+                    ticket: item.ticket,
+                    error,
+                });
+                changed = true;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                let item = pending.market_history.swap_remove(i);
+                client.pending_api.pending_market_history.remove(&item.uid);
+                dispatcher.queue_market_history_event(crate::state::MarketHistoryEvent::Failed {
+                    ticket: item.ticket,
+                    error: "market-history parser stopped before completion".to_string(),
+                });
+                changed = true;
+            }
+            Err(mpsc::TryRecvError::Empty) if pending.market_history[i].deadline <= now => {
+                let market = pending.market_history[i].ticket.market.clone();
+                let old_uid = pending.market_history[i].uid;
+                client.pending_api.pending_market_history.remove(&old_uid);
+                let (uid, rx, progress) =
+                    client.api_request_market_history_async_registered(&market);
+                let item = &mut pending.market_history[i];
+                item.uid = uid;
+                item.rx = rx;
+                item.seen_progress = progress.generation();
+                item.progress = progress;
+                item.deadline = chunk_idle_deadline();
+                log::warn!(
+                    target: "moonproto::market_history",
+                    "market-history request for {} was idle for 15s; retrying the whole archive",
+                    market
+                );
+                i += 1;
+            }
+            Err(mpsc::TryRecvError::Empty) => i += 1,
+        }
+    }
+
+    let now = Instant::now();
+    let mut i = 0;
+    while i < pending.market_history_apply.len() {
+        match pending.market_history_apply[i].rx.try_recv() {
+            Ok(Ok(summary)) => {
+                let item = pending.market_history_apply.swap_remove(i);
+                dispatcher.queue_market_history_event(crate::state::MarketHistoryEvent::Ready {
+                    ticket: item.ticket,
+                    summary,
+                });
+                changed = true;
+            }
+            Ok(Err(error)) => {
+                let item = pending.market_history_apply.swap_remove(i);
+                dispatcher.queue_market_history_event(crate::state::MarketHistoryEvent::Failed {
+                    ticket: item.ticket,
+                    error,
+                });
+                changed = true;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                let item = pending.market_history_apply.swap_remove(i);
+                dispatcher.queue_market_history_event(crate::state::MarketHistoryEvent::Failed {
+                    ticket: item.ticket,
+                    error: "market-history worker stopped before apply acknowledgement".to_string(),
+                });
+                changed = true;
+            }
+            Err(mpsc::TryRecvError::Empty) if pending.market_history_apply[i].deadline <= now => {
+                let item = pending.market_history_apply.swap_remove(i);
+                dispatcher.queue_market_history_event(crate::state::MarketHistoryEvent::Failed {
+                    ticket: item.ticket,
+                    error: "market-history apply acknowledgement timed out".to_string(),
+                });
+                changed = true;
+            }
+            Err(mpsc::TryRecvError::Empty) => i += 1,
         }
     }
     changed

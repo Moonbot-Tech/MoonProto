@@ -121,7 +121,7 @@ impl Client {
 
     pub(crate) fn api_request_candles_data_async_registered(
         &mut self,
-    ) -> (u64, mpsc::Receiver<MergedCandles>) {
+    ) -> (u64, mpsc::Receiver<MergedCandles>, ChunkProgress) {
         let raw = crate::commands::engine_request::request_candles_data();
         // UID comes from the BaseCommand header at offset 3..11, same as
         // `send_api_request_async`.
@@ -131,8 +131,10 @@ impl Client {
             .map(u64::from_le_bytes)
             .unwrap_or(0);
         let (tx, rx) = mpsc::channel();
+        let progress = ChunkProgress::new();
         let partial = PartialCandles {
             aggregator: CandlesAggregator::new(),
+            progress: progress.clone(),
             sender: tx,
         };
         // Replacing an existing slot is allowed: the old sender is dropped and
@@ -140,7 +142,25 @@ impl Client {
         // behavior for this diagnostic helper.
         self.pending_api.pending_candles.insert(uid, partial);
         self.send_api_request(&raw);
-        (uid, rx)
+        (uid, rx, progress)
+    }
+
+    pub(crate) fn api_request_market_history_async_registered(
+        &mut self,
+        market_name: &str,
+    ) -> (
+        u64,
+        mpsc::Receiver<Result<MergedMarketHistory, String>>,
+        ChunkProgress,
+    ) {
+        let raw = crate::commands::engine_request::request_market_history(market_name);
+        let uid = engine_request_uid(&raw).unwrap_or(0);
+        let (tx, rx) = mpsc::channel();
+        let partial = PartialMarketHistory::new(tx);
+        let progress = partial.progress.clone();
+        self.pending_api.pending_market_history.insert(uid, partial);
+        self.send_api_request(&raw);
+        (uid, rx, progress)
     }
 
     /// Request the full chunked candles stream and wait for the merged result
@@ -157,7 +177,7 @@ impl Client {
         dispatcher: &mut crate::events::EventDispatcher,
         timeout: Duration,
     ) -> Result<MergedCandles, mpsc::RecvTimeoutError> {
-        let (uid, rx) = self.api_request_candles_data_async_registered();
+        let (uid, rx, _progress) = self.api_request_candles_data_async_registered();
         match self.wait_for_receiver_in_owned_runtime(dispatcher, &rx, timeout) {
             Ok(merged) => {
                 if dispatcher

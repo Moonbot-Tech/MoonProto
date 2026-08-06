@@ -357,6 +357,33 @@ impl<T: SeqRingRow> SeqRingWriter<T> {
         state.bump_revision();
     }
 
+    /// Replace retained contents while keeping sequence numbers monotonic.
+    ///
+    /// Demand-driven historical backfill uses this cold path after merging the
+    /// archive with rows that arrived live during the request. The replacement
+    /// is published under one write lock and receives fresh sequence numbers;
+    /// existing consumers are notified to restart from the oldest row.
+    pub(crate) fn replace_batch(&mut self, rows: &[T]) {
+        let mut state = self.inner.state.write();
+        let rows = if rows.len() > state.capacity {
+            &rows[rows.len() - state.capacity..]
+        } else {
+            rows
+        };
+        state.len = 0;
+        if !rows.is_empty() {
+            state.ensure_rows();
+            for &row in rows {
+                let seq = state.next_seq;
+                let idx = state.slot_index(seq);
+                state.rows[idx] = row;
+                state.next_seq = state.next_seq.wrapping_add(1);
+                state.len += 1;
+            }
+        }
+        state.bump_revision();
+    }
+
     #[cfg(test)]
     pub(crate) fn replace_seq(&mut self, seq: u64, row: T) -> bool {
         let mut state = self.inner.state.write();

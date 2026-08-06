@@ -109,10 +109,12 @@ impl EngineMethod {
     pub const SubscribeCandles: Self = Self(32);
     /// `UnsubscribeCandles`: unsubscribe from live TF candle updates.
     pub const UnsubscribeCandles: Self = Self(33);
+    /// `RequestMarketHistory`: request the retained chart archive for one
+    /// market. The response is one raw-DEFLATE stream split across several
+    /// EngineResponse packets with the same request UID.
+    pub const RequestMarketHistory: Self = Self(34);
 
-    /// Keep the raw Delphi ordinal byte. Delphi reads/writes
-    /// `TEngineMethodKind` via `ms.Read/Stream.Write` and does not turn an
-    /// unknown ordinal into `emk_None`.
+    /// Preserve the raw wire ordinal so future methods remain parseable.
     #[doc(hidden)]
     pub const fn from_byte(b: u8) -> Self {
         Self(b)
@@ -124,7 +126,7 @@ impl EngineMethod {
     }
 
     pub const fn is_known(self) -> bool {
-        self.0 <= Self::UnsubscribeCandles.0
+        self.0 <= Self::RequestMarketHistory.0
     }
 
     pub const fn name(self) -> &'static str {
@@ -163,6 +165,7 @@ impl EngineMethod {
             Self::GetCoinCardCandles => "GetCoinCardCandles",
             Self::SubscribeCandles => "SubscribeCandles",
             Self::UnsubscribeCandles => "UnsubscribeCandles",
+            Self::RequestMarketHistory => "RequestMarketHistory",
             _ => "Unknown",
         }
     }
@@ -193,6 +196,10 @@ mod tests {
         assert_eq!(
             EngineMethod::from_byte(33),
             EngineMethod::UnsubscribeCandles
+        );
+        assert_eq!(
+            EngineMethod::from_byte(34),
+            EngineMethod::RequestMarketHistory
         );
         assert_eq!(EngineMethod::from_byte(0), EngineMethod::None);
     }

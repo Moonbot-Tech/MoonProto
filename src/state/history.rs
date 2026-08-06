@@ -49,10 +49,64 @@ pub enum CandlesSnapshotEvent {
     },
 }
 
+/// Stable application ticket for one demand-driven market chart archive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketHistoryTicket {
+    pub market: String,
+    request_id: u64,
+}
+
+impl MarketHistoryTicket {
+    pub(crate) fn new(market: String, request_id: u64) -> Self {
+        Self { market, request_id }
+    }
+
+    /// Application-level request identity. Wire retries keep this value while
+    /// using a fresh protocol UID.
+    pub fn id(&self) -> u64 {
+        self.request_id
+    }
+}
+
+/// Row counts for the four sections of a market chart archive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MarketHistoryCounts {
+    pub futures_trades: usize,
+    pub mini_candles: usize,
+    pub last_prices: usize,
+    pub liquidations: usize,
+}
+
+/// Result of merging one core chart archive into retained market history.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MarketHistoryApplySummary {
+    /// Rows decoded from the core archive.
+    pub received: MarketHistoryCounts,
+    /// Rows retained after merging the archive with live rows and applying the
+    /// configured ring capacities.
+    pub retained: MarketHistoryCounts,
+}
+
+/// Completion of a demand-driven market chart archive request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarketHistoryEvent {
+    /// The archive has already been merged into the retained readers.
+    /// Consumers should restart their chart cursors from the oldest retained
+    /// row to ingest the newly prepended history.
+    Ready {
+        ticket: MarketHistoryTicket,
+        summary: MarketHistoryApplySummary,
+    },
+    Failed {
+        ticket: MarketHistoryTicket,
+        error: String,
+    },
+}
+
 /// Per-packet time-shift state for compact trades-stream rows.
 ///
 /// The first known/stored row in a packet fixes
-/// `TimeShift := round((NowTimeX - RowTime) * 24) / 24`; every later row in the
+/// `TimeShift := round((NowTimeX - RowTime) * 1440) / 1440`; every later row in the
 /// packet uses the same shift. Unknown-market sections skipped by Active Lib do
 /// not fill this value.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -80,9 +134,14 @@ impl TradesPacketTimeShift {
         let row_time = base_time + f64::from(time_delta_ms) / DELPHI_MSECS_PER_DAY;
         let shift = *self
             .shift_days
-            .get_or_insert_with(|| ((now_time - row_time) * 24.0).round() / 24.0);
+            .get_or_insert_with(|| utc_shift_from_wire_local(now_time, row_time));
         moon_time_from_delphi_days(row_time + shift)
     }
+}
+
+#[inline]
+pub(crate) fn utc_shift_from_wire_local(now_time: f64, row_time: f64) -> f64 {
+    ((now_time - row_time) * 1_440.0).round() / 1_440.0
 }
 
 #[inline]

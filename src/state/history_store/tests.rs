@@ -17,6 +17,44 @@ fn mt(days: f64) -> MoonTime {
 }
 
 #[test]
+fn market_history_backfill_merges_live_tail_deduplicates_and_clips() {
+    let mut store = MarketHistoryStore::new(MarketHistoryConfig {
+        futures_trades_capacity: 3,
+        spot_trades_capacity: 0,
+        liquidation_capacity: 0,
+        mm_orders_capacity: 0,
+        last_price_capacity: 0,
+        mini_candles_capacity: 0,
+        candles_5m_capacity: 0,
+    });
+    let duplicate = trade(45_000.03, 103.0, 3.0);
+    store.append_futures_trade(duplicate);
+    store.append_futures_trade(trade(45_000.04, 104.0, 4.0));
+
+    let summary = store.merge_market_history_archive(
+        &crate::commands::market_history::MarketHistoryArchive {
+            futures_trades: vec![
+                trade(45_000.01, 101.0, 1.0),
+                trade(45_000.02, 102.0, 2.0),
+                duplicate,
+            ],
+            ..Default::default()
+        },
+        mt(45_000.04),
+    );
+
+    let reader = store.readers().futures_trades.unwrap();
+    let mut rows = Vec::new();
+    reader.copy_last(reader.capacity(), &mut rows);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].price, 102.0);
+    assert_eq!(rows[1], duplicate);
+    assert_eq!(rows[2].price, 104.0);
+    assert_eq!(summary.received.futures_trades, 3);
+    assert_eq!(summary.retained.futures_trades, 3);
+}
+
+#[test]
 fn auto_config_matches_production_depth_and_ignores_unused_market_count() {
     let total = 64 * GB;
     let one_market = MarketHistoryConfig::from_total_memory_bytes(total, 1);

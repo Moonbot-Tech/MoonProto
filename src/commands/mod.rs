@@ -16,10 +16,12 @@
 pub(crate) mod arb;
 pub(crate) mod balance;
 pub(crate) mod candles;
+pub(crate) mod chunked_response;
 pub(crate) mod engine_api;
 pub(crate) mod engine_request;
 pub(crate) mod inflate;
 pub(crate) mod market;
+pub(crate) mod market_history;
 pub(crate) mod order_book;
 pub(crate) mod registry;
 pub(crate) mod report;

@@ -196,6 +196,10 @@ pub(super) fn handle_command(
             schedule_coin_card_candles(client, &mut pending.coin_card_candles, ticket, payload);
             false
         }
+        RuntimeCommand::MarketHistory(ticket) => {
+            schedule_market_history(client, &mut pending.market_history, ticket);
+            false
+        }
         RuntimeCommand::Ui(cmd) => handle_ui_command(client, dispatcher, cmd),
         RuntimeCommand::Strat(cmd) => {
             handle_strat_command(client, cmd);
@@ -378,11 +382,29 @@ pub(super) fn schedule_auto_candles_snapshot(client: &mut Client, pending: &mut 
     if pending.auto_candles_requested {
         return;
     }
-    let (uid, rx) = client.api_request_candles_data_async_registered();
+    let (uid, rx, progress) = client.api_request_candles_data_async_registered();
     pending.auto_candles_requested = true;
     pending.auto_candles.push(PendingAutoCandles {
         uid,
-        deadline: engine_pending_deadline(),
+        deadline: chunk_idle_deadline(),
+        seen_progress: progress.generation(),
+        progress,
+        rx,
+    });
+}
+
+fn schedule_market_history(
+    client: &mut Client,
+    pending: &mut Vec<PendingMarketHistory>,
+    ticket: crate::state::MarketHistoryTicket,
+) {
+    let (uid, rx, progress) = client.api_request_market_history_async_registered(&ticket.market);
+    pending.push(PendingMarketHistory {
+        ticket,
+        uid,
+        deadline: chunk_idle_deadline(),
+        seen_progress: progress.generation(),
+        progress,
         rx,
     });
 }

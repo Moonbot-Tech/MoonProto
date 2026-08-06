@@ -9,7 +9,7 @@ use crate::commands::trades_stream::{
     decode_trades_packet, parse_watcher_fills, DecodedTradesPacket, TradeSectionRef,
 };
 use crate::protocol::Command;
-use crate::state::history::DELPHI_MSECS_PER_DAY;
+use crate::state::history::{utc_shift_from_wire_local, DELPHI_MSECS_PER_DAY};
 use crate::state::{
     iter_trades_resend_response, MarketHistoryMMOrderInput, MarketHistoryStreamBatch,
     MarketHistoryStreamSection, MarketHistoryStreamSectionKind, MarketHistoryTradeInput,
@@ -82,7 +82,7 @@ impl EventDispatcher {
         if packet_time_shift.is_none() {
             if let Some(now_time) = now_time_days {
                 let event_time = base_time + f64::from(time_delta_ms) / DELPHI_MSECS_PER_DAY;
-                *packet_time_shift = Some(((now_time - event_time) * 24.0).round() / 24.0);
+                *packet_time_shift = Some(utc_shift_from_wire_local(now_time, event_time));
             }
         }
     }
@@ -97,7 +97,7 @@ impl EventDispatcher {
         let event_time = base_time + f64::from(time_delta_ms) / DELPHI_MSECS_PER_DAY;
         if packet_time_shift.is_none() {
             if let Some(now_time) = now_time_days {
-                *packet_time_shift = Some(((now_time - event_time) * 24.0).round() / 24.0);
+                *packet_time_shift = Some(utc_shift_from_wire_local(now_time, event_time));
             }
         }
         event_time + packet_time_shift.unwrap_or(0.0)

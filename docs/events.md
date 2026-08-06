@@ -103,6 +103,7 @@ fn handle_event(event: Event) {
         Event::Order(order_event) => handle_order_event(order_event),
         Event::OrderBook(book_event) => handle_orderbook_event(book_event),
         Event::Trade(trade_event) => handle_trade_signal(trade_event),
+        Event::MarketHistory(history_event) => handle_chart_archive(history_event),
         Event::Markets(markets_event) => handle_markets_event(markets_event),
         Event::Balance(balance_event) => handle_balance_event(balance_event),
         Event::Account(account_event) => handle_account_event(account_event),
@@ -183,6 +184,7 @@ pub enum Event {
     LiveCandle(LiveCandleEvent),
     CandleTimeframeState(CandleTimeframeStateEvent),
     CandlesSnapshot(CandlesSnapshotEvent),
+    MarketHistory(MarketHistoryEvent),
     Arb(ArbEvent),
     Strat(StratEvent),
     Detect(DetectEvent),
@@ -196,6 +198,12 @@ pub enum Event {
     ServerLog(ServerLogEvent),
 }
 ```
+
+`Event::MarketHistory` completes a demand-driven
+`client.history().request_chart_for(...)` request. Match it by the returned
+ticket ID. A `Ready` event is an apply barrier: the four archive sections are
+already visible through the market's retained history readers. See
+[`trades.md`](trades.md#load-the-core-chart-archive).
 
 `Event::KernelHealth` reports the connected core's process CPU, whole-machine
 CPU, process memory, available physical memory, logical CPU count, client/core

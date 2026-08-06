@@ -415,6 +415,10 @@ pub enum Event {
     /// This is emitted only after the history worker acknowledges that the
     /// snapshot command has been processed, so readers already see the candles.
     CandlesSnapshot(crate::state::CandlesSnapshotEvent),
+    /// Demand-driven chart archive for one market. A `Ready` event is emitted
+    /// only after all four archive sections are visible through retained
+    /// history readers.
+    MarketHistory(crate::state::MarketHistoryEvent),
     /// Completion of a non-blocking user-facing Engine API action.
     EngineAction(EngineActionEvent),
     /// Legacy closed-sell SQL compatibility stream.
