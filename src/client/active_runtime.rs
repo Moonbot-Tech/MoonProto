@@ -25,8 +25,8 @@ use runtime_loop::runtime_loop;
 pub use types::{
     ClosePositionParams, CoinCardCandlesTicket, EngineActionTicket, MoonClientError,
     MoonClientEvent, MoonClientSnapshot, MoonEventQueue, MoonEventSink, NewOrderParams,
-    NewOrderTicket, OrderSide, OrderTarget, SellOrderParams, SplitOrderParams, TradesStreamMode,
-    VStopParams,
+    NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams, SellOrderParams, SplitOrderParams,
+    TradesStreamMode, VStopParams,
 };
 
 #[cfg(any(test, feature = "diagnostics"))]

@@ -44,7 +44,7 @@
 //! client.streams().subscribe_orderbook("ETHUSDT")?;
 //! // After the user chooses a market/order side:
 //! // if let Some(market) = client.snapshot().and_then(|s| s.markets().find("BTC")) {
-//! //     client.trade().new_order(NewOrderParams::for_market(&market, OrderSide::Long, 50100.0, 0.001))?;
+//! //     client.trade().new_order(NewOrderParams::for_market(&market, OrderSide::Long, 50100.0, 250.0))?;
 //! // }
 //! // After an order appears in events/snapshots:
 //! // client.orders().move_order(order, 50100.0)?; // UID selectors are for scripts/tools
@@ -171,9 +171,9 @@ pub use client::{
     LiveCandleSubscription, MoonAccount, MoonBalances, MoonCandles, MoonChartAlerts, MoonChartText,
     MoonClient, MoonClientError, MoonClientEvent, MoonClientSnapshot, MoonEmulator, MoonEventQueue,
     MoonEventSink, MoonHistory, MoonOrders, MoonReports, MoonSettings, MoonStrategies, MoonStreams,
-    MoonTrade, NewOrderParams, NewOrderTicket, OrderSide, OrderTarget, RefreshConfig,
-    SellOrderParams, SplitOrderParams, TradeContextError, TradesStreamMode, TradesSubscription,
-    TransportMode, VStopParams,
+    MoonTrade, NewOrderParams, NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams,
+    RefreshConfig, SellOrderParams, SplitOrderParams, TradeContextError, TradesStreamMode,
+    TradesSubscription, TransportMode, VStopParams,
 };
 #[cfg(feature = "diagnostics")]
 #[doc(hidden)]

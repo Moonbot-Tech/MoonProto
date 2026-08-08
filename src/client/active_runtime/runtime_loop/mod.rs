@@ -544,6 +544,80 @@ mod tests {
     }
 
     #[test]
+    fn moon_trade_new_pending_order_builds_v4_start_pending_command() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+
+        let changed = handle_trade_action(
+            &mut client,
+            &mut dispatcher,
+            RuntimeTradeCommandKind::NewPendingOrder {
+                params: PendingOrderParams::new("ETHUSDT", OrderSide::Long, 2100.0, 250.0)
+                    .with_strategy_id(42)
+                    .with_planned_sell_price(2200.0)
+                    .with_market_stop(true),
+                request_uid: 0xCAFE_BABF,
+            },
+        )
+        .expect("v4 pending command does not need legacy route bytes");
+
+        assert!(!changed);
+        let (_, high, _) = client.take_send_queues_for_test();
+        assert_eq!(high.len(), 1);
+        match TradeCommand::parse(&high[0].data).expect("valid pending order") {
+            TradeCommand::OrderCommand(cmd) => match cmd.payload {
+                OrderCommandPayload::StartPending {
+                    market_name,
+                    is_short,
+                    use_market_stop,
+                    strategy_id,
+                    size,
+                    trigger_price,
+                    planned_sell_price,
+                } => {
+                    assert_eq!(cmd.header.uid, 0xCAFE_BABF);
+                    assert_eq!(market_name, "ETHUSDT");
+                    assert!(!is_short && use_market_stop);
+                    assert_eq!(strategy_id, 42);
+                    assert_eq!(size, 250.0);
+                    assert_eq!(trigger_price, 2100.0);
+                    assert_eq!(planned_sell_price, 2200.0);
+                }
+                other => panic!("unexpected order payload: {other:?}"),
+            },
+            other => panic!("unexpected trade command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn moon_trade_bare_pending_sends_zero_strategy_id() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+
+        handle_trade_action(
+            &mut client,
+            &mut dispatcher,
+            RuntimeTradeCommandKind::NewPendingOrder {
+                params: PendingOrderParams::new("ETHUSDT", OrderSide::Long, 2100.0, 250.0),
+                request_uid: 0xCAFE_BAC0,
+            },
+        )
+        .expect("v4 bare pending command does not need legacy route bytes");
+
+        let (_, high, _) = client.take_send_queues_for_test();
+        assert_eq!(high.len(), 1);
+        match TradeCommand::parse(&high[0].data).expect("valid bare pending order") {
+            TradeCommand::OrderCommand(cmd) => match cmd.payload {
+                OrderCommandPayload::StartPending { strategy_id, .. } => {
+                    assert_eq!(strategy_id, 0);
+                }
+                other => panic!("unexpected order payload: {other:?}"),
+            },
+            other => panic!("unexpected trade command: {other:?}"),
+        }
+    }
+
+    #[test]
     fn runtime_update_stops_sends_for_tracked_server_order() {
         let uid = 0x5151;
         let mut client = ready_client();

@@ -521,6 +521,15 @@ pub(crate) enum OrderCommandPayload {
         price: f64,
         planned_sell_price: f64,
     },
+    StartPending {
+        market_name: String,
+        is_short: bool,
+        use_market_stop: bool,
+        strategy_id: u64,
+        size: f64,
+        trigger_price: f64,
+        planned_sell_price: f64,
+    },
     MoveAllKind {
         market_name: String,
         leg: u8,
@@ -582,6 +591,7 @@ impl OrderCommandPayload {
             Self::ClosePosition { .. } => 14,
             Self::ManualSell { .. } => 15,
             Self::PanicSellAll => 17,
+            Self::StartPending { .. } => 18,
             Self::Unknown(opcode) => *opcode,
         }
     }
@@ -677,6 +687,22 @@ impl OrderCommandPayload {
                 out.extend_from_slice(&strategy_id.to_le_bytes());
                 out.extend_from_slice(&size.to_le_bytes());
                 out.extend_from_slice(&price.to_le_bytes());
+                out.extend_from_slice(&planned_sell_price.to_le_bytes());
+            }
+            Self::StartPending {
+                market_name,
+                is_short,
+                use_market_stop,
+                strategy_id,
+                size,
+                trigger_price,
+                planned_sell_price,
+            } => {
+                write_short_string(out, market_name);
+                out.push(u8::from(*is_short) | (u8::from(*use_market_stop) << 1));
+                out.extend_from_slice(&strategy_id.to_le_bytes());
+                out.extend_from_slice(&size.to_le_bytes());
+                out.extend_from_slice(&trigger_price.to_le_bytes());
                 out.extend_from_slice(&planned_sell_price.to_le_bytes());
             }
             Self::MoveAllKind {
@@ -852,6 +878,19 @@ impl OrderCommandPayload {
                 size: read_f64_zero_tail(input),
             },
             17 => Self::PanicSellAll,
+            18 => {
+                let market_name = read_short_string(input);
+                let flags = read_u8_zero_tail(input);
+                Self::StartPending {
+                    market_name,
+                    is_short: flags & 1 != 0,
+                    use_market_stop: flags & 2 != 0,
+                    strategy_id: read_u64_zero_tail(input),
+                    size: read_f64_zero_tail(input),
+                    trigger_price: read_f64_zero_tail(input),
+                    planned_sell_price: read_f64_zero_tail(input),
+                }
+            }
             _ => Self::Unknown(opcode),
         }
     }
@@ -1190,6 +1229,15 @@ mod tests {
                 price: 0.0,
                 planned_sell_price: 0.0,
             },
+            OrderCommandPayload::StartPending {
+                market_name: "BTCUSDT".to_owned(),
+                is_short: false,
+                use_market_stop: false,
+                strategy_id: 0,
+                size: 1.0,
+                trigger_price: 100.0,
+                planned_sell_price: 0.0,
+            },
             OrderCommandPayload::MoveAllPercent {
                 market_name: "BTCUSDT".to_owned(),
                 leg: 0,
@@ -1377,6 +1425,25 @@ mod tests {
                 planned_sell_price: 2000.0,
             },
             start,
+        );
+
+        let mut pending = short(vec![18], "ETHUSDT");
+        pending.push(3);
+        pending = with_u64(pending, 0);
+        pending = with_f64(pending, 250.0);
+        pending = with_f64(pending, 2100.0);
+        pending = with_f64(pending, 2000.0);
+        assert_body(
+            OrderCommandPayload::StartPending {
+                market_name: "ETHUSDT".to_owned(),
+                is_short: true,
+                use_market_stop: true,
+                strategy_id: 0,
+                size: 250.0,
+                trigger_price: 2100.0,
+                planned_sell_price: 2000.0,
+            },
+            pending,
         );
 
         let mut move_kind = short(vec![11], "SOLUSDT");

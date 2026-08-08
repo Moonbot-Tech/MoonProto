@@ -3,8 +3,8 @@
 use super::{
     commands::{RuntimeCommand, RuntimeCommandKind, RuntimeTradeCommandKind, UiRuntimeCommand},
     CoinCardCandlesTicket, EngineActionTicket, MoonClient, MoonClientError, NewOrderParams,
-    NewOrderTicket, OrderSide, OrderTarget, SellOrderParams, SplitOrderParams, TradesStreamMode,
-    VStopParams,
+    NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams, SellOrderParams, SplitOrderParams,
+    TradesStreamMode, VStopParams,
 };
 use std::sync::mpsc;
 
@@ -348,6 +348,27 @@ impl MoonTrade {
     pub fn new_order(&self, params: NewOrderParams) -> Result<NewOrderTicket, MoonClientError> {
         let request_uid = random_nonzero_u64();
         self.send_intent(RuntimeTradeCommandKind::NewOrder {
+            params,
+            request_uid,
+        })?;
+        Ok(NewOrderTicket {
+            client_order_id: request_uid,
+            #[cfg(any(test, feature = "diagnostics"))]
+            request_uid,
+        })
+    }
+
+    /// Queue a pending order intent.
+    ///
+    /// The core publishes the pending immediately in the normal order stream.
+    /// Move or cancel that retained order through `client.orders()`. An
+    /// optional strategy candidate is attached only after the trigger fires.
+    pub fn new_pending_order(
+        &self,
+        params: PendingOrderParams,
+    ) -> Result<NewOrderTicket, MoonClientError> {
+        let request_uid = random_nonzero_u64();
+        self.send_intent(RuntimeTradeCommandKind::NewPendingOrder {
             params,
             request_uid,
         })?;

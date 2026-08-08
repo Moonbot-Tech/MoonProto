@@ -24,6 +24,29 @@ impl Client {
         self.send_order_command_at(request_uid, payload)
     }
 
+    pub(crate) fn new_pending_order(
+        &self,
+        request_uid: u64,
+        market: &str,
+        is_short: bool,
+        trigger_price: f64,
+        strategy_id: u64,
+        size: f64,
+        planned_sell_price: f64,
+        use_market_stop: bool,
+    ) -> bool {
+        let payload = crate::commands::trade::OrderCommandPayload::StartPending {
+            market_name: market.to_owned(),
+            is_short,
+            use_market_stop,
+            strategy_id,
+            size,
+            trigger_price,
+            planned_sell_price,
+        };
+        self.send_order_command_at(request_uid, payload)
+    }
+
     pub(crate) fn replace_order(
         &self,
         orders: &mut crate::state::OrderState,

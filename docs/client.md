@@ -185,7 +185,7 @@ let Some(snapshot) = client.snapshot() else { return; };
 let Some(market) = snapshot.markets().find("BTC") else { return; };
 
 let _ticket = client.trade().new_order(
-    NewOrderParams::for_market(&market, OrderSide::Long, 50_000.0, 0.001),
+    NewOrderParams::for_market(&market, OrderSide::Long, 50_000.0, 250.0),
 )?;
 client.trade().join_orders_for_market(&market, OrderSide::Long)?;
 ```
@@ -367,10 +367,14 @@ client.trade().new_order(NewOrderParams::for_market(
     &market,
     OrderSide::Long,
     50_000.0,
-    0.001,
+    250.0,
 ))?;
 // Existing-order actions normally use &Order from snapshot.orders().
 ```
+
+Omitting `NewOrderParams::with_strategy_id(...)` sends `strategy_id = 0` and
+lets the core apply its configured Manual-strategy fallback. Pass an explicit
+strategy id when the application must bind the order deterministically.
 
 Canonical v4 order commands use market names and server order UIDs rather than
 caller-built route records. The legacy `penalty` helper is the one remaining

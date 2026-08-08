@@ -85,6 +85,10 @@ pub struct MarketHistoryApplySummary {
     /// Rows retained after merging the archive with live rows and applying the
     /// configured ring capacities.
     pub retained: MarketHistoryCounts,
+    /// Wall time spent only inside the retained-history merge/apply step.
+    #[cfg(any(test, feature = "diagnostics"))]
+    #[doc(hidden)]
+    pub apply_wall_micros: u64,
 }
 
 /// Completion of a demand-driven market chart archive request.

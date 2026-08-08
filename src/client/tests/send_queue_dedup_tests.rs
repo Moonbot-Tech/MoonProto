@@ -213,6 +213,18 @@ fn one_shot_order_commands_keep_their_delphi_retry_budget() {
             planned_sell_price: 0.0,
         },
     );
+    let start_pending = build_order_command(
+        4,
+        OrderCommandPayload::StartPending {
+            market_name: "BTCUSDT".to_owned(),
+            is_short: false,
+            use_market_stop: false,
+            strategy_id: 0,
+            size: 1.0,
+            trigger_price: 110.0,
+            planned_sell_price: 0.0,
+        },
+    );
 
     for payload in [&close, &manual_sell] {
         let meta = typed_send_metadata(Command::Order, payload, Some(UniqueKey::none()))
@@ -225,4 +237,9 @@ fn one_shot_order_commands_keep_their_delphi_retry_budget() {
         .expect("valid start metadata");
     assert_eq!(start_meta.max_retries, 4);
     assert_eq!(start_meta.u_key, UniqueKey::none());
+
+    let pending_meta = typed_send_metadata(Command::Order, &start_pending, Some(UniqueKey::none()))
+        .expect("valid pending start metadata");
+    assert_eq!(pending_meta.max_retries, 4);
+    assert_eq!(pending_meta.u_key, UniqueKey::none());
 }

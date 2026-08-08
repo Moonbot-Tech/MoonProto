@@ -86,8 +86,8 @@ pub use active_runtime::{
     MoonCandles, MoonChartAlerts, MoonChartText, MoonClient, MoonClientError, MoonClientEvent,
     MoonClientSnapshot, MoonEmulator, MoonEventQueue, MoonEventSink, MoonHistory, MoonOrders,
     MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade, NewOrderParams,
-    NewOrderTicket, OrderSide, OrderTarget, SellOrderParams, SplitOrderParams, TradesStreamMode,
-    VStopParams,
+    NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams, SellOrderParams, SplitOrderParams,
+    TradesStreamMode, VStopParams,
 };
 pub(crate) use candles::MergedCandles;
 pub(crate) use clock::set_ntp_offset;

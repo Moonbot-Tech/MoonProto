@@ -414,6 +414,8 @@ impl MarketHistoryStore {
                 last_prices: prices.len(),
                 liquidations: liquidations.len(),
             },
+            #[cfg(any(test, feature = "diagnostics"))]
+            apply_wall_micros: 0,
         }
     }
 

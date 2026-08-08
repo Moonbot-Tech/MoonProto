@@ -1714,6 +1714,30 @@ impl Session {
         ticket.request_uid
     }
 
+    fn send_new_pending_order(
+        &mut self,
+        market: &str,
+        is_short: bool,
+        trigger_price: f64,
+        order_size: f64,
+    ) -> u64 {
+        let ticket = self
+            .client
+            .trade()
+            .new_pending_order(moonproto::PendingOrderParams::new(
+                market,
+                if is_short {
+                    moonproto::OrderSide::Short
+                } else {
+                    moonproto::OrderSide::Long
+                },
+                trigger_price,
+                order_size,
+            ))
+            .expect("MoonClient new_pending_order must queue");
+        ticket.request_uid
+    }
+
     fn replace_order(&mut self, uid: u64, new_price: f64) -> bool {
         self.client.orders().move_order(uid, new_price).is_ok()
     }
@@ -1954,8 +1978,13 @@ fn assert_market_history_layout(
         "FireTest {market_name}: newest archive price {chart_price} is not plausible against current price {current_price} (ratio={ratio})"
     );
     println!(
-        "OK: chart archive market={} tapes=4 received={:?} applied={:?} current={:?} newest/current={:.6}",
-        market_name, summary.received, summary.retained, retained, ratio
+        "OK: chart archive market={} tapes=4 received={:?} retained={:?} current={:?} apply_wall={}us newest/current={:.6}",
+        market_name,
+        summary.received,
+        summary.retained,
+        retained,
+        summary.apply_wall_micros,
+        ratio
     );
 }
 
@@ -6185,6 +6214,36 @@ fn matching_new_order_uids(
         .collect()
 }
 
+fn matching_pending_order_uids(
+    session: &Session,
+    before_uids: &[u64],
+    market: &str,
+    is_short: bool,
+    trigger_price: f64,
+    requested_size_usd: f64,
+) -> Vec<u64> {
+    let price_tolerance = (trigger_price.abs() * 0.001).max(EPS);
+    let size_tolerance = (requested_size_usd.abs() * 0.25).max(EPS);
+    session
+        .state_snapshot()
+        .orders()
+        .iter()
+        .filter(|order| {
+            !before_uids.contains(&order.uid)
+                && order.market_name == market
+                && order.is_short == is_short
+                && order.strat_id == 0
+                && order.emulator_mode
+                && order.status == OrderWorkerStatus::None
+                && order
+                    .pending_buy_cond_price
+                    .is_some_and(|price| (price - trigger_price).abs() <= price_tolerance)
+                && (order.buy_size - requested_size_usd).abs() <= size_tolerance
+        })
+        .map(|order| order.uid)
+        .collect()
+}
+
 fn cancel_if_known(
     session: &mut Session,
     before_uids: &[u64],
@@ -7219,6 +7278,7 @@ fn wait_report_rows_deleted_echo_one(
 fn run_order_lifecycle_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
     let restore_emu_mode = ensure_server_emulator_mode(cfg, a, b);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_manual_pending_gate_body(cfg, a, b);
         let _ = run_order_lifecycle_gate_body(cfg, a, b);
     }));
     a.end_order_state_capture();
@@ -7227,6 +7287,118 @@ fn run_order_lifecycle_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) 
     if let Err(payload) = result {
         std::panic::resume_unwind(payload);
     }
+}
+
+fn run_manual_pending_gate_body(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
+    let market = &cfg.market;
+    let ask = market_live_ask(a, market)
+        .unwrap_or_else(|| panic!("FireTest pending order: no live price for {market}"));
+    let trigger_price = ask * 1.50;
+    let moved_trigger_price = ask * 1.60;
+    let before_uids = a
+        .state_snapshot()
+        .orders()
+        .iter()
+        .map(|order| order.uid)
+        .collect::<Vec<_>>();
+    let request_uid =
+        a.send_new_pending_order(market, false, trigger_price, FIRETEST_ORDER_SIZE_USD);
+    println!(
+        "FIRETEST pending order: sent request_uid={} market={} ask={:.8} trigger={:.8} size_usd={}",
+        request_uid, market, ask, trigger_price, FIRETEST_ORDER_SIZE_USD
+    );
+
+    assert!(
+        pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "manual pending creation broadcast",
+            |a, b| {
+                !matching_pending_order_uids(
+                    a,
+                    &before_uids,
+                    market,
+                    false,
+                    trigger_price,
+                    FIRETEST_ORDER_SIZE_USD,
+                )
+                .is_empty()
+                    && !matching_pending_order_uids(
+                        b,
+                        &before_uids,
+                        market,
+                        false,
+                        trigger_price,
+                        FIRETEST_ORDER_SIZE_USD,
+                    )
+                    .is_empty()
+            },
+        ),
+        "manual pending did not appear on both clients within {:?}",
+        cfg.connect_timeout
+    );
+    let candidates = matching_pending_order_uids(
+        a,
+        &before_uids,
+        market,
+        false,
+        trigger_price,
+        FIRETEST_ORDER_SIZE_USD,
+    );
+    assert_eq!(
+        candidates.len(),
+        1,
+        "manual pending correlation must be unique; candidates={candidates:?}"
+    );
+    let uid = candidates[0];
+
+    assert!(
+        a.replace_order(uid, moved_trigger_price),
+        "manual pending move did not pass the local order gate for uid={uid}"
+    );
+    assert!(
+        pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "manual pending trigger move broadcast",
+            |a, b| {
+                [a, b].into_iter().all(|session| {
+                    session
+                        .maybe_state_snapshot()
+                        .and_then(|snapshot| snapshot.orders().get(uid).cloned())
+                        .is_some_and(|order| {
+                            order.status == OrderWorkerStatus::None
+                                && order.pending_buy_cond_price.is_some_and(|price| {
+                                    (price - moved_trigger_price).abs()
+                                        <= moved_trigger_price * 0.001
+                                })
+                        })
+                })
+            },
+        ),
+        "manual pending uid={uid} did not retain the moved trigger on both clients"
+    );
+
+    assert!(
+        a.cancel_order(uid),
+        "manual pending cancel did not pass the local order gate for uid={uid}"
+    );
+    assert!(
+        pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "manual pending cancellation broadcast",
+            |a, b| !order_is_present(a, uid) && !order_is_present(b, uid),
+        ),
+        "manual pending uid={uid} was not removed from both clients"
+    );
+    println!(
+        "OK: manual pending uid={} created at {:.8}, moved to {:.8}, and cancelled without execution",
+        uid, trigger_price, moved_trigger_price
+    );
 }
 
 fn run_real_order_cancel_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {

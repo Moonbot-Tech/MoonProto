@@ -70,13 +70,20 @@ retained market handle (or a market name in scripts); canonical v4 commands
 serialize that market name directly:
 
 ```rust
-use moonproto::{ClosePositionParams, NewOrderParams, OrderSide, SplitOrderParams};
+use moonproto::{
+    ClosePositionParams, NewOrderParams, OrderSide, PendingOrderParams, SplitOrderParams,
+};
 
 let Some(snapshot) = client.snapshot() else { return; };
 let Some(market) = snapshot.markets().find("BTC") else { return; };
 
 let _ticket = client.trade().new_order(
-    NewOrderParams::for_market(&market, OrderSide::Long, 50_000.0, 0.001)
+    NewOrderParams::for_market(&market, OrderSide::Long, 50_000.0, 250.0)
+        .with_strategy_id(strategy_id),
+)?;
+
+let _pending_ticket = client.trade().new_pending_order(
+    PendingOrderParams::for_market(&market, OrderSide::Long, 49_000.0, 250.0)
         .with_strategy_id(strategy_id),
 )?;
 
@@ -123,10 +130,34 @@ order actions do not depend on those route bytes.
 Manual strategy mode is an application decision, matching MoonBot UI behavior.
 When settings say `use_manual_strategy` and the trader selected
 `manual_strategy_id`, pass that id with `NewOrderParams::with_strategy_id`.
-Leaving the strategy id empty means a pure manual order without strategy
-management; it is not the same as "manual order under the selected strategy".
+Leaving the strategy id empty sends zero and delegates to the core: when its
+manual-strategy mode is enabled, the core can attach the configured Manual
+strategy. Pass an explicit id when the terminal needs deterministic strategy
+ownership.
 If the manual strategy sell-percent control changes, send the retained strategy
 update through `client.strategies().sell_price_update(...)`.
+
+`new_pending_order` creates a pending inside the core. Its
+`trigger_price` is the watched condition, not the final exchange-order price;
+the core applies its configured pending spread when the trigger fires. The
+`size` uses the core account's balance currency (normally USD/USDT for a
+USD/USDT core), just like `new_order`.
+
+Without `with_strategy_id`, this command creates a bare pending and does not
+inherit the core's configured Manual strategy. With an explicit strategy id,
+the core retains that strategy as a candidate while the pending waits and
+attaches it only when the trigger fires. Consequently, the waiting order can
+still expose `strat_id = 0` in the order snapshot; the attached strategy becomes
+visible after the order enters its normal buy phase. `with_market_stop` affects
+only compatible candidates: Manual strategies use their own retained setting,
+UDP strategies use the command flag, and bare pending orders ignore it.
+
+The pending is published immediately with normal order state, so the terminal
+reads it from `snapshot().orders()`, then uses
+`client.orders().move_order(...)` or `cancel(...)` exactly as it does for any
+other retained order. A long trigger above the current price is a breakout
+pending; below the current price it is a pullback pending. Short triggers are
+mirrored.
 
 `new_order` returns a client-side ticket with an outbound/local
 `client_order_id`. The typed order stream does not echo this value, so it is not
@@ -182,7 +213,7 @@ the runtime applies it.
 - panic-sell methods update live local panic flags before sending. Turning off
   an auto-activated market panic also disables local stop-loss, trailing-stop,
   and VStop toggles while preserving their numeric settings.
-- `client.trade().new_order`, join/split/close/sell and MoveAll commands encode
+- `client.trade().new_order`, `new_pending_order`, join/split/close/sell and MoveAll commands encode
   canonical market-name payloads. Only the legacy `penalty` command derives a
   `TradeCtx` from the session route.
 - `move_all_sells` and `move_all_buys` read the live order state and send only

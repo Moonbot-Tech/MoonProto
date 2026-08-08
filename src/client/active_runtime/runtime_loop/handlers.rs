@@ -788,6 +788,22 @@ pub(super) fn handle_trade_action(
             );
             Ok(false)
         }
+        RuntimeTradeCommandKind::NewPendingOrder {
+            params,
+            request_uid,
+        } => {
+            client.new_pending_order(
+                request_uid,
+                &params.market,
+                params.side.is_short(),
+                params.trigger_price,
+                params.strategy_id.unwrap_or(0),
+                params.size,
+                params.planned_sell_price,
+                params.use_market_stop,
+            );
+            Ok(false)
+        }
         RuntimeTradeCommandKind::JoinOrders { market_name, side } => {
             client.join_orders(random_nonzero_u64(), &market_name, side.is_short());
             Ok(false)

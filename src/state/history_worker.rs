@@ -561,7 +561,22 @@ fn handle_worker_command(
             *last_now_time = now_time;
             let result = registry
                 .get_mut(&market_name)
-                .map(|store| store.merge_market_history_archive(&archive, now_time))
+                .map(|store| {
+                    #[cfg(any(test, feature = "diagnostics"))]
+                    let started = Instant::now();
+                    let summary = store.merge_market_history_archive(&archive, now_time);
+                    #[cfg(any(test, feature = "diagnostics"))]
+                    {
+                        let mut summary = summary;
+                        summary.apply_wall_micros =
+                            started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+                        summary
+                    }
+                    #[cfg(not(any(test, feature = "diagnostics")))]
+                    {
+                        summary
+                    }
+                })
                 .ok_or_else(|| {
                     format!("retained history is not configured for market {market_name}")
                 });

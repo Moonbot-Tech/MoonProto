@@ -158,6 +158,10 @@ pub(super) enum RuntimeTradeCommandKind {
         params: NewOrderParams,
         request_uid: u64,
     },
+    NewPendingOrder {
+        params: PendingOrderParams,
+        request_uid: u64,
+    },
     JoinOrders {
         market_name: String,
         side: OrderSide,
@@ -298,6 +302,7 @@ impl RuntimeTradeCommandKind {
     fn profile_source(&self) -> (u8, usize) {
         match self {
             Self::NewOrder { .. } => (80, 1),
+            Self::NewPendingOrder { .. } => (92, 1),
             Self::JoinOrders { .. } => (81, 1),
             Self::SplitOrder(_) => (82, 1),
             Self::MoveAllSells { .. } => (83, 1),
