@@ -81,6 +81,10 @@ pub(super) enum UiRuntimeCommand {
     SettingsRequest,
     MmSubscribe(bool),
     SendSettings(crate::commands::ui::ClientSettingsCommand),
+    /// Request the kernel's current safe-share config (CmdId=29).
+    SharedConfigRequest,
+    /// Send a gzip safe-share payload for the kernel to apply (CmdId=28).
+    SendSharedConfig(Vec<u8>),
     UpdateVersion {
         version_name: String,
         is_release: bool,
@@ -267,6 +271,8 @@ impl UiRuntimeCommand {
             Self::RestartNow => (35, 0),
             Self::KernelLicenseStateRequest => (36, 0),
             Self::AutoDetect(_) => (37, 0),
+            Self::SharedConfigRequest => (38, 0),
+            Self::SendSharedConfig(data) => (39, data.len()),
         }
     }
 }

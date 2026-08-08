@@ -1253,3 +1253,39 @@ fn version_gate_returns_skipped() {
         _ => panic!("wrong variant"),
     }
 }
+
+#[test]
+fn shared_config_roundtrip() {
+    let blob = vec![0x1F, 0x8B, 0x08, 0x00, 0x42, 0x07];
+    let raw = build_shared_config_blob(5, &blob);
+    match UICommand::parse(&raw).unwrap() {
+        UICommand::SharedConfig(c) => assert_eq!(c.data, blob),
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
+fn shared_config_oversized_len_rejected() {
+    let mut raw = build_shared_config_blob(5, &[1, 2, 3]);
+    // Corrupt the u32 length field (right after the 11-byte header) to claim
+    // far more bytes than the payload carries.
+    raw[11..15].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(UICommand::parse(&raw).is_none());
+}
+
+#[test]
+fn shared_config_truncated_tail_is_zero_filled() {
+    let mut raw = build_shared_config_blob(5, &[1, 2, 3]);
+    raw[11..15].copy_from_slice(&6_u32.to_le_bytes());
+    match UICommand::parse(&raw).unwrap() {
+        UICommand::SharedConfig(c) => assert_eq!(c.data, vec![1, 2, 3, 0, 0, 0]),
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
+fn shared_config_request_header_only() {
+    let raw = build_shared_config_request(77);
+    assert_eq!(raw.len(), 11);
+    assert_eq!(raw[0], CMD_SHARED_CONFIG_REQUEST);
+}

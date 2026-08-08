@@ -22,6 +22,22 @@ impl Client {
     }
 
     #[doc(hidden)]
+    /// Send `TSharedConfigCommand` (UI CmdId=28, Sliced, `UK_SharedConfig`)
+    /// with a gzip safe-share payload for the kernel to apply.
+    pub(crate) fn ui_send_shared_config(&self, data: &[u8]) {
+        let raw = crate::commands::ui::build_shared_config_blob(rand::random(), data);
+        self.send_typed_domain_cmd(raw, Command::UI);
+    }
+
+    #[doc(hidden)]
+    /// Send `TSharedConfigRequest` (UI CmdId=29, High) to request the kernel's
+    /// current safe-share config.
+    pub(crate) fn ui_shared_config_request(&self) {
+        let raw = crate::commands::ui::build_shared_config_request(rand::random());
+        self.send_typed_domain_cmd(raw, Command::UI);
+    }
+
+    #[doc(hidden)]
     /// Send `TSettingsRequest` (UI CmdId=2, High) to request current settings.
     pub(crate) fn ui_settings_request(&self) {
         let raw = crate::commands::ui::build_settings_request(rand::random());

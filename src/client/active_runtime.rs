@@ -813,6 +813,16 @@ impl MoonClient {
         self.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::AutoDetect(active)))
     }
 
+    /// Request the kernel's current safe-share config snapshot.
+    pub(crate) fn request_shared_config(&self) -> Result<(), MoonClientError> {
+        self.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::SharedConfigRequest))
+    }
+
+    /// Send a safe-share config blob (gzip MBSP payload) to apply on the kernel.
+    pub(crate) fn send_shared_config_blob(&self, data: Vec<u8>) -> Result<(), MoonClientError> {
+        self.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::SendSharedConfig(data)))
+    }
+
     /// Send a full client-settings snapshot.
     pub(crate) fn send_settings(
         &self,

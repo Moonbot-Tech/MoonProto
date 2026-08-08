@@ -534,6 +534,14 @@ fn handle_ui_command(
             sync_runtime_trade_storage_scope(client, dispatcher);
             false
         }
+        UiRuntimeCommand::SharedConfigRequest => {
+            client.ui_shared_config_request();
+            false
+        }
+        UiRuntimeCommand::SendSharedConfig(data) => {
+            client.ui_send_shared_config(&data);
+            false
+        }
         UiRuntimeCommand::SendSettings(settings) => {
             client.ui_send_settings(&settings);
             false

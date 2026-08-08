@@ -36,6 +36,7 @@ pub(super) fn runtime_loop(
     let mut startup = Some(RuntimeInitMachine::new(connect, &mut dispatcher));
     let startup_started_at = Instant::now();
     let mut dispatch_buffers = InlineDispatchBuffers::default();
+    let mut shared_config_refresh = SharedConfigRefresh::default();
     loop {
         #[cfg(any(test, feature = "diagnostics"))]
         let command_drain_start = Instant::now();
@@ -238,6 +239,9 @@ pub(super) fn runtime_loop(
                 || transfer_assets_changed
                 || account_changed
         };
+        if startup.is_none() {
+            shared_config_refresh.poll(&client, &dispatcher);
+        }
         if state_changed && startup.is_none() {
             publish_snapshot_profiled(&client, &dispatcher, &snapshot);
         }
@@ -281,6 +285,49 @@ pub(super) fn runtime_loop(
         }
         if stop {
             break;
+        }
+    }
+}
+
+const SHARED_CONFIG_RETRY_MS: i64 = 5_000;
+
+#[derive(Default)]
+struct SharedConfigRefresh {
+    observed_revision: u64,
+    received_server_token: u64,
+    requested_server_token: u64,
+    last_request_ms: i64,
+}
+
+impl SharedConfigRefresh {
+    fn observe(&mut self, revision: u64, server_token: u64) {
+        if revision != 0 && revision != self.observed_revision {
+            self.observed_revision = revision;
+            self.received_server_token = server_token;
+        }
+    }
+
+    fn request_due(&self, server_token: u64, now_ms: i64) -> bool {
+        server_token != 0
+            && self.received_server_token != server_token
+            && (self.requested_server_token != server_token
+                || (now_ms - self.last_request_ms).abs() >= SHARED_CONFIG_RETRY_MS)
+    }
+
+    fn mark_requested(&mut self, server_token: u64, now_ms: i64) {
+        self.requested_server_token = server_token;
+        self.last_request_ms = now_ms;
+    }
+
+    fn poll(&mut self, client: &Client, dispatcher: &crate::events::EventDispatcher) {
+        self.observe(
+            dispatcher.settings.shared_config_revision(),
+            client.server_token,
+        );
+        let now_ms = client.now_ms();
+        if self.request_due(client.server_token, now_ms) {
+            client.ui_shared_config_request();
+            self.mark_requested(client.server_token, now_ms);
         }
     }
 }
@@ -386,6 +433,28 @@ mod tests {
         OrderImage, OrderWorkerStatus, StopSettings, TradeCommand, ORDER_SECTION_ALL_MASK,
     };
     use crate::state::ExchangeKind;
+
+    #[test]
+    fn shared_config_refresh_is_immediate_then_retries_every_five_seconds() {
+        let mut refresh = SharedConfigRefresh::default();
+        let token = 0x1234;
+
+        assert!(refresh.request_due(token, 1_000));
+        refresh.mark_requested(token, 1_000);
+        assert!(!refresh.request_due(token, 5_999));
+        assert!(refresh.request_due(token, 6_000));
+    }
+
+    #[test]
+    fn shared_config_refresh_is_level_triggered_by_server_token() {
+        let mut refresh = SharedConfigRefresh::default();
+        refresh.observe(1, 0x1111);
+        assert!(!refresh.request_due(0x1111, 10_000));
+        assert!(refresh.request_due(0x2222, 10_000));
+
+        refresh.observe(2, 0x2222);
+        assert!(!refresh.request_due(0x2222, 10_000));
+    }
 
     fn dummy_cfg() -> ClientConfig {
         ClientConfig {

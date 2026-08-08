@@ -442,6 +442,8 @@ pub enum MoonClientError {
     TradeContext(TradeContextError),
     /// Retained state required to build a high-level command is not ready yet.
     StateUnavailable(&'static str),
+    /// A full shared configuration is malformed or exceeds protocol bounds.
+    InvalidSharedConfig(crate::shared_config::SharedConfigError),
     /// A user-facing market name could not be resolved to the active market map.
     UnknownMarket(String),
     /// A UI emulator command cannot fit the wire `Word Count` field.
@@ -464,6 +466,7 @@ impl std::fmt::Display for MoonClientError {
             Self::RequestDisconnected => write!(f, "MoonProto request channel disconnected"),
             Self::TradeContext(err) => write!(f, "{err}"),
             Self::StateUnavailable(reason) => write!(f, "MoonProto state is unavailable: {reason}"),
+            Self::InvalidSharedConfig(err) => write!(f, "invalid MoonProto shared config: {err}"),
             Self::UnknownMarket(market) => write!(f, "MoonProto market is unknown: {market}"),
             Self::TooManyEmuTradePoints(count) => {
                 write!(
@@ -491,6 +494,7 @@ impl std::error::Error for MoonClientError {
         match self {
             Self::Connect(err) => Some(err),
             Self::TradeContext(err) => Some(err),
+            Self::InvalidSharedConfig(err) => Some(err),
             Self::RequestTimeout
             | Self::RequestDisconnected
             | Self::StateUnavailable(_)

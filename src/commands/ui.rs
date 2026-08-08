@@ -26,6 +26,10 @@
 //! - 23 — `TKernelLicenseStateRequest` (High, request license/MoonCredits state)
 //! - 24 — `TProfitStateCommand`     (High, current report/profit counters)
 //! - 25 — `TAutoDetectCommand`       (High, set AutoDetect/passive-mode state)
+//! - 26 — `TNewsRelayCommand`       (news frame/tags relay)
+//! - 27 — `TNewsHistoryCommand`     (Sliced, UK_NewsHistory, startup news history)
+//! - 28 — `TSharedConfigCommand`    (Sliced, UK_SharedConfig, gzip safe-share payload)
+//! - 29 — `TSharedConfigRequest`    (empty, request the kernel's safe-share config)
 //!
 //! ## ASCfg / ASCfg2 blobs
 //! `TAutoStartConfig` (104 bytes) and `TAutoStartConfig2` (168 bytes) are
@@ -62,8 +66,9 @@ pub(crate) use builders::{
     build_chart_text_state, build_client_settings, build_emu_trades,
     build_kernel_license_state_request, build_lev_manage, build_mm_orders_subscribe,
     build_orders_history_request, build_reset_profit, build_restart_now, build_settings_request,
-    build_strat_start_stop, build_strat_start_stop_v2, build_switch_dex, build_switch_spot,
-    build_trigger_manage, build_update_version,
+    build_shared_config_blob, build_shared_config_request, build_strat_start_stop,
+    build_strat_start_stop_v2, build_switch_dex, build_switch_spot, build_trigger_manage,
+    build_update_version,
 };
 
 // --- CmdId constants ---
@@ -94,6 +99,8 @@ const CMD_PROFIT_STATE: u8 = 24;
 const CMD_AUTO_DETECT: u8 = 25;
 const CMD_NEWS_RELAY: u8 = 26;
 const CMD_NEWS_HISTORY: u8 = 27;
+const CMD_SHARED_CONFIG: u8 = 28;
+const CMD_SHARED_CONFIG_REQUEST: u8 = 29;
 
 pub(crate) const NEWS_RELAY_KIND_NEWS: u8 = 0;
 pub(crate) const NEWS_RELAY_KIND_TAGS: u8 = 1;
@@ -1242,6 +1249,15 @@ pub(crate) struct NewsHistoryCommand {
     pub(crate) tags: Vec<u8>,
 }
 
+/// CmdId=28 `TSharedConfigCommand` — gzip-compressed safe-share payload
+/// (see [`crate::shared_config`]). Kernel -> terminal carries the kernel's
+/// current config (request reply / post-apply re-broadcast); terminal ->
+/// kernel means "apply this config".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SharedConfigCommand {
+    pub(crate) data: Vec<u8>,
+}
+
 /// Trigger-management action used by
 /// [`crate::MoonSettings::set_triggers_for_markets`],
 /// [`crate::MoonSettings::clear_triggers_for_markets`], and the all-market
@@ -1639,6 +1655,7 @@ pub enum UICommand {
     AutoDetect(AutoDetectCommand),
     NewsRelay(NewsRelayCommand),
     NewsHistory(NewsHistoryCommand),
+    SharedConfig(SharedConfigCommand),
     /// Command header is well-formed, but the command version is newer than
     /// this library can parse. The command is skipped without state changes.
     Skipped {

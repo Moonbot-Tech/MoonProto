@@ -174,6 +174,7 @@ Public API notes live in [`docs/`](docs). Start here:
 | Doc | Topic |
 |---|---|
 | [terminal features](docs/features.md) | Common MoonBot feature names, their meaning, and the high-level API that implements them. |
+| [shared configuration](docs/shared_config.md) | Read, edit, apply, and share the core's full portable settings snapshot. |
 | [overview](docs/overview.md) | The big picture. |
 | [client](docs/client.md) | `MoonClient` and the owned runtime. |
 | [events](docs/events.md) · [lifecycle](docs/lifecycle.md) | Events, snapshots, and session lifecycle. |
@@ -183,7 +184,7 @@ Public API notes live in [`docs/`](docs). Start here:
 | [engine_api](docs/engine_api.md) · [strats](docs/strats.md) | Server/exchange mutations and strategies. |
 | [time](docs/time.md) · [multi_server](docs/multi_server.md) | Clock handling and multi-server setups. |
 
-Additional topics: [`active_lib`](docs/active_lib.md), [`arb`](docs/arb.md), [`balances`](docs/balances.md), [`trade_actions`](docs/trade_actions.md), [`ui`](docs/ui.md).
+Additional topics: [`active_lib`](docs/active_lib.md), [`arb`](docs/arb.md), [`balances`](docs/balances.md), [`shared_config`](docs/shared_config.md), [`trade_actions`](docs/trade_actions.md), [`ui`](docs/ui.md).
 
 ## Build & Test
 

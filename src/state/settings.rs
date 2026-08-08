@@ -44,6 +44,12 @@ pub struct SettingsState {
     client_settings_fallback: ClientSettingsCommand,
     /// Current leverage-management settings, if received.
     pub lev_manage: Option<LevManage>,
+    /// Kernel's last safe-share config snapshot, if received.
+    pub shared_config: Option<crate::shared_config::SharedConfig>,
+    update_revision: u64,
+    client_settings_revision: u64,
+    lev_manage_revision: u64,
+    shared_config_revision: u64,
     /// Current market-runtime/passive-mode state, if received.
     pub runtime_state: Option<RuntimeStateCommand>,
     /// Current license/module/MoonCredits state, if received.
@@ -67,6 +73,9 @@ pub enum SettingsEvent {
     ClientSettingsUpdated,
     /// Leverage-management snapshot changed.
     LevManageUpdated,
+    /// Kernel safe-share config snapshot updated (see
+    /// `snapshot().settings().shared_config`).
+    SharedConfigUpdated,
     /// MoonBot core runtime/passive-mode state changed.
     RuntimeStateUpdated,
     /// License/module/MoonCredits state changed.
@@ -133,6 +142,63 @@ impl SettingsState {
         &self.client_settings_fallback
     }
 
+    fn next_update_revision(&mut self) -> u64 {
+        self.update_revision = self.update_revision.wrapping_add(1).max(1);
+        self.update_revision
+    }
+
+    pub(crate) fn shared_config_revision(&self) -> u64 {
+        self.shared_config_revision
+    }
+
+    pub(crate) fn build_shared_config(&self) -> Option<crate::shared_config::SharedConfig> {
+        let mut cfg = self.shared_config.clone()?;
+        if self.client_settings_revision > self.shared_config_revision {
+            if let Some(settings) = &self.client_settings {
+                cfg.absorb_client_settings_raw(
+                    settings.x_sell,
+                    settings.x_sell_scalp,
+                    settings.x_tmode,
+                    settings.fixed_sell_mode,
+                    settings.fixed_sell_price,
+                    settings.price_drop_level,
+                    settings.trailing_drop,
+                    settings.trailing_stop,
+                    settings.g_take_profit,
+                    settings.use_g_take_profit,
+                    settings.panic_if_price_drop,
+                    settings.buy_iceberg,
+                    settings.sell_iceberg,
+                    settings.sign_orders,
+                    &settings.coins_black_list_text,
+                    settings.use_coins_black_list,
+                    settings.use_manual_strategy,
+                    settings.free_position_check,
+                    settings.vol_drop_level,
+                    settings.use_stop_market,
+                    &settings.s_price,
+                    settings.sb_num,
+                    settings.join_sell_kind,
+                );
+            }
+        }
+        if self.lev_manage_revision > self.shared_config_revision {
+            if let Some(lev) = &self.lev_manage {
+                cfg.absorb_lev_manage_raw(
+                    lev.auto_max_order,
+                    lev.auto_lev_up,
+                    lev.auto_isolated,
+                    lev.auto_cross,
+                    lev.auto_fix_lev,
+                    lev.fix_lev,
+                    lev.tlg_report,
+                    &lev.lev_control,
+                );
+            }
+        }
+        Some(cfg)
+    }
+
     /// Apply an inbound UI command to retained state.
     ///
     /// Returns `None` for internal commands that have no public settings event.
@@ -142,8 +208,28 @@ impl SettingsState {
                 let settings = *c;
                 self.client_settings_fallback = settings.clone();
                 self.client_settings = Some(settings);
+                self.client_settings_revision = self.next_update_revision();
                 Some(SettingsEvent::ClientSettingsUpdated)
             }
+            UICommand::SharedConfig(c) => {
+                match crate::shared_config::gzip_decompress(&c.data)
+                    .and_then(|payload| crate::shared_config::parse_payload(&payload))
+                {
+                    Ok(cfg) => {
+                        self.shared_config = Some(cfg);
+                        self.shared_config_revision = self.next_update_revision();
+                        Some(SettingsEvent::SharedConfigUpdated)
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            target: "moonproto::shared_config",
+                            "rejected invalid shared-config snapshot: {err}"
+                        );
+                        None
+                    }
+                }
+            }
+
             UICommand::SettingsRequest { .. }
             | UICommand::StratStartStop(_)
             | UICommand::StratStartStopV2(_)
@@ -175,6 +261,7 @@ impl SettingsState {
 
             UICommand::LevManage(l) => {
                 self.lev_manage = Some(l);
+                self.lev_manage_revision = self.next_update_revision();
                 Some(SettingsEvent::LevManageUpdated)
             }
 
@@ -233,6 +320,13 @@ impl SettingsState {
 mod tests {
     use super::*;
     use crate::commands::ui::*;
+
+    fn apply_shared_config(st: &mut SettingsState, cfg: &crate::shared_config::SharedConfig) {
+        let payload = crate::shared_config::serialize_payload(cfg).unwrap();
+        let data = crate::shared_config::gzip_compress(&payload).unwrap();
+        let event = st.apply(UICommand::SharedConfig(SharedConfigCommand { data }));
+        assert!(matches!(event, Some(SettingsEvent::SharedConfigUpdated)));
+    }
 
     #[test]
     fn client_settings_stores_snapshot() {
@@ -341,6 +435,92 @@ mod tests {
         let _ = st.apply(UICommand::LevManage(lm));
         assert!(st.lev_manage.is_some());
         assert_eq!(st.lev_manage.as_ref().unwrap().fix_lev, 10);
+    }
+
+    #[test]
+    fn shared_config_builder_requires_a_real_full_snapshot() {
+        assert!(SettingsState::new().build_shared_config().is_none());
+    }
+
+    #[test]
+    fn full_snapshot_supersedes_older_compact_settings() {
+        let mut st = SettingsState::new();
+        let compact = ClientSettingsCommand {
+            x_sell: 25,
+            ..ClientSettingsCommand::default()
+        };
+        st.apply(UICommand::ClientSettings(Box::new(compact)));
+
+        let mut full = crate::shared_config::SharedConfig::default();
+        full.trading.x_sell = 75;
+        apply_shared_config(&mut st, &full);
+
+        assert_eq!(st.build_shared_config().unwrap().trading.x_sell, 75);
+    }
+
+    #[test]
+    fn newer_compact_settings_are_overlaid_on_the_full_snapshot() {
+        let mut st = SettingsState::new();
+        let mut full = crate::shared_config::SharedConfig::default();
+        full.trading.x_sell = 75;
+        apply_shared_config(&mut st, &full);
+
+        let compact = ClientSettingsCommand {
+            x_sell: 25,
+            ..ClientSettingsCommand::default()
+        };
+        st.apply(UICommand::ClientSettings(Box::new(compact)));
+
+        assert_eq!(st.build_shared_config().unwrap().trading.x_sell, 25);
+    }
+
+    #[test]
+    fn leverage_overlay_uses_the_same_receive_order_rule() {
+        let mut st = SettingsState::new();
+        st.apply(UICommand::LevManage(LevManage {
+            uid: 1,
+            cmd_ver: 1,
+            auto_max_order: false,
+            auto_lev_up: false,
+            auto_isolated: false,
+            auto_cross: false,
+            fix_lev: 12,
+            auto_fix_lev: true,
+            tlg_report: false,
+            lev_control: String::new(),
+        }));
+        let mut full = crate::shared_config::SharedConfig::default();
+        full.trading.auto_manage_lev.fix_lev = 20;
+        apply_shared_config(&mut st, &full);
+        assert_eq!(
+            st.build_shared_config()
+                .unwrap()
+                .trading
+                .auto_manage_lev
+                .fix_lev,
+            20
+        );
+
+        st.apply(UICommand::LevManage(LevManage {
+            uid: 2,
+            cmd_ver: 1,
+            auto_max_order: false,
+            auto_lev_up: false,
+            auto_isolated: false,
+            auto_cross: false,
+            fix_lev: 15,
+            auto_fix_lev: true,
+            tlg_report: false,
+            lev_control: String::new(),
+        }));
+        assert_eq!(
+            st.build_shared_config()
+                .unwrap()
+                .trading
+                .auto_manage_lev
+                .fix_lev,
+            15
+        );
     }
 
     #[test]

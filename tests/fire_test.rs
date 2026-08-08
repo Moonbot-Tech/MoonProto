@@ -78,6 +78,7 @@ use moonproto::commands::{
     RequestCandlesMarket,
 };
 use moonproto::events::Event;
+use moonproto::shared_config::SharedConfig;
 use moonproto::state::{
     ApplyResult, BalanceEvent, LastPricePoint, MarkPricePoint, MarketHistoryApplySummary,
     MarketHistoryCounts, MarketHistoryEvent, MarketPrice, MiniCandle, Order, OrderBookEvent,
@@ -7629,6 +7630,135 @@ fn wait_ui_runtime_state(cfg: &FireConfig, a: &mut Session, b: &mut Session) -> 
     a_state
 }
 
+fn retained_shared_config(session: &Session) -> Option<SharedConfig> {
+    session
+        .maybe_state_snapshot()
+        .and_then(|snapshot| snapshot.settings().shared_config.clone())
+}
+
+fn run_shared_config_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
+    assert!(
+        pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "automatic shared-config initialization",
+            |a, b| retained_shared_config(a).is_some() && retained_shared_config(b).is_some()
+        ),
+        "FireTest shared config was not received automatically by both clients within {:?}",
+        cfg.connect_timeout
+    );
+
+    let original = a
+        .client
+        .settings()
+        .build_shared_config()
+        .expect("shared config received by A must be editable");
+    let b_original = b
+        .client
+        .settings()
+        .build_shared_config()
+        .expect("shared config received by B must be editable");
+    assert_eq!(
+        original.trading.x_sell, b_original.trading.x_sell,
+        "both clients must receive the same Trading shared config"
+    );
+    assert_eq!(
+        original.visual.chart_time_scale, b_original.visual.chart_time_scale,
+        "both clients must receive the same Visual shared config"
+    );
+
+    let mut changed = original.clone();
+    changed.trading.x_sell = changed.trading.x_sell.saturating_add(1);
+    if changed.trading.x_sell == original.trading.x_sell {
+        changed.trading.x_sell = original.trading.x_sell.saturating_sub(1);
+    }
+    changed.visual.chart_time_scale = changed.visual.chart_time_scale.saturating_add(1);
+    if changed.visual.chart_time_scale == original.visual.chart_time_scale {
+        changed.visual.chart_time_scale = original.visual.chart_time_scale.saturating_sub(1);
+    }
+
+    let changed_x_sell = changed.trading.x_sell;
+    let changed_time_scale = changed.visual.chart_time_scale;
+    let mutation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        a.client
+            .settings()
+            .send_shared_config(&changed)
+            .expect("shared-config mutation must queue");
+        assert!(
+            pump_pair_until_sessions(
+                a,
+                b,
+                cfg.connect_timeout,
+                "shared-config mutation broadcast",
+                |a, b| {
+                    [a, b].into_iter().all(|session| {
+                        let Some(snapshot) = session.maybe_state_snapshot() else {
+                            return false;
+                        };
+                        let settings = snapshot.settings();
+                        settings.shared_config.as_ref().is_some_and(|shared| {
+                            shared.trading.x_sell == changed_x_sell
+                                && shared.visual.chart_time_scale == changed_time_scale
+                        }) && settings
+                            .client_settings
+                            .as_ref()
+                            .is_some_and(|compact| compact.x_sell == changed_x_sell)
+                    })
+                }
+            ),
+            "shared-config mutation was not applied and broadcast to both clients"
+        );
+
+        for session in [&*a, &*b] {
+            let built = session
+                .client
+                .settings()
+                .build_shared_config()
+                .expect("mutated shared config must remain editable");
+            assert_eq!(built.trading.x_sell, changed_x_sell);
+            assert_eq!(built.visual.chart_time_scale, changed_time_scale);
+        }
+    }));
+
+    a.client
+        .settings()
+        .send_shared_config(&original)
+        .expect("shared-config restore must queue");
+    assert!(
+        pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "shared-config restore broadcast",
+            |a, b| {
+                [a, b].into_iter().all(|session| {
+                    let Some(snapshot) = session.maybe_state_snapshot() else {
+                        return false;
+                    };
+                    let settings = snapshot.settings();
+                    settings.shared_config.as_ref().is_some_and(|shared| {
+                        shared.trading.x_sell == original.trading.x_sell
+                            && shared.visual.chart_time_scale == original.visual.chart_time_scale
+                    }) && settings
+                        .client_settings
+                        .as_ref()
+                        .is_some_and(|compact| compact.x_sell == original.trading.x_sell)
+                })
+            }
+        ),
+        "shared-config restore was not applied and broadcast to both clients"
+    );
+
+    println!(
+        "OK: shared config auto-init, Trading/Visual mutation, compact echo, and restore passed (core_config_version={})",
+        original.core_config_version()
+    );
+    if let Err(payload) = mutation {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 fn run_auto_detect_echo_gate(cfg: &FireConfig, a: &mut Session, initial: RuntimeStateProbe) {
     let before = a.snapshot().runtime_state_events;
     a.client
@@ -8758,6 +8888,7 @@ fn fire_test_active_library_health() {
     );
     let _a_initial_settings = request_settings_until(&mut a, cfg.connect_timeout);
     let _b_initial_settings = request_settings_until(&mut b, cfg.connect_timeout);
+    run_shared_config_gate(&cfg, &mut a, &mut b);
     let initial_runtime_state = wait_ui_runtime_state(&cfg, &mut a, &mut b);
     run_auto_detect_echo_gate(&cfg, &mut a, initial_runtime_state);
     run_kernel_license_state_gate(&cfg, &mut a, &mut b);

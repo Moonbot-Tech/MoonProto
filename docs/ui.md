@@ -65,6 +65,10 @@ subscription, emulator ticks, trigger management, reset-profit, restart-now, and
 DEX/spot switching are sent through high-level handles; they are not inbound
 settings state.
 
+The separate full portable settings snapshot is documented in
+[shared configuration](shared_config.md). It is requested in the background and
+does not delay `Ready`.
+
 ## Requesting Current Settings
 
 For UI code, use `client.settings().refresh()`. It queues a settings refresh

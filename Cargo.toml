@@ -28,6 +28,7 @@ zerocopy = { version = "0.8.48", features = ["derive"] }
 polling = "3.11.0"
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 crc32c = "0.6"
+crc32fast = "1"
 zeroize = "1.8"
 sysinfo = "0.33.1"
 im = "15.1"

@@ -366,3 +366,21 @@ pub(crate) fn build_auto_detect(uid: u64, active: bool) -> Vec<u8> {
     out.push(active as u8);
     out
 }
+
+/// CmdId=28 `TSharedConfigCommand` with a gzip safe-share payload.
+#[doc(hidden)]
+pub(crate) fn build_shared_config_blob(uid: u64, data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(11 + 4 + data.len());
+    write_header(&mut out, CMD_SHARED_CONFIG, uid);
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(data);
+    out
+}
+
+/// CmdId=29 `TSharedConfigRequest` (empty).
+#[doc(hidden)]
+pub(crate) fn build_shared_config_request(uid: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(11);
+    write_header(&mut out, CMD_SHARED_CONFIG_REQUEST, uid);
+    out
+}

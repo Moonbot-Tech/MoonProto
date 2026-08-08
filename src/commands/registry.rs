@@ -59,6 +59,8 @@ pub(crate) const UK_ORDER_CMD_PANIC: u8 = 25;
 pub(crate) const UK_ORDER_CMD_IMMUNE: u8 = 26;
 /// `UK_NewsHistory`: one targeted startup history per client id.
 pub(crate) const UK_NEWS_HISTORY: u8 = 27;
+/// `UK_SharedConfig`: singleton safe-share config snapshot key.
+pub(crate) const UK_SHARED_CONFIG: u8 = 28;
 
 /// Send priority as protocol metadata, independent from the concrete client
 /// queue implementation. Conversion to `SendPriority` happens at the send edge.
@@ -685,6 +687,25 @@ pub(crate) const UI_COMMANDS: &[CommandDescriptor] = &[
         ukey = UKeyRule::SendContextClientId,
         direction = Inbound
     ),
+    cmd_desc!(
+        Command::UI,
+        28,
+        "TSharedConfigCommand",
+        base = Base,
+        priority = Sliced,
+        retries = None,
+        unique = UK_SHARED_CONFIG,
+        ukey = UKeyRule::Singleton(1),
+        direction = Both
+    ),
+    cmd_desc!(
+        Command::UI,
+        29,
+        "TSharedConfigRequest",
+        base = Base,
+        priority = High,
+        direction = Outbound
+    ),
 ];
 
 pub(crate) const STRAT_COMMANDS: &[CommandDescriptor] = &[
@@ -993,7 +1014,7 @@ mod tests {
     #[test]
     fn descriptor_map_covers_known_typed_domains() {
         assert_eq!(ORDER_COMMANDS.len(), 24);
-        assert_eq!(UI_COMMANDS.len(), 28);
+        assert_eq!(UI_COMMANDS.len(), 30);
         assert_eq!(STRAT_COMMANDS.len(), 11);
         assert_eq!(BALANCE_COMMANDS.len(), 7);
         assert_eq!(API_COMMANDS.len(), 5);

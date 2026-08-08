@@ -863,6 +863,57 @@ impl MoonSettings<'_> {
         self.client.send_settings(settings)
     }
 
+    /// Request the kernel's current safe-share config and return immediately.
+    ///
+    /// Completion arrives as `Event::Settings(SettingsEvent::SharedConfigUpdated)`;
+    /// the latest snapshot is readable through `snapshot().settings().shared_config`.
+    pub fn refresh_shared_config(&self) -> Result<(), MoonClientError> {
+        self.client.request_shared_config()
+    }
+
+    /// Send a safe-share config for the kernel to apply.
+    ///
+    /// After applying, the kernel re-broadcasts both the fresh shared config
+    /// and the client-settings snapshot; retained state catches up through the
+    /// normal event path — do not overlay local state manually.
+    pub fn send_shared_config(
+        &self,
+        cfg: &crate::shared_config::SharedConfig,
+    ) -> Result<(), MoonClientError> {
+        let payload = crate::shared_config::serialize_payload(cfg)
+            .map_err(MoonClientError::InvalidSharedConfig)?;
+        let blob = crate::shared_config::gzip_compress(&payload)
+            .map_err(MoonClientError::InvalidSharedConfig)?;
+        self.client.send_shared_config_blob(blob)
+    }
+
+    /// Build an editable [`crate::shared_config::SharedConfig`] from the latest
+    /// full snapshot received from the core.
+    ///
+    /// The runtime requests that snapshot in the background after `Ready` and
+    /// retries every five seconds until it arrives. This method returns
+    /// [`MoonClientError::StateUnavailable`] before the first valid full
+    /// snapshot instead of inventing defaults that could overwrite live core
+    /// settings. Compact settings received after the full snapshot are overlaid
+    /// before the value is returned.
+    ///
+    /// `manual_strategy` is not resolved from `manual_strategy_id` here (the
+    /// share format stores the strategy name); the base value is kept.
+    pub fn build_shared_config(
+        &self,
+    ) -> Result<crate::shared_config::SharedConfig, MoonClientError> {
+        let snapshot = self
+            .client
+            .snapshot()
+            .ok_or(MoonClientError::StateUnavailable("snapshot is not ready"))?;
+        snapshot
+            .settings()
+            .build_shared_config()
+            .ok_or(MoonClientError::StateUnavailable(
+                "shared config has not been received yet",
+            ))
+    }
+
     /// Exclude globally blacklisted coins from `markets().global_deltas()`.
     ///
     /// This is the local terminal checkbox "Exclude blacklisted markets from

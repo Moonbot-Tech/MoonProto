@@ -150,6 +150,7 @@ pub mod ntp;
 #[cfg(not(feature = "diagnostics"))]
 #[allow(dead_code, unreachable_pub)]
 mod ntp;
+pub mod shared_config;
 pub mod state;
 pub mod time;
 

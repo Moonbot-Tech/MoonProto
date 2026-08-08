@@ -400,6 +400,7 @@ dependencies = [
  "aes-gcm",
  "base64",
  "crc32c",
+ "crc32fast",
  "flate2",
  "im",
  "libc",

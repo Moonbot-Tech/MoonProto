@@ -348,6 +348,15 @@ impl UICommand {
                 Some(UICommand::NewsHistory(NewsHistoryCommand { frames, tags }))
             }
 
+            CMD_SHARED_CONFIG => {
+                let len = read_u32_zero_tail(payload, &mut pos) as usize;
+                if len > crate::shared_config::MAX_COMPRESSED_SIZE {
+                    return None;
+                }
+                let data = read_bytes_zero_tail(payload, &mut pos, len)?;
+                Some(UICommand::SharedConfig(SharedConfigCommand { data }))
+            }
+
             _ => Some(UICommand::Unknown { cmd_id, uid }),
         }
     }
