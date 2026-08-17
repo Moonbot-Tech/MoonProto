@@ -10,7 +10,7 @@ impl Client {
     }
 
     pub(crate) fn start_inline_reader_session(&mut self) {
-        self.transport.recv_slicer = slicing::SlicingReceiver::new();
+        self.transport.recv_slicer.reset_session();
         self.register_recv_poller();
     }
 

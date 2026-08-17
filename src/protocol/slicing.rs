@@ -247,6 +247,17 @@ const _: [(); 38] = [(); ACK256_WIRE_SIZE];
 pub(crate) type SlicedPayloadResult = Option<(u16, u8, Vec<u8>, u8, usize)>;
 pub(crate) type SlicedProcessResult = (SlicedPayloadResult, [u8; ACK256_WIRE_SIZE]);
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SlicedReceiveProgress {
+    pub(crate) unique_blocks: u64,
+    pub(crate) unique_payload_bytes: u64,
+    pub(crate) duplicate_blocks: u64,
+    pub(crate) active_transfers: usize,
+    pub(crate) active_received_blocks: usize,
+    pub(crate) active_expected_blocks: usize,
+    pub(crate) last_progress_ms: Option<i64>,
+}
+
 pub(crate) fn build_ack_bytes(
     flags: &[u8; 32],
     datagram_num: u16,
@@ -274,6 +285,12 @@ pub(crate) fn parse_ack_bytes(payload: &[u8]) -> Option<([u8; 32], u16, u32)> {
 /// Matches TMoonProtoClient.Receiving: TDictionary<TDatagramNum, TMoonProtoSlicedData>
 pub(crate) struct SlicingReceiver {
     pub(crate) receiving: HashMap<u16, SlicedData>,
+    // Monotonic useful-progress counter for this Client lifetime. Session
+    // resets preserve it; init deadlines only compare successive values.
+    progress_epoch: u64,
+    unique_payload_bytes: u64,
+    duplicate_blocks: u64,
+    last_progress_ms: Option<i64>,
     /// B-09 fix: fixed LAST_RECVD_BUF_SIZE — typed as an array,
     /// `Box<[..; N]>` so we don't put 16KB on the stack (Client creation doesn't blow the stack),
     /// but the size is known at compile-time → bounds checks are eliminated.
@@ -302,6 +319,10 @@ impl SlicingReceiver {
     pub(crate) fn new() -> Self {
         Self {
             receiving: HashMap::new(),
+            progress_epoch: 0,
+            unique_payload_bytes: 0,
+            duplicate_blocks: 0,
+            last_progress_ms: None,
             last_recvd_ts: Box::new([NEVER_RECEIVED_MS; LAST_RECVD_BUF_SIZE]),
             last_online: 0,
             last_cleaned_received: 0,
@@ -310,6 +331,41 @@ impl SlicingReceiver {
 
     pub(crate) fn set_last_online(&mut self, ms: i64) {
         self.last_online = ms;
+    }
+
+    #[inline]
+    pub(crate) fn progress_epoch(&self) -> u64 {
+        self.progress_epoch
+    }
+
+    pub(crate) fn progress_snapshot(&self) -> SlicedReceiveProgress {
+        let mut active_received_blocks = 0usize;
+        let mut active_expected_blocks = 0usize;
+        for sliced in self.receiving.values() {
+            active_received_blocks = active_received_blocks.saturating_add(sliced.received_count);
+            active_expected_blocks = active_expected_blocks.saturating_add(sliced.blocks_count);
+        }
+        SlicedReceiveProgress {
+            unique_blocks: self.progress_epoch,
+            unique_payload_bytes: self.unique_payload_bytes,
+            duplicate_blocks: self.duplicate_blocks,
+            active_transfers: self.receiving.len(),
+            active_received_blocks,
+            active_expected_blocks,
+            last_progress_ms: self.last_progress_ms,
+        }
+    }
+
+    pub(crate) fn reset_session(&mut self) {
+        let progress_epoch = self.progress_epoch;
+        let unique_payload_bytes = self.unique_payload_bytes;
+        let duplicate_blocks = self.duplicate_blocks;
+        let last_progress_ms = self.last_progress_ms;
+        *self = Self::new();
+        self.progress_epoch = progress_epoch;
+        self.unique_payload_bytes = unique_payload_bytes;
+        self.duplicate_blocks = duplicate_blocks;
+        self.last_progress_ms = last_progress_ms;
     }
 
     /// Matches `TMoonProtoClient.DoCleanUp`: reader-side cleanup is driven by
@@ -380,6 +436,7 @@ impl SlicingReceiver {
             );
         } else if !self.receiving.contains_key(&datagram_num) {
             // Not new, not in receiving → already completed, send full ACK
+            self.duplicate_blocks = self.duplicate_blocks.saturating_add(1);
             let flags = [0xFFu8; 32]; // SetAllFlags
             let ack = build_ack_bytes(&flags, datagram_num, ack_session);
             if trace {
@@ -417,6 +474,7 @@ impl SlicingReceiver {
             // removes it from the main-loop side, any later block that arrives
             // in this short gap must behave like Delphi's post-removal branch:
             // no state mutation, no second assembled payload, ACK.SetAllFlags.
+            self.duplicate_blocks = self.duplicate_blocks.saturating_add(1);
             let full_ack = build_ack_bytes(&[0xFFu8; 32], datagram_num, ack_session);
             if trace {
                 eprintln!(
@@ -426,7 +484,19 @@ impl SlicingReceiver {
             }
             return (None, full_ack);
         }
+        let received_before = sliced.received_count;
+        let duplicates_before = sliced.dup_count;
         let complete = sliced.receive_piece(hdr.block_num, block_data);
+        if sliced.received_count != received_before {
+            self.progress_epoch = self.progress_epoch.wrapping_add(1);
+            self.unique_payload_bytes = self
+                .unique_payload_bytes
+                .saturating_add(block_data.len() as u64);
+            self.last_progress_ms = Some(self.last_online);
+        }
+        if sliced.dup_count != duplicates_before {
+            self.duplicate_blocks = self.duplicate_blocks.saturating_add(1);
+        }
         let ack = build_ack_bytes(&sliced.ack_flags, datagram_num, ack_session);
         if trace {
             let got = sliced.received_count;

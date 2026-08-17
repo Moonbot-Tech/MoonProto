@@ -2,6 +2,146 @@
 
 use super::*;
 
+/// Current state of the client startup sequence.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StartupState {
+    /// Transport handshake has not completed yet.
+    #[default]
+    Connecting,
+    /// Transport is authorized and the mandatory Init spine is running.
+    Initializing,
+    /// Init completed and the first Active Lib snapshot was published.
+    Ready,
+    /// The transport dropped while startup was still in progress.
+    Reconnecting,
+    /// Startup ended with [`ConnectError`].
+    Failed,
+    /// The application explicitly stopped the client.
+    Disconnected,
+}
+
+/// A stable user-facing step of the mandatory startup sequence.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum InitStep {
+    /// Verify protocol/core compatibility and read core identity.
+    BaseCheck = 0,
+    /// Verify account access and read account authorization metadata.
+    AuthCheck = 1,
+    /// Load the canonical market list and market metadata.
+    GetMarketsList = 2,
+    /// Load current prices and the server's market-index mapping.
+    UpdateMarketsList = 3,
+    /// Load the typed strategy settings schema.
+    StrategySchema = 4,
+    /// Queue initial domain refreshes and requested subscriptions.
+    PostInitFlush = 5,
+    /// Publish the first complete Active Lib snapshot.
+    StartupSnapshot = 6,
+    /// Publish startup events queued with that snapshot.
+    StartupEvents = 7,
+}
+
+impl InitStep {
+    const ALL: [Self; 8] = [
+        Self::BaseCheck,
+        Self::AuthCheck,
+        Self::GetMarketsList,
+        Self::UpdateMarketsList,
+        Self::StrategySchema,
+        Self::PostInitFlush,
+        Self::StartupSnapshot,
+        Self::StartupEvents,
+    ];
+    pub(crate) const COUNT: usize = Self::ALL.len();
+
+    const fn bit(self) -> u16 {
+        1 << (self as u8)
+    }
+}
+
+/// Compact set of completed [`InitStep`] values.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InitStepSet(u16);
+
+impl InitStepSet {
+    /// Whether the specified startup step has completed.
+    pub const fn contains(self, step: InitStep) -> bool {
+        self.0 & step.bit() != 0
+    }
+
+    /// Number of completed startup steps.
+    pub const fn len(self) -> u32 {
+        self.0.count_ones()
+    }
+
+    /// Whether no startup step has completed yet.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Iterate completed steps in startup order.
+    pub fn iter(self) -> impl Iterator<Item = InitStep> {
+        InitStep::ALL
+            .into_iter()
+            .filter(move |step| self.contains(*step))
+    }
+
+    pub(crate) fn insert(&mut self, step: InitStep) {
+        self.0 |= step.bit();
+    }
+}
+
+/// Passive snapshot of connection and Init progress.
+///
+/// Applications may poll this from their normal UI update loop. The protocol
+/// owner publishes it at a bounded rate, so reading it does not add callbacks,
+/// logging, or locks to the UDP receive hot path.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StartupStatus {
+    /// Overall startup state.
+    pub state: StartupState,
+    /// Current mandatory Init step. `None` while handshaking and after Init.
+    pub current_step: Option<InitStep>,
+    /// Steps already completed during the current startup attempt.
+    pub completed_steps: InitStepSet,
+    /// Wall-clock startup time. It freezes when startup reaches a terminal
+    /// state such as [`StartupState::Ready`].
+    pub elapsed_ms: u64,
+    /// Unique Sliced payload bytes accepted while starting this client.
+    pub received_sliced_bytes: u64,
+    /// Recent useful Sliced payload receive rate.
+    pub receive_rate_bytes_per_sec: u64,
+    /// Number of incomplete Sliced datagrams currently being reassembled.
+    pub active_sliced_transfers: u16,
+    /// Unique Sliced blocks accepted since startup began.
+    pub received_sliced_blocks: u64,
+    /// Duplicate Sliced blocks observed since startup began.
+    pub duplicate_sliced_blocks: u64,
+    /// Unique blocks present in the currently active Sliced datagrams.
+    pub active_received_blocks: u32,
+    /// Total block count advertised by the currently active Sliced datagrams.
+    pub active_expected_blocks: u32,
+    /// Milliseconds since the last unique Sliced block, or `None` before one
+    /// has arrived.
+    pub idle_for_ms: Option<u64>,
+    /// Whole-step retries performed for `current_step` after timeout/failure.
+    pub current_step_retries: u32,
+    /// Whole-step retries performed across the current Init attempt.
+    pub total_init_retries: u32,
+    /// Reconnect episodes observed while this `MoonClient` was starting.
+    pub reconnect_count: u32,
+    /// Last full client/core UDP round-trip time reported by Ping.
+    pub round_trip_ms: Option<u32>,
+    /// Last path MTU reported by Ping.
+    pub path_mtu_bytes: Option<u16>,
+    /// Server estimate of delivered server-to-client traffic, from 0 to 100.
+    pub downlink_delivery_percent: Option<u8>,
+}
+
 /// Application-owned strategy state that must be installed before Init.
 ///
 /// The server can ask for a client strategy snapshot as part of the active-lib
@@ -51,13 +191,15 @@ pub struct InitConfig {
     /// The server resolves names, so callers can request these before
     /// `GetMarketsList` has populated the local market model.
     pub subscribe_orderbooks: Vec<String>,
-    /// Per-step Engine API timeout. Default = `DEFAULT_PENDING_TIMEOUT_MS`
+    /// Per-step Engine API wait interval. Default = `DEFAULT_PENDING_TIMEOUT_MS`
     /// (12s).
     ///
     /// `BaseCheck`/`AuthCheck` use this timeout for each `SendAndWait`
     /// request. A pending server-update marker enables the update-aware
     /// BaseCheck branch: one normal BaseCheck attempt, then up to 10 retries
-    /// with 2000 ms between attempts.
+    /// with 2000 ms between attempts. Large mandatory Sliced responses extend
+    /// their deadline whenever a new block arrives and retry only the current
+    /// init step after a full idle interval.
     pub step_timeout: Option<Duration>,
 }
 

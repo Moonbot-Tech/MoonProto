@@ -11,7 +11,7 @@ use super::commands::{
     UiRuntimeCommand,
 };
 use super::*;
-use crate::client::init::{RuntimeInitMachine, RuntimeInitPoll};
+use crate::client::init::{RuntimeInitMachine, RuntimeInitPoll, RuntimeInitStatus};
 use parking_lot::RwLock;
 use std::collections::VecDeque;
 
@@ -27,6 +27,7 @@ pub(super) fn runtime_loop(
     rx: &mpsc::Receiver<RuntimeCommand>,
     event_sink: MoonEventSink,
     snapshot: Arc<RwLock<Option<MoonClientSnapshot>>>,
+    startup_status: Arc<RwLock<StartupStatus>>,
     connect: ConnectConfig,
     ready_tx: Option<mpsc::Sender<Result<(), ConnectError>>>,
     deferred_commands: &mut VecDeque<RuntimeCommand>,
@@ -37,6 +38,12 @@ pub(super) fn runtime_loop(
     let startup_started_at = Instant::now();
     let mut dispatch_buffers = InlineDispatchBuffers::default();
     let mut shared_config_refresh = SharedConfigRefresh::default();
+    let mut startup_publisher = StartupStatusPublisher::new(startup_status);
+    startup_publisher.publish(
+        &client,
+        startup.as_ref().map(RuntimeInitMachine::startup_status),
+        true,
+    );
     loop {
         #[cfg(any(test, feature = "diagnostics"))]
         let command_drain_start = Instant::now();
@@ -113,6 +120,7 @@ pub(super) fn runtime_loop(
                         step: "StartupEvents",
                         elapsed_ms: startup_started_at.elapsed().as_millis() as u64,
                     });
+                    startup_publisher.mark_ready(&client, startup_machine.startup_status());
                     client.fire_lifecycle(LifecycleEvent::Ready);
                     if let Some(tx) = ready_tx.as_ref() {
                         let _ = tx.send(Ok(()));
@@ -121,6 +129,7 @@ pub(super) fn runtime_loop(
                     true
                 }
                 RuntimeInitPoll::Failed(err) => {
+                    startup_publisher.mark_failed(&client, startup_machine.startup_status());
                     client.fire_lifecycle(LifecycleEvent::ConnectFailed { error: err.clone() });
                     if let Some(tx) = ready_tx.as_ref() {
                         let _ = tx.send(Err(err));
@@ -239,6 +248,11 @@ pub(super) fn runtime_loop(
                 || transfer_assets_changed
                 || account_changed
         };
+        startup_publisher.publish(
+            &client,
+            startup.as_ref().map(RuntimeInitMachine::startup_status),
+            false,
+        );
         if startup.is_none() {
             shared_config_refresh.poll(&client, &dispatcher);
         }
@@ -286,6 +300,271 @@ pub(super) fn runtime_loop(
         if stop {
             break;
         }
+    }
+    if client.shutdown_requested() {
+        startup_publisher.mark_disconnected();
+    }
+}
+
+const STARTUP_STATUS_PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
+const STARTUP_RATE_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
+
+struct StartupStatusPublisher {
+    shared: Arc<RwLock<StartupStatus>>,
+    cached: StartupStatus,
+    elapsed_offset_ms: u64,
+    started_at: Instant,
+    bytes_offset: u64,
+    blocks_offset: u64,
+    duplicates_offset: u64,
+    last_publish_at: Instant,
+    last_rate_sample_at: Instant,
+    last_rate_bytes: u64,
+    last_authorized: bool,
+    ever_authorized: bool,
+    startup_finished: bool,
+}
+
+impl StartupStatusPublisher {
+    fn new(shared: Arc<RwLock<StartupStatus>>) -> Self {
+        let cached = *shared.read();
+        let now = Instant::now();
+        Self {
+            shared,
+            cached,
+            elapsed_offset_ms: cached.elapsed_ms,
+            started_at: now,
+            bytes_offset: cached.received_sliced_bytes,
+            blocks_offset: cached.received_sliced_blocks,
+            duplicates_offset: cached.duplicate_sliced_blocks,
+            last_publish_at: now
+                .checked_sub(STARTUP_STATUS_PUBLISH_INTERVAL)
+                .unwrap_or(now),
+            last_rate_sample_at: now,
+            last_rate_bytes: cached.received_sliced_bytes,
+            last_authorized: false,
+            ever_authorized: matches!(
+                cached.state,
+                StartupState::Initializing | StartupState::Ready | StartupState::Reconnecting
+            ),
+            startup_finished: cached.state == StartupState::Ready,
+        }
+    }
+
+    fn publish(&mut self, client: &Client, init: Option<RuntimeInitStatus>, force: bool) {
+        let authorized = client.is_authorized();
+        if self.last_authorized && !authorized {
+            self.cached.reconnect_count = self.cached.reconnect_count.saturating_add(1);
+        }
+        self.last_authorized = authorized;
+        self.ever_authorized |= authorized;
+
+        let state = if self.startup_finished {
+            if authorized {
+                StartupState::Ready
+            } else {
+                StartupState::Reconnecting
+            }
+        } else if authorized {
+            StartupState::Initializing
+        } else if self.ever_authorized || self.cached.reconnect_count > 0 {
+            StartupState::Reconnecting
+        } else {
+            StartupState::Connecting
+        };
+
+        let now = Instant::now();
+        let init_changed = init.is_some_and(|value| {
+            self.cached.current_step != value.current_step
+                || self.cached.completed_steps != value.completed_steps
+                || self.cached.current_step_retries != value.current_step_retries
+                || self.cached.total_init_retries != value.total_retries
+        });
+        let state_changed = self.cached.state != state;
+        if !force
+            && !init_changed
+            && !state_changed
+            && now.duration_since(self.last_publish_at) < STARTUP_STATUS_PUBLISH_INTERVAL
+        {
+            return;
+        }
+
+        self.cached.state = state;
+        if self.startup_finished {
+            self.store(now);
+            return;
+        }
+
+        if let Some(init) = init {
+            self.cached.current_step = init.current_step;
+            self.cached.completed_steps = init.completed_steps;
+            self.cached.current_step_retries = init.current_step_retries;
+            self.cached.total_init_retries = init.total_retries;
+        }
+
+        let progress = client.transport.recv_slicer.progress_snapshot();
+        self.cached.elapsed_ms = self
+            .elapsed_offset_ms
+            .saturating_add(self.started_at.elapsed().as_millis() as u64);
+        self.cached.received_sliced_bytes = self
+            .bytes_offset
+            .saturating_add(progress.unique_payload_bytes);
+        self.cached.received_sliced_blocks =
+            self.blocks_offset.saturating_add(progress.unique_blocks);
+        self.cached.duplicate_sliced_blocks = self
+            .duplicates_offset
+            .saturating_add(progress.duplicate_blocks);
+        self.cached.active_sliced_transfers =
+            u16::try_from(progress.active_transfers).unwrap_or(u16::MAX);
+        self.cached.active_received_blocks =
+            u32::try_from(progress.active_received_blocks).unwrap_or(u32::MAX);
+        self.cached.active_expected_blocks =
+            u32::try_from(progress.active_expected_blocks).unwrap_or(u32::MAX);
+        self.cached.idle_for_ms = progress.last_progress_ms.map(|last| {
+            u64::try_from(client.now_ms().saturating_sub(last).max(0)).unwrap_or(u64::MAX)
+        });
+
+        let rate_interval = now.duration_since(self.last_rate_sample_at);
+        if rate_interval >= STARTUP_RATE_SAMPLE_INTERVAL {
+            let bytes = self.cached.received_sliced_bytes;
+            let elapsed_ms = rate_interval.as_millis().max(1) as u64;
+            self.cached.receive_rate_bytes_per_sec = bytes
+                .saturating_sub(self.last_rate_bytes)
+                .saturating_mul(1000)
+                / elapsed_ms;
+            self.last_rate_bytes = bytes;
+            self.last_rate_sample_at = now;
+        }
+
+        if client.ping_count > 0 {
+            self.cached.round_trip_ms = u32::try_from(client.round_trip_delay)
+                .ok()
+                .filter(|value| *value > 0);
+            self.cached.path_mtu_bytes = Some(client.actual_pmtu);
+            self.cached.downlink_delivery_percent =
+                Some((client.rs * 100.0).round().clamp(0.0, 100.0) as u8);
+        }
+        self.store(now);
+    }
+
+    fn mark_ready(&mut self, client: &Client, init: RuntimeInitStatus) {
+        self.publish(client, Some(init), true);
+        self.cached
+            .completed_steps
+            .insert(InitStep::StartupSnapshot);
+        self.cached.completed_steps.insert(InitStep::StartupEvents);
+        self.cached.current_step = None;
+        self.cached.current_step_retries = 0;
+        self.cached.state = StartupState::Ready;
+        self.startup_finished = true;
+        self.store(Instant::now());
+    }
+
+    fn mark_failed(&mut self, client: &Client, init: RuntimeInitStatus) {
+        self.publish(client, Some(init), true);
+        self.cached.state = StartupState::Failed;
+        self.store(Instant::now());
+    }
+
+    fn mark_disconnected(&mut self) {
+        self.cached.state = StartupState::Disconnected;
+        self.store(Instant::now());
+    }
+
+    fn store(&mut self, now: Instant) {
+        *self.shared.write() = self.cached;
+        self.last_publish_at = now;
+    }
+}
+
+#[cfg(test)]
+mod startup_status_tests {
+    use super::*;
+    use crate::protocol::slicing::SliceHeader;
+
+    fn test_client() -> Client {
+        Client::new(ClientConfig::new("127.0.0.1", 3000, [0; 16], [0; 16]))
+    }
+
+    fn receive_partial_sliced(client: &mut Client, datagram_num: u16) {
+        let mut payload = Vec::new();
+        SliceHeader {
+            datagram_num,
+            block_num: 0,
+            max_block_num: 1,
+        }
+        .write_to(&mut payload);
+        payload.extend_from_slice(&[Command::API.to_byte(), 0xAA]);
+        client
+            .transport
+            .recv_slicer
+            .set_last_online(client.now_ms());
+        let _ = client.transport.recv_slicer.on_new_sliced(&payload);
+    }
+
+    #[test]
+    fn publisher_reports_live_transfer_and_channel_state() {
+        let shared = Arc::new(RwLock::new(StartupStatus::default()));
+        let mut publisher = StartupStatusPublisher::new(Arc::clone(&shared));
+        let mut client = test_client();
+        client.authorized = true;
+        client.ping_count = 1;
+        client.round_trip_delay = 321;
+        client.actual_pmtu = 1200;
+        client.rs = 0.91;
+        receive_partial_sliced(&mut client, 7);
+        publisher.last_rate_sample_at = Instant::now() - Duration::from_secs(1);
+
+        publisher.publish(
+            &client,
+            Some(RuntimeInitStatus {
+                current_step: Some(InitStep::GetMarketsList),
+                ..RuntimeInitStatus::default()
+            }),
+            true,
+        );
+
+        let status = *shared.read();
+        assert_eq!(status.state, StartupState::Initializing);
+        assert_eq!(status.current_step, Some(InitStep::GetMarketsList));
+        assert_eq!(status.received_sliced_bytes, 2);
+        assert_eq!(status.received_sliced_blocks, 1);
+        assert_eq!(status.active_sliced_transfers, 1);
+        assert_eq!(status.active_received_blocks, 1);
+        assert_eq!(status.active_expected_blocks, 2);
+        assert!(status.receive_rate_bytes_per_sec > 0);
+        assert_eq!(status.round_trip_ms, Some(321));
+        assert_eq!(status.path_mtu_bytes, Some(1200));
+        assert_eq!(status.downlink_delivery_percent, Some(91));
+    }
+
+    #[test]
+    fn reconnect_is_counted_once_and_ready_freezes_startup_transfer_totals() {
+        let shared = Arc::new(RwLock::new(StartupStatus::default()));
+        let mut publisher = StartupStatusPublisher::new(Arc::clone(&shared));
+        let mut client = test_client();
+        client.authorized = true;
+        receive_partial_sliced(&mut client, 7);
+        let mut init = RuntimeInitStatus::default();
+        init.completed_steps.insert(InitStep::PostInitFlush);
+        publisher.mark_ready(&client, init);
+        let bytes_at_ready = shared.read().received_sliced_bytes;
+
+        client.authorized = false;
+        publisher.publish(&client, None, true);
+        publisher.publish(&client, None, true);
+        assert_eq!(shared.read().state, StartupState::Reconnecting);
+        assert_eq!(shared.read().reconnect_count, 1);
+
+        receive_partial_sliced(&mut client, 8);
+        client.authorized = true;
+        publisher.publish(&client, None, true);
+        let status = *shared.read();
+        assert_eq!(status.state, StartupState::Ready);
+        assert_eq!(status.reconnect_count, 1);
+        assert_eq!(status.received_sliced_bytes, bytes_at_ready);
+        assert!(status.completed_steps.contains(InitStep::StartupSnapshot));
+        assert!(status.completed_steps.contains(InitStep::StartupEvents));
     }
 }
 

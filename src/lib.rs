@@ -168,12 +168,13 @@ mod transport;
 pub use client::ProtocolMetricsSnapshot;
 pub use client::{
     ActiveSubscriptions, ClientConfig, ClosePositionParams, CoinCardCandlesTicket, ConnectConfig,
-    ConnectError, EngineActionTicket, InitConfig, InitError, InitialStrategies, LifecycleEvent,
-    LiveCandleSubscription, MoonAccount, MoonBalances, MoonCandles, MoonChartAlerts, MoonChartText,
-    MoonClient, MoonClientError, MoonClientEvent, MoonClientSnapshot, MoonEmulator, MoonEventQueue,
-    MoonEventSink, MoonHistory, MoonOrders, MoonReports, MoonSettings, MoonStrategies, MoonStreams,
-    MoonTrade, NewOrderParams, NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams,
-    RefreshConfig, SellOrderParams, SplitOrderParams, TradeContextError, TradesStreamMode,
+    ConnectError, EngineActionTicket, InitConfig, InitError, InitStep, InitStepSet,
+    InitialStrategies, LifecycleEvent, LiveCandleSubscription, MoonAccount, MoonBalances,
+    MoonCandles, MoonChartAlerts, MoonChartText, MoonClient, MoonClientError, MoonClientEvent,
+    MoonClientSnapshot, MoonEmulator, MoonEventQueue, MoonEventSink, MoonHistory, MoonOrders,
+    MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade, NewOrderParams,
+    NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams, RefreshConfig, SellOrderParams,
+    SplitOrderParams, StartupState, StartupStatus, TradeContextError, TradesStreamMode,
     TradesSubscription, TransportMode, VStopParams,
 };
 #[cfg(feature = "diagnostics")]

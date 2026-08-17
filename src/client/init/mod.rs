@@ -32,8 +32,11 @@ mod steps;
 use steps::*;
 
 pub(crate) use config::InitResult;
-pub use config::{ConnectConfig, ConnectError, InitConfig, InitError, InitialStrategies};
-pub(crate) use machine::{RuntimeInitMachine, RuntimeInitPoll};
+pub use config::{
+    ConnectConfig, ConnectError, InitConfig, InitError, InitStep, InitStepSet, InitialStrategies,
+    StartupState, StartupStatus,
+};
+pub(crate) use machine::{RuntimeInitMachine, RuntimeInitPoll, RuntimeInitStatus};
 #[cfg(test)]
 pub(crate) use steps::run_base_check_delphi;
 pub(crate) use steps::{send_post_init_resync, CriticalInitStatus};

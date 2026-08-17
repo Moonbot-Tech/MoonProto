@@ -294,8 +294,18 @@ strategy commands remain closed until `domain_ready`.
 Periodic market refresh starts only after init opens the domain gate, so
 BaseCheck/AuthCheck are not delayed by early background refresh traffic.
 Critical BaseCheck/AuthCheck waits use the MoonBot core default timeout:
-12 seconds per Engine API request. Mandatory init
-step timeouts/errors fail init and leave the domain gate closed.
+12 seconds per Engine API request. For large mandatory Sliced responses, the
+same interval is an idle timeout: each new block extends the wait, and a full
+idle interval retries only the current step. Server errors and malformed
+mandatory responses still fail init and leave the domain gate closed.
+
+Long-running applications can expose the live wait without guessing from a
+fixed timeout. `MoonClient::startup_status()` reports the current gate,
+cumulative startup time, useful Sliced bytes and recent receive rate, active
+block counts, idle time, retries/reconnects, RTT, PMTU, and downlink delivery
+quality. Read it from the application's normal UI timer while waiting for
+`LifecycleEvent::Ready`; no dedicated feed thread is required. See
+[Lifecycle Events](lifecycle.md#live-startup-status).
 
 `AuthCheck` follows the MoonBot core result ordering: a successful server response opens
 the next init step even if the optional account payload cannot be parsed. When

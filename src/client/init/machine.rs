@@ -13,6 +13,14 @@ pub(crate) enum RuntimeInitPoll {
     Failed(ConnectError),
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RuntimeInitStatus {
+    pub(crate) current_step: Option<InitStep>,
+    pub(crate) completed_steps: InitStepSet,
+    pub(crate) current_step_retries: u32,
+    pub(crate) total_retries: u32,
+}
+
 pub(crate) struct RuntimeInitMachine {
     cfg: InitConfig,
     started: Instant,
@@ -27,6 +35,10 @@ pub(crate) struct RuntimeInitMachine {
     base_status: CriticalInitStatus,
     auth_status: CriticalInitStatus,
     strategy_schema: Option<PendingStrategySchemaStep>,
+    completed_steps: InitStepSet,
+    attempted_steps: InitStepSet,
+    retry_counts: [u32; InitStep::COUNT],
+    total_retries: u32,
 }
 
 enum RuntimeInitPhase {
@@ -72,6 +84,12 @@ enum RuntimeInitPhase {
     Done,
 }
 
+enum RequiredEngineResponsePoll {
+    Pending,
+    Response(EngineResponse),
+    IdleTimeout,
+}
+
 #[derive(Clone, Copy)]
 enum BaseAttempt {
     First,
@@ -109,6 +127,57 @@ impl RuntimeInitMachine {
             base_status: CriticalInitStatus::Skipped,
             auth_status: CriticalInitStatus::Skipped,
             strategy_schema: None,
+            completed_steps: InitStepSet::default(),
+            attempted_steps: InitStepSet::default(),
+            retry_counts: [0; InitStep::COUNT],
+            total_retries: 0,
+        }
+    }
+
+    pub(crate) fn startup_status(&self) -> RuntimeInitStatus {
+        let current_step = self.current_step();
+        RuntimeInitStatus {
+            current_step,
+            completed_steps: self.completed_steps,
+            current_step_retries: current_step.map_or(0, |step| self.retry_counts[step as usize]),
+            total_retries: self.total_retries,
+        }
+    }
+
+    fn current_step(&self) -> Option<InitStep> {
+        match self.phase {
+            RuntimeInitPhase::WaitAuthorized => None,
+            RuntimeInitPhase::ServerUpdateAuthWait { .. }
+            | RuntimeInitPhase::SendBaseCheck { .. }
+            | RuntimeInitPhase::WaitBaseCheck { .. }
+            | RuntimeInitPhase::BaseUpdateRetryPause { .. } => Some(InitStep::BaseCheck),
+            RuntimeInitPhase::SendAuthCheck { .. }
+            | RuntimeInitPhase::WaitAuthCheck { .. }
+            | RuntimeInitPhase::InitAuthRetryPause { .. } => Some(InitStep::AuthCheck),
+            RuntimeInitPhase::SendGetMarketsList | RuntimeInitPhase::WaitGetMarketsList { .. } => {
+                Some(InitStep::GetMarketsList)
+            }
+            RuntimeInitPhase::SendUpdateMarketsList
+            | RuntimeInitPhase::WaitUpdateMarketsList { .. } => Some(InitStep::UpdateMarketsList),
+            RuntimeInitPhase::WaitStrategySchema => Some(InitStep::StrategySchema),
+            RuntimeInitPhase::PostInit | RuntimeInitPhase::PostInitFlush { .. } => {
+                Some(InitStep::PostInitFlush)
+            }
+            RuntimeInitPhase::Done => None,
+        }
+    }
+
+    fn mark_completed(&mut self, step: InitStep) {
+        self.completed_steps.insert(step);
+    }
+
+    fn record_attempt(&mut self, step: InitStep) {
+        if self.attempted_steps.contains(step) {
+            let count = &mut self.retry_counts[step as usize];
+            *count = count.saturating_add(1);
+            self.total_retries = self.total_retries.saturating_add(1);
+        } else {
+            self.attempted_steps.insert(step);
         }
     }
 
@@ -178,6 +247,7 @@ impl RuntimeInitMachine {
                     return RuntimeInitPoll::Pending { changed };
                 }
                 RuntimeInitPhase::SendBaseCheck { attempt } => {
+                    self.record_attempt(InitStep::BaseCheck);
                     let pending = begin_engine_init_step(
                         client,
                         crate::commands::engine_request::base_check(),
@@ -197,6 +267,7 @@ impl RuntimeInitMachine {
                     PendingEnginePoll::Response(resp) => {
                         let status = self.apply_base_check_response(client, resp);
                         if status.is_ok() {
+                            self.mark_completed(InitStep::BaseCheck);
                             fire_init_step(client, "BaseCheck", self.init_started_at);
                             self.ensure_strategy_schema_started(client, dispatcher);
                         }
@@ -342,6 +413,7 @@ impl RuntimeInitMachine {
                     return RuntimeInitPoll::Pending { changed };
                 }
                 RuntimeInitPhase::SendAuthCheck { attempt } => {
+                    self.record_attempt(InitStep::AuthCheck);
                     let pending = begin_engine_init_step(
                         client,
                         crate::commands::engine_request::auth_check(),
@@ -374,6 +446,7 @@ impl RuntimeInitMachine {
                         }
                     };
                     if status.is_ok() {
+                        self.mark_completed(InitStep::AuthCheck);
                         fire_init_step(client, "AuthCheck", self.init_started_at);
                     }
                     match attempt {
@@ -419,10 +492,15 @@ impl RuntimeInitMachine {
                     return RuntimeInitPoll::Pending { changed };
                 }
                 RuntimeInitPhase::SendGetMarketsList => {
+                    if !client.is_authorized() {
+                        self.phase = RuntimeInitPhase::SendGetMarketsList;
+                        return RuntimeInitPoll::Pending { changed };
+                    }
                     if self.strategy_schema.is_none() {
                         self.ensure_strategy_schema_started(client, dispatcher);
                     }
-                    let pending = begin_engine_init_step(
+                    self.record_attempt(InitStep::GetMarketsList);
+                    let pending = begin_sliced_engine_init_step(
                         client,
                         crate::commands::engine_request::get_markets_list(),
                         self.step_timeout,
@@ -436,9 +514,16 @@ impl RuntimeInitMachine {
                         &mut pending,
                         "GetMarketsList",
                     ) {
-                        Ok(Some(resp)) => resp,
-                        Ok(None) => {
+                        Ok(RequiredEngineResponsePoll::Response(resp)) => resp,
+                        Ok(RequiredEngineResponsePoll::Pending) => {
                             self.phase = RuntimeInitPhase::WaitGetMarketsList { pending };
+                            return RuntimeInitPoll::Pending { changed };
+                        }
+                        Ok(RequiredEngineResponsePoll::IdleTimeout) => {
+                            warn!(target: "moonproto::init",
+                                "GetMarketsList received no new Sliced blocks for {:?}; retrying the current init step",
+                                self.step_timeout);
+                            self.phase = RuntimeInitPhase::SendGetMarketsList;
                             return RuntimeInitPoll::Pending { changed };
                         }
                         Err(err) => {
@@ -455,6 +540,7 @@ impl RuntimeInitMachine {
                         return RuntimeInitPoll::Failed(ConnectError::from(err));
                     }
                     self.result.markets_response_bytes = resp.data.len();
+                    self.mark_completed(InitStep::GetMarketsList);
                     fire_init_step(client, "GetMarketsList", self.init_started_at);
                     client.reconnect.tracked_indexes_peer_app_token = client.peer_app_token;
                     self.phase = RuntimeInitPhase::SendUpdateMarketsList;
@@ -462,7 +548,12 @@ impl RuntimeInitMachine {
                     continue;
                 }
                 RuntimeInitPhase::SendUpdateMarketsList => {
-                    let pending = begin_engine_init_step(
+                    if !client.is_authorized() {
+                        self.phase = RuntimeInitPhase::SendUpdateMarketsList;
+                        return RuntimeInitPoll::Pending { changed };
+                    }
+                    self.record_attempt(InitStep::UpdateMarketsList);
+                    let pending = begin_sliced_engine_init_step(
                         client,
                         crate::commands::engine_request::update_markets_list(),
                         self.step_timeout,
@@ -476,9 +567,16 @@ impl RuntimeInitMachine {
                         &mut pending,
                         "UpdateMarketsList",
                     ) {
-                        Ok(Some(resp)) => resp,
-                        Ok(None) => {
+                        Ok(RequiredEngineResponsePoll::Response(resp)) => resp,
+                        Ok(RequiredEngineResponsePoll::Pending) => {
                             self.phase = RuntimeInitPhase::WaitUpdateMarketsList { pending };
+                            return RuntimeInitPoll::Pending { changed };
+                        }
+                        Ok(RequiredEngineResponsePoll::IdleTimeout) => {
+                            warn!(target: "moonproto::init",
+                                "UpdateMarketsList received no new Sliced blocks for {:?}; retrying the current init step",
+                                self.step_timeout);
+                            self.phase = RuntimeInitPhase::SendUpdateMarketsList;
                             return RuntimeInitPoll::Pending { changed };
                         }
                         Err(err) => {
@@ -495,6 +593,7 @@ impl RuntimeInitMachine {
                         return RuntimeInitPoll::Failed(ConnectError::from(err));
                     }
                     self.result.update_markets_response_bytes = resp.data.len();
+                    self.mark_completed(InitStep::UpdateMarketsList);
                     fire_init_step(client, "UpdateMarketsList", self.init_started_at);
                     client.subscriptions.domain_restore = DomainRestoreIntent {
                         fetch_indexes: true,
@@ -505,6 +604,10 @@ impl RuntimeInitMachine {
                     continue;
                 }
                 RuntimeInitPhase::WaitStrategySchema => {
+                    if !client.is_authorized() {
+                        self.phase = RuntimeInitPhase::WaitStrategySchema;
+                        return RuntimeInitPoll::Pending { changed };
+                    }
                     let timeout = self.step_timeout;
                     let Some(pending) = self.strategy_schema.as_mut() else {
                         self.ensure_strategy_schema_started(client, dispatcher);
@@ -519,12 +622,21 @@ impl RuntimeInitMachine {
                         timeout,
                     ) {
                         StrategySchemaPoll::Ready => {
+                            self.mark_completed(InitStep::StrategySchema);
                             fire_init_step(client, "StrategySchema", self.init_started_at);
                             self.phase = RuntimeInitPhase::PostInit;
                             changed = true;
                             continue;
                         }
                         StrategySchemaPoll::Pending => {
+                            self.phase = RuntimeInitPhase::WaitStrategySchema;
+                            return RuntimeInitPoll::Pending { changed };
+                        }
+                        StrategySchemaPoll::IdleTimeout => {
+                            warn!(target: "moonproto::init",
+                                "strategy schema received no new Sliced blocks for {:?}; retrying the current init step",
+                                self.step_timeout);
+                            self.strategy_schema = None;
                             self.phase = RuntimeInitPhase::WaitStrategySchema;
                             return RuntimeInitPoll::Pending { changed };
                         }
@@ -554,6 +666,7 @@ impl RuntimeInitMachine {
                 }
                 RuntimeInitPhase::PostInitFlush { until } => {
                     if Instant::now() >= until {
+                        self.mark_completed(InitStep::PostInitFlush);
                         fire_init_step(client, "PostInitFlush", self.init_started_at);
                         self.phase = RuntimeInitPhase::Done;
                         return RuntimeInitPoll::Ready(std::mem::take(&mut self.result));
@@ -609,6 +722,7 @@ impl RuntimeInitMachine {
         dispatcher: &crate::events::EventDispatcher,
     ) {
         if self.strategy_schema.is_none() {
+            self.record_attempt(InitStep::StrategySchema);
             self.strategy_schema = Some(begin_required_strategy_schema_step(client, dispatcher));
         }
     }
@@ -666,20 +780,131 @@ impl RuntimeInitMachine {
         client: &mut Client,
         pending: &mut PendingEngineInit,
         step: &'static str,
-    ) -> Result<Option<EngineResponse>, InitError> {
+    ) -> Result<RequiredEngineResponsePoll, InitError> {
         match poll_engine_init_step(client, pending) {
-            PendingEnginePoll::Pending => Ok(None),
-            PendingEnginePoll::Response(resp) if resp.success => Ok(Some(resp)),
+            PendingEnginePoll::Pending => Ok(RequiredEngineResponsePoll::Pending),
+            PendingEnginePoll::Response(resp) if resp.success => {
+                Ok(RequiredEngineResponsePoll::Response(resp))
+            }
             PendingEnginePoll::Response(resp) => {
                 let message = response_error_message(&resp);
                 self.result.errors.push(format!("{step} error: {message}"));
                 Err(InitError::CriticalStepFailed { step, message })
             }
-            PendingEnginePoll::Timeout => {
-                self.result.errors.push(format!("{step}: timeout"));
-                Err(InitError::CriticalStepTimedOut(step))
-            }
+            PendingEnginePoll::Timeout => Ok(RequiredEngineResponsePoll::IdleTimeout),
             PendingEnginePoll::Disconnected => Err(InitError::SendChannelClosed),
         }
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+
+    fn test_client() -> Client {
+        Client::new(ClientConfig::new("127.0.0.1", 3000, [0; 16], [0; 16]))
+    }
+
+    #[test]
+    fn required_market_idle_timeout_retries_only_the_current_step() {
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut machine = RuntimeInitMachine::new(
+            ConnectConfig::new(InitConfig {
+                step_timeout: Some(Duration::ZERO),
+                ..InitConfig::default()
+            }),
+            &mut dispatcher,
+        );
+        let mut client = test_client();
+        client.authorized = true;
+        machine.result.base_check_ok = true;
+        machine.record_attempt(InitStep::GetMarketsList);
+        machine.phase = RuntimeInitPhase::WaitGetMarketsList {
+            pending: begin_sliced_engine_init_step(
+                &client,
+                crate::commands::engine_request::get_markets_list(),
+                Duration::ZERO,
+            ),
+        };
+
+        assert!(matches!(
+            machine.poll(&mut client, &mut dispatcher),
+            RuntimeInitPoll::Pending { .. }
+        ));
+        assert!(matches!(
+            machine.phase,
+            RuntimeInitPhase::SendGetMarketsList
+        ));
+        assert_eq!(machine.startup_status().current_step_retries, 0);
+        assert!(matches!(
+            machine.poll(&mut client, &mut dispatcher),
+            RuntimeInitPoll::Pending { .. }
+        ));
+        assert!(machine.result.base_check_ok);
+        assert_eq!(
+            machine.startup_status(),
+            RuntimeInitStatus {
+                current_step: Some(InitStep::GetMarketsList),
+                completed_steps: InitStepSet::default(),
+                current_step_retries: 1,
+                total_retries: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn disconnected_transport_waits_for_reauthorization_before_retrying() {
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut machine = RuntimeInitMachine::new(ConnectConfig::default(), &mut dispatcher);
+        let mut client = test_client();
+        client.authorized = false;
+        machine.phase = RuntimeInitPhase::SendGetMarketsList;
+
+        assert!(matches!(
+            machine.poll(&mut client, &mut dispatcher),
+            RuntimeInitPoll::Pending { .. }
+        ));
+        assert!(matches!(
+            machine.phase,
+            RuntimeInitPhase::SendGetMarketsList
+        ));
+        assert_eq!(machine.startup_status().current_step_retries, 0);
+        assert_eq!(machine.startup_status().total_retries, 0);
+    }
+
+    #[test]
+    fn retry_count_starts_only_after_a_step_was_actually_sent_once() {
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut machine = RuntimeInitMachine::new(ConnectConfig::default(), &mut dispatcher);
+        machine.phase = RuntimeInitPhase::SendAuthCheck {
+            attempt: AuthAttempt::InitRetry,
+        };
+
+        machine.record_attempt(InitStep::AuthCheck);
+        assert_eq!(machine.startup_status().current_step_retries, 0);
+        assert_eq!(machine.startup_status().total_retries, 0);
+
+        machine.record_attempt(InitStep::AuthCheck);
+        assert_eq!(machine.startup_status().current_step_retries, 1);
+        assert_eq!(machine.startup_status().total_retries, 1);
+    }
+
+    #[test]
+    fn startup_status_tracks_completed_steps_without_strings() {
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut machine = RuntimeInitMachine::new(ConnectConfig::default(), &mut dispatcher);
+        machine.mark_completed(InitStep::BaseCheck);
+        machine.mark_completed(InitStep::AuthCheck);
+        machine.phase = RuntimeInitPhase::SendGetMarketsList;
+
+        let status = machine.startup_status();
+        assert_eq!(status.current_step, Some(InitStep::GetMarketsList));
+        assert!(status.completed_steps.contains(InitStep::BaseCheck));
+        assert!(status.completed_steps.contains(InitStep::AuthCheck));
+        assert!(!status.completed_steps.contains(InitStep::GetMarketsList));
+        assert_eq!(
+            status.completed_steps.iter().collect::<Vec<_>>(),
+            vec![InitStep::BaseCheck, InitStep::AuthCheck]
+        );
     }
 }

@@ -393,3 +393,49 @@ fn do_cleanup_runs_on_reader_packet_cadence() {
         "accepted reader packets drive ClearOldReceiving before command-specific handling"
     );
 }
+
+#[test]
+fn progress_epoch_counts_unique_blocks_and_survives_session_reset() {
+    let mut recv = SlicingReceiver::new();
+    recv.set_last_online(10000);
+    let block = vec![7, 0, 0, 1, 0x1C, 0xAA];
+
+    let _ = recv.on_new_sliced(&block);
+    assert_eq!(recv.progress_epoch(), 1);
+    assert_eq!(
+        recv.progress_snapshot(),
+        SlicedReceiveProgress {
+            unique_blocks: 1,
+            unique_payload_bytes: 2,
+            duplicate_blocks: 0,
+            active_transfers: 1,
+            active_received_blocks: 1,
+            active_expected_blocks: 2,
+            last_progress_ms: Some(10000),
+        }
+    );
+
+    let _ = recv.on_new_sliced(&block);
+    assert_eq!(
+        recv.progress_epoch(),
+        1,
+        "a duplicate block is traffic, not useful init progress"
+    );
+    assert_eq!(recv.progress_snapshot().duplicate_blocks, 1);
+
+    recv.reset_session();
+    assert_eq!(recv.progress_epoch(), 1);
+    assert!(recv.receiving.is_empty());
+    assert_eq!(
+        recv.progress_snapshot(),
+        SlicedReceiveProgress {
+            unique_blocks: 1,
+            unique_payload_bytes: 2,
+            duplicate_blocks: 1,
+            active_transfers: 0,
+            active_received_blocks: 0,
+            active_expected_blocks: 0,
+            last_progress_ms: Some(10000),
+        }
+    );
+}

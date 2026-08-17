@@ -73,6 +73,41 @@ Base
   -> Connected { fresh: false }
 ```
 
+## Live Startup Status
+
+`InitStepCompleted` is the low-frequency lifecycle signal for completed gates.
+While a large Sliced response is still arriving, applications can poll
+`client.startup_status()` from their existing UI/status update loop:
+
+```rust
+let status = client.startup_status();
+
+show_startup_status(
+    status.state,
+    status.current_step,
+    status.elapsed_ms,
+    status.received_sliced_bytes,
+    status.receive_rate_bytes_per_sec,
+    status.idle_for_ms,
+);
+```
+
+The snapshot also contains completed steps, active Sliced transfer/block
+counts, duplicate blocks, whole-step retries, reconnect count, RTT, PMTU, and
+the core's server-to-client delivery estimate. It is passive and available in
+regular builds; packet tracing and the `diagnostics` feature are not required.
+
+There is deliberately no single percentage for the whole Init sequence. The
+strategy schema may overlap the sequential market requests, and the combined
+response size is not known before the Sliced datagrams arrive. Current step,
+received bytes/rate, active block counts, and time since useful progress are
+truthful signals; a fabricated global percentage is not.
+
+The protocol owner publishes this snapshot at a bounded rate. Polling it does
+not install a packet callback or add logging/locking to each received datagram.
+After `Ready`, startup transfer totals are frozen. The state can still move to
+`Reconnecting` and back to `Ready` if the established transport drops.
+
 `ServerRestart` is emitted during a successful handshake when the peer app token
 changes. If the one-time Init has already completed, the following successful
 reconnect restores required Engine API state automatically.

@@ -3,7 +3,8 @@ use super::*;
 impl Client {
     /// Matches TMoonProtoClient.Reset.
     /// Does NOT reset: server_token, actual_pmtu, send_datagram_num, pending_h,
-    /// sending, api_pending, pending_candles, trip_delay_k, can_send_rate.
+    /// sending, api_pending, pending_candles, trip_delay_k, can_send_rate, or
+    /// the init-only Sliced progress epoch.
     pub(crate) fn full_reset(&mut self) {
         self.crypt_msg_counter
             .store(INITIAL_CRYPTED_MSG_COUNTER, Ordering::Relaxed);
@@ -16,7 +17,7 @@ impl Client {
         self.pre_auth_crypted.clear();
         self.send_lock.lock().reset_tmp_slider();
         self.recv.recvd_slider = Slider::new();
-        self.transport.recv_slicer = slicing::SlicingReceiver::new();
+        self.transport.recv_slicer.reset_session();
         self.last_online = 0;
         self.last_sent_hello = NEVER_SENT_MS;
         self.clear_hello_wait_state();

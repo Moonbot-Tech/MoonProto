@@ -104,7 +104,10 @@ pub use diagnostics::{
 };
 #[cfg(test)]
 pub(crate) use init::{connect_and_init, run_init_sequence, InitResult};
-pub use init::{ConnectConfig, ConnectError, InitConfig, InitError, InitialStrategies};
+pub use init::{
+    ConnectConfig, ConnectError, InitConfig, InitError, InitStep, InitStepSet, InitialStrategies,
+    StartupState, StartupStatus,
+};
 #[cfg(any(test, feature = "diagnostics"))]
 #[doc(hidden)]
 pub use metrics::ProtocolMetricsSnapshot;
@@ -213,7 +216,7 @@ impl ClientSharedState {
             subscription_summary: Arc::new(SubscriptionRegistrySummary::default()),
             subscription_trade_storage_intent: Arc::new(parking_lot::RwLock::new(None)),
             server_update_sent: Arc::new(AtomicBool::new(false)),
-            protocol_metrics: Arc::new(ProtocolMetrics::default()),
+            protocol_metrics: Arc::<ProtocolMetrics>::default(),
             #[cfg(any(test, feature = "diagnostics"))]
             err_emu_diagnostics: Arc::new(Mutex::new(ErrEmuDiagnosticsState::default())),
             #[cfg(any(test, feature = "diagnostics"))]

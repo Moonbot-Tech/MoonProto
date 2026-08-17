@@ -44,6 +44,7 @@ pub struct MoonClient {
     shutdown: Arc<AtomicBool>,
     event_queue: Option<Arc<MoonEventQueue>>,
     snapshot: Arc<RwLock<Option<MoonClientSnapshot>>>,
+    startup_status: Arc<RwLock<StartupStatus>>,
     #[cfg(any(test, feature = "diagnostics"))]
     err_emu_diagnostics: Arc<Mutex<super::diagnostics::ErrEmuDiagnosticsState>>,
     #[cfg(any(test, feature = "diagnostics"))]
@@ -128,6 +129,8 @@ impl MoonClient {
         let (lifecycle_tx, lifecycle_rx) = mpsc::channel();
         let snapshot = Arc::new(RwLock::new(None));
         let runtime_snapshot = Arc::clone(&snapshot);
+        let startup_status = Arc::new(RwLock::new(StartupStatus::default()));
+        let runtime_startup_status = Arc::clone(&startup_status);
         let shared_state = ClientSharedState::new();
         let lifecycle_sink = event_sink.clone();
         let lifecycle_join = thread::spawn(move || {
@@ -151,6 +154,7 @@ impl MoonClient {
                 connect,
                 event_sink,
                 runtime_snapshot,
+                runtime_startup_status,
                 rx,
                 lifecycle_tx,
                 runtime_shutdown,
@@ -171,6 +175,7 @@ impl MoonClient {
             shutdown,
             event_queue,
             snapshot,
+            startup_status,
             #[cfg(any(test, feature = "diagnostics"))]
             err_emu_diagnostics,
             #[cfg(any(test, feature = "diagnostics"))]
@@ -430,6 +435,16 @@ impl MoonClient {
     /// Demand-driven candle request API.
     pub fn candles(&self) -> MoonCandles<'_> {
         MoonCandles { client: self }
+    }
+
+    /// Latest passive connection and Init progress snapshot.
+    ///
+    /// Poll this from the application's existing UI/status update loop while
+    /// waiting for [`LifecycleEvent::Ready`]. It reports useful Sliced receive
+    /// progress and channel measurements without enabling protocol diagnostics
+    /// or installing a packet-level callback.
+    pub fn startup_status(&self) -> StartupStatus {
+        *self.startup_status.read()
     }
 
     /// Demand-driven accumulated chart history from the connected core.
@@ -1045,6 +1060,7 @@ fn supervise_runtime_loop(
     connect: ConnectConfig,
     event_sink: MoonEventSink,
     snapshot: Arc<RwLock<Option<MoonClientSnapshot>>>,
+    startup_status: Arc<RwLock<StartupStatus>>,
     rx: mpsc::Receiver<RuntimeCommand>,
     lifecycle_tx: mpsc::Sender<LifecycleEvent>,
     runtime_shutdown: Arc<AtomicBool>,
@@ -1069,6 +1085,7 @@ fn supervise_runtime_loop(
                 &rx,
                 event_sink.clone(),
                 Arc::clone(&snapshot),
+                Arc::clone(&startup_status),
                 connect.clone(),
                 ready_tx.clone(),
                 &mut deferred_commands,
@@ -1087,6 +1104,11 @@ fn supervise_runtime_loop(
                 if runtime_shutdown.load(Ordering::Relaxed) {
                     break;
                 }
+                {
+                    let mut status = startup_status.write();
+                    status.state = StartupState::Reconnecting;
+                    status.reconnect_count = status.reconnect_count.saturating_add(1);
+                }
                 let _ = lifecycle_tx.send(LifecycleEvent::Reconnecting);
                 thread::sleep(MoonClient::runtime_restart_delay(panic_count));
             }
@@ -1094,6 +1116,9 @@ fn supervise_runtime_loop(
     }
 
     *snapshot.write() = None;
+    if runtime_shutdown.load(Ordering::Relaxed) {
+        startup_status.write().state = StartupState::Disconnected;
+    }
 }
 
 fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
@@ -1145,6 +1170,7 @@ mod tests {
         let started = Instant::now();
         client.disconnect().expect("shutdown should be queued");
         client.wait_finished().expect("runtime should exit");
+        assert_eq!(client.startup_status().state, StartupState::Disconnected);
         assert!(
             started.elapsed() < Duration::from_secs(1),
             "shutdown waited for startup timeout instead of interrupting it: {:?}",
@@ -1234,6 +1260,7 @@ mod tests {
             saw_connect_failed,
             "callback sink should receive ConnectFailed from unreachable test endpoint"
         );
+        assert_eq!(client.startup_status().state, StartupState::Failed);
 
         client.disconnect().expect("shutdown should be queued");
         client.wait_finished().expect("runtime should exit");
