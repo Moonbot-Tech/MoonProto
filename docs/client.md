@@ -291,13 +291,16 @@ snapshot writes
 instead of a hardcoded Rust copy of core strategy fields/defaults. Only this
 schema request/response is allowed through the pre-Init Strat gate; regular
 strategy commands remain closed until `domain_ready`.
-Periodic market refresh starts only after init opens the domain gate, so
-BaseCheck/AuthCheck are not delayed by early background refresh traffic.
-Critical BaseCheck/AuthCheck waits use the MoonBot core default timeout:
-12 seconds per Engine API request. For large mandatory Sliced responses, the
-same interval is an idle timeout: each new block extends the wait, and a full
-idle interval retries only the current step. Server errors and malformed
-mandatory responses still fail init and leave the domain gate closed.
+Periodic market refresh starts only after the mandatory strategy schema has
+completed and init opens the domain gate, so startup requests do not compete
+with background refresh traffic.
+Critical BaseCheck/AuthCheck waits use a 12-second attempt timeout.
+`UpdateMarketsList` gets 15 seconds, `GetMarketsList` gets 20 seconds, and the
+larger strategy schema gets 30 seconds. Expiry retries only the current step
+and preserves completed init gates. Transport traffic, including unrelated
+Sliced blocks, never extends an application-response deadline.
+Server errors and malformed mandatory responses still fail init and leave the
+domain gate closed.
 
 Long-running applications can expose the live wait without guessing from a
 fixed timeout. `MoonClient::startup_status()` reports the current gate,

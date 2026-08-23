@@ -12,9 +12,6 @@ pub(super) struct PendingEngineInit {
     request_uid: Option<u64>,
     rx: mpsc::Receiver<EngineResponse>,
     deadline: Instant,
-    idle_timeout: Duration,
-    sliced_progress_epoch: u64,
-    extend_on_sliced_progress: bool,
 }
 
 pub(super) enum PendingEnginePoll {
@@ -27,7 +24,7 @@ pub(super) enum PendingEnginePoll {
 pub(super) enum StrategySchemaPoll {
     Pending,
     Ready,
-    IdleTimeout,
+    Timeout,
     Failed(InitError),
 }
 
@@ -36,32 +33,12 @@ pub(super) fn begin_engine_init_step(
     request_payload: Vec<u8>,
     timeout: Duration,
 ) -> PendingEngineInit {
-    begin_engine_init_step_inner(client, request_payload, timeout, false)
-}
-
-pub(super) fn begin_sliced_engine_init_step(
-    client: &Client,
-    request_payload: Vec<u8>,
-    timeout: Duration,
-) -> PendingEngineInit {
-    begin_engine_init_step_inner(client, request_payload, timeout, true)
-}
-
-fn begin_engine_init_step_inner(
-    client: &Client,
-    request_payload: Vec<u8>,
-    timeout: Duration,
-    extend_on_sliced_progress: bool,
-) -> PendingEngineInit {
     let request_uid = engine_request_uid(&request_payload);
     let rx = client.send_api_request_async(&request_payload);
     PendingEngineInit {
         request_uid,
         rx,
         deadline: Instant::now() + timeout,
-        idle_timeout: timeout,
-        sliced_progress_epoch: client.sliced_receive_progress_epoch(),
-        extend_on_sliced_progress,
     }
 }
 
@@ -73,14 +50,7 @@ pub(super) fn poll_engine_init_step(
         Ok(resp) => PendingEnginePoll::Response(resp),
         Err(mpsc::TryRecvError::Disconnected) => PendingEnginePoll::Disconnected,
         Err(mpsc::TryRecvError::Empty) => {
-            let now = Instant::now();
-            let progress_epoch = client.sliced_receive_progress_epoch();
-            if pending.extend_on_sliced_progress && progress_epoch != pending.sliced_progress_epoch
-            {
-                pending.sliced_progress_epoch = progress_epoch;
-                pending.deadline = now + pending.idle_timeout;
-            }
-            if now >= pending.deadline {
+            if Instant::now() >= pending.deadline {
                 if let Some(uid) = pending.request_uid {
                     client.pending_api.api_pending.remove(uid);
                 }
@@ -111,9 +81,9 @@ pub(super) fn poll_engine_init_step(
 ///
 /// Critical step timing starts from the Delphi reference:
 /// `TMoonProtoEngine.FTimeout` is 12000 ms for each `SendAndWait` request. Rust
-/// treats that interval as an idle timeout for mandatory Sliced responses, so
-/// unique receive progress extends the wait and an idle expiry retries only the
-/// current step. If a UI command marked
+/// gives mandatory Sliced responses a longer absolute attempt timeout and
+/// retries only the current step when it expires. Transport liveness and
+/// application-response timing remain separate. If a UI command marked
 /// `ServerUpdateSent`, the Init spine also mirrors Delphi `BaseCheck`:
 /// wait up to 34 * 300 ms for `AuthDone`, clear the marker, send BaseCheck once,
 /// and if it still fails retry it 10 times with 2000 ms pauses. The mandatory
@@ -363,9 +333,7 @@ pub(super) fn apply_required_update_markets_list_response(
 pub(super) struct PendingStrategySchemaStep {
     schema_revision_before: u64,
     schema_failures_before: u64,
-    idle_started_at: Instant,
-    next_request_at: Instant,
-    sliced_progress_epoch: u64,
+    started_at: Instant,
 }
 
 pub(super) fn begin_required_strategy_schema_step(
@@ -376,9 +344,7 @@ pub(super) fn begin_required_strategy_schema_step(
     let pending = PendingStrategySchemaStep {
         schema_revision_before: dispatcher.strats().strategy_schema_revision(),
         schema_failures_before: dispatcher.strats().strategy_schema_failures(),
-        idle_started_at: start,
-        next_request_at: start + Duration::from_millis(SETTINGS_HELPER_RETRY_PAUSE_MS),
-        sliced_progress_epoch: client.sliced_receive_progress_epoch(),
+        started_at: start,
     };
     client.strat_schema_request();
     pending
@@ -427,20 +393,8 @@ pub(super) fn poll_required_strategy_schema_step(
         });
     }
 
-    let now = Instant::now();
-    let progress_epoch = client.sliced_receive_progress_epoch();
-    if progress_epoch != pending.sliced_progress_epoch {
-        pending.sliced_progress_epoch = progress_epoch;
-        pending.idle_started_at = now;
-        pending.next_request_at = now + Duration::from_millis(SETTINGS_HELPER_RETRY_PAUSE_MS);
-    }
-    if timeout_remaining(pending.idle_started_at, timeout).is_none() {
-        return StrategySchemaPoll::IdleTimeout;
-    }
-
-    if now >= pending.next_request_at {
-        client.strat_schema_request();
-        pending.next_request_at = now + Duration::from_millis(SETTINGS_HELPER_RETRY_PAUSE_MS);
+    if timeout_remaining(pending.started_at, timeout).is_none() {
+        return StrategySchemaPoll::Timeout;
     }
 
     StrategySchemaPoll::Pending
@@ -489,21 +443,9 @@ pub(super) fn finish_required_strategy_schema_step(
             });
         }
 
-        let now = Instant::now();
-        let progress_epoch = client.sliced_receive_progress_epoch();
-        if progress_epoch != pending.sliced_progress_epoch {
-            pending.sliced_progress_epoch = progress_epoch;
-            pending.idle_started_at = now;
-            pending.next_request_at = now + Duration::from_millis(SETTINGS_HELPER_RETRY_PAUSE_MS);
-        }
-        if timeout_remaining(pending.idle_started_at, timeout).is_none() {
+        if timeout_remaining(pending.started_at, timeout).is_none() {
             result.errors.push(format!("{STEP}: timeout"));
             return Err(InitError::CriticalStepTimedOut(STEP));
-        }
-
-        if now >= pending.next_request_at {
-            client.strat_schema_request();
-            pending.next_request_at = now + Duration::from_millis(SETTINGS_HELPER_RETRY_PAUSE_MS);
         }
 
         if !stepper.step(client, dispatcher) {
@@ -556,7 +498,7 @@ mod progress_tests {
     }
 
     #[test]
-    fn engine_init_idle_deadline_extends_only_on_unique_sliced_progress() {
+    fn unrelated_sliced_progress_does_not_extend_engine_init_deadline() {
         let mut client = test_client();
         client.transport.recv_slicer.set_last_online(10000);
         let (_tx, rx) = mpsc::channel();
@@ -564,37 +506,35 @@ mod progress_tests {
             request_uid: None,
             rx,
             deadline: Instant::now() - Duration::from_millis(1),
-            idle_timeout: Duration::from_secs(1),
-            sliced_progress_epoch: client.sliced_receive_progress_epoch(),
-            extend_on_sliced_progress: true,
         };
         let block = vec![7, 0, 0, 0, Command::API.to_byte(), 0xAA];
 
         let _ = client.transport.recv_slicer.on_new_sliced(&block);
         assert!(matches!(
             poll_engine_init_step(&mut client, &mut pending),
-            PendingEnginePoll::Pending
+            PendingEnginePoll::Timeout
         ));
+    }
 
-        pending.deadline = Instant::now() - Duration::from_millis(1);
+    #[test]
+    fn unrelated_sliced_progress_does_not_extend_strategy_schema_deadline() {
+        let mut client = test_client();
+        client.transport.recv_slicer.set_last_online(10000);
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = begin_required_strategy_schema_step(&mut client, &dispatcher);
+        pending.started_at = Instant::now() - Duration::from_secs(2);
+        let block = vec![8, 0, 0, 0, Command::API.to_byte(), 0xBB];
+
         let _ = client.transport.recv_slicer.on_new_sliced(&block);
         assert!(matches!(
-            poll_engine_init_step(&mut client, &mut pending),
-            PendingEnginePoll::Timeout
-        ));
-
-        let (_tx, rx) = mpsc::channel();
-        let mut fixed_deadline = PendingEngineInit {
-            request_uid: None,
-            rx,
-            deadline: Instant::now() - Duration::from_millis(1),
-            idle_timeout: Duration::from_secs(1),
-            sliced_progress_epoch: 0,
-            extend_on_sliced_progress: false,
-        };
-        assert!(matches!(
-            poll_engine_init_step(&mut client, &mut fixed_deadline),
-            PendingEnginePoll::Timeout
+            poll_required_strategy_schema_step(
+                &mut client,
+                &mut dispatcher,
+                &mut InitResult::default(),
+                &mut pending,
+                Duration::from_secs(1),
+            ),
+            StrategySchemaPoll::Timeout
         ));
     }
 }

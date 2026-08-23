@@ -191,15 +191,16 @@ pub struct InitConfig {
     /// The server resolves names, so callers can request these before
     /// `GetMarketsList` has populated the local market model.
     pub subscribe_orderbooks: Vec<String>,
-    /// Per-step Engine API wait interval. Default = `DEFAULT_PENDING_TIMEOUT_MS`
-    /// (12s).
+    /// Per-step Engine API wait override.
     ///
-    /// `BaseCheck`/`AuthCheck` use this timeout for each `SendAndWait`
-    /// request. A pending server-update marker enables the update-aware
+    /// By default, `BaseCheck`/`AuthCheck` use 12 seconds per attempt,
+    /// `UpdateMarketsList` uses 15 seconds, `GetMarketsList` uses 20 seconds,
+    /// and the larger strategy schema uses 30 seconds. Setting this value
+    /// overrides every default.
+    /// A pending server-update marker enables the update-aware
     /// BaseCheck branch: one normal BaseCheck attempt, then up to 10 retries
-    /// with 2000 ms between attempts. Large mandatory Sliced responses extend
-    /// their deadline whenever a new block arrives and retry only the current
-    /// init step after a full idle interval.
+    /// with 2000 ms between attempts. A mandatory Sliced timeout retries only
+    /// the current init step; transport traffic never extends its deadline.
     pub step_timeout: Option<Duration>,
 }
 

@@ -41,11 +41,6 @@ impl Client {
         self.authorized
     }
 
-    #[inline]
-    pub(crate) fn sliced_receive_progress_epoch(&self) -> u64 {
-        self.transport.recv_slicer.progress_epoch()
-    }
-
     /// Returns true after the MoonBot-compatible domain init has completed.
     pub(crate) fn is_domain_ready(&self) -> bool {
         self.subscriptions.domain_ready

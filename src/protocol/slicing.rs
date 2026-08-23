@@ -334,6 +334,7 @@ impl SlicingReceiver {
     }
 
     #[inline]
+    #[cfg(test)]
     pub(crate) fn progress_epoch(&self) -> u64 {
         self.progress_epoch
     }

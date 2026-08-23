@@ -41,6 +41,33 @@ pub(crate) use machine::{RuntimeInitMachine, RuntimeInitPoll, RuntimeInitStatus}
 pub(crate) use steps::run_base_check_delphi;
 pub(crate) use steps::{send_post_init_resync, CriticalInitStatus};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InitTimeouts {
+    base_auth: Duration,
+    get_markets_list: Duration,
+    update_markets_list: Duration,
+    strategy_schema: Duration,
+}
+
+impl InitTimeouts {
+    fn new(override_timeout: Option<Duration>) -> Self {
+        Self {
+            base_auth: override_timeout.unwrap_or(Duration::from_millis(
+                crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS as u64,
+            )),
+            get_markets_list: override_timeout.unwrap_or(Duration::from_millis(
+                DEFAULT_GET_MARKETS_LIST_INIT_TIMEOUT_MS,
+            )),
+            update_markets_list: override_timeout.unwrap_or(Duration::from_millis(
+                DEFAULT_UPDATE_MARKETS_LIST_INIT_TIMEOUT_MS,
+            )),
+            strategy_schema: override_timeout.unwrap_or(Duration::from_millis(
+                DEFAULT_STRATEGY_SCHEMA_INIT_TIMEOUT_MS,
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 fn wait_until_authorized(
     client: &mut Client,
@@ -117,9 +144,7 @@ pub(crate) fn run_init_sequence(
         return Err(InitError::NotAuthenticated);
     }
 
-    let timeout = cfg.step_timeout.unwrap_or(Duration::from_millis(
-        crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS as u64,
-    ));
+    let timeouts = InitTimeouts::new(cfg.step_timeout);
     let mut result = InitResult::default();
     let mut strategy_schema: Option<PendingStrategySchemaStep> = None;
 
@@ -131,7 +156,7 @@ pub(crate) fn run_init_sequence(
         client,
         dispatcher,
         &mut result,
-        timeout,
+        timeouts.base_auth,
         waiting_update,
         Duration::from_millis(DELPHI_BASE_CHECK_UPDATE_RETRY_PAUSE_MS),
     )?;
@@ -142,7 +167,7 @@ pub(crate) fn run_init_sequence(
 
     // === 2. AuthCheck ===
     let mut auth_status = if base_status.is_ok() {
-        run_auth_check_once(client, dispatcher, &mut result, timeout)?
+        run_auth_check_once(client, dispatcher, &mut result, timeouts.base_auth)?
     } else {
         CriticalInitStatus::Skipped
     };
@@ -163,14 +188,14 @@ pub(crate) fn run_init_sequence(
             Duration::from_millis(DELPHI_INIT_AUTH_RETRY_PAUSE_MS),
         );
         check_init_shutdown(client)?;
-        base_status = run_base_check_once(client, dispatcher, &mut result, timeout)?;
+        base_status = run_base_check_once(client, dispatcher, &mut result, timeouts.base_auth)?;
         if base_status.is_ok() {
             fire_init_step(client, "BaseCheck", init_started_at);
             if strategy_schema.is_none() {
                 strategy_schema = Some(begin_required_strategy_schema_step(client, dispatcher));
             }
         }
-        auth_status = run_auth_check_once(client, dispatcher, &mut result, timeout)?;
+        auth_status = run_auth_check_once(client, dispatcher, &mut result, timeouts.base_auth)?;
         if auth_status.is_ok() {
             fire_init_step(client, "AuthCheck", init_started_at);
         }
@@ -215,7 +240,7 @@ pub(crate) fn run_init_sequence(
         &mut result,
         "GetMarketsList",
         crate::commands::engine_request::get_markets_list(),
-        timeout,
+        timeouts.get_markets_list,
     )?;
     apply_required_get_markets_list_response(dispatcher, &resp, &mut result)?;
     result.markets_response_bytes = resp.data.len();
@@ -236,7 +261,7 @@ pub(crate) fn run_init_sequence(
         &mut result,
         "UpdateMarketsList",
         crate::commands::engine_request::update_markets_list(),
-        timeout,
+        timeouts.update_markets_list,
     )?;
     apply_required_update_markets_list_response(dispatcher, &resp, &mut result)?;
     result.update_markets_response_bytes = resp.data.len();
@@ -245,8 +270,6 @@ pub(crate) fn run_init_sequence(
     client.subscriptions.domain_restore = DomainRestoreIntent {
         fetch_indexes: true,
     };
-    client.set_domain_ready(true);
-
     if let Err(err) = finish_required_strategy_schema_step(
         client,
         dispatcher,
@@ -254,13 +277,14 @@ pub(crate) fn run_init_sequence(
         strategy_schema
             .as_mut()
             .expect("strategy schema step must be started before finish"),
-        timeout,
+        timeouts.strategy_schema,
     ) {
         client.set_domain_ready(false);
         return Err(err);
     }
     fire_init_step(client, "StrategySchema", init_started_at);
 
+    client.set_domain_ready(true);
     send_post_init_resync(client, dispatcher, &cfg, &mut result);
     client.send_registry_subscriptions_after_init();
 

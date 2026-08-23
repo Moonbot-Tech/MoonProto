@@ -26,7 +26,7 @@ pub(crate) struct RuntimeInitMachine {
     started: Instant,
     init_started_at: Instant,
     connect_timeout: Duration,
-    step_timeout: Duration,
+    timeouts: InitTimeouts,
     phase: RuntimeInitPhase,
     result: InitResult,
     waiting_update: bool,
@@ -87,7 +87,7 @@ enum RuntimeInitPhase {
 enum RequiredEngineResponsePoll {
     Pending,
     Response(EngineResponse),
-    IdleTimeout,
+    Timeout,
 }
 
 #[derive(Clone, Copy)]
@@ -110,12 +110,10 @@ impl RuntimeInitMachine {
             dispatcher.set_local_strategies(&initial.strategies);
         }
         let now = Instant::now();
-        let step_timeout = cfg.init.step_timeout.unwrap_or(Duration::from_millis(
-            crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS as u64,
-        ));
+        let timeouts = InitTimeouts::new(cfg.init.step_timeout);
         Self {
             connect_timeout: cfg.connect_timeout,
-            step_timeout,
+            timeouts,
             cfg: cfg.init,
             started: now,
             init_started_at: now,
@@ -251,7 +249,7 @@ impl RuntimeInitMachine {
                     let pending = begin_engine_init_step(
                         client,
                         crate::commands::engine_request::base_check(),
-                        self.step_timeout,
+                        self.timeouts.base_auth,
                     );
                     self.phase = RuntimeInitPhase::WaitBaseCheck { attempt, pending };
                     continue;
@@ -417,7 +415,7 @@ impl RuntimeInitMachine {
                     let pending = begin_engine_init_step(
                         client,
                         crate::commands::engine_request::auth_check(),
-                        self.step_timeout,
+                        self.timeouts.base_auth,
                     );
                     self.phase = RuntimeInitPhase::WaitAuthCheck { attempt, pending };
                     continue;
@@ -500,10 +498,10 @@ impl RuntimeInitMachine {
                         self.ensure_strategy_schema_started(client, dispatcher);
                     }
                     self.record_attempt(InitStep::GetMarketsList);
-                    let pending = begin_sliced_engine_init_step(
+                    let pending = begin_engine_init_step(
                         client,
                         crate::commands::engine_request::get_markets_list(),
-                        self.step_timeout,
+                        self.timeouts.get_markets_list,
                     );
                     self.phase = RuntimeInitPhase::WaitGetMarketsList { pending };
                     continue;
@@ -519,10 +517,10 @@ impl RuntimeInitMachine {
                             self.phase = RuntimeInitPhase::WaitGetMarketsList { pending };
                             return RuntimeInitPoll::Pending { changed };
                         }
-                        Ok(RequiredEngineResponsePoll::IdleTimeout) => {
+                        Ok(RequiredEngineResponsePoll::Timeout) => {
                             warn!(target: "moonproto::init",
-                                "GetMarketsList received no new Sliced blocks for {:?}; retrying the current init step",
-                                self.step_timeout);
+                                "GetMarketsList did not complete within {:?}; retrying the current init step",
+                                self.timeouts.get_markets_list);
                             self.phase = RuntimeInitPhase::SendGetMarketsList;
                             return RuntimeInitPoll::Pending { changed };
                         }
@@ -553,10 +551,10 @@ impl RuntimeInitMachine {
                         return RuntimeInitPoll::Pending { changed };
                     }
                     self.record_attempt(InitStep::UpdateMarketsList);
-                    let pending = begin_sliced_engine_init_step(
+                    let pending = begin_engine_init_step(
                         client,
                         crate::commands::engine_request::update_markets_list(),
-                        self.step_timeout,
+                        self.timeouts.update_markets_list,
                     );
                     self.phase = RuntimeInitPhase::WaitUpdateMarketsList { pending };
                     continue;
@@ -572,10 +570,10 @@ impl RuntimeInitMachine {
                             self.phase = RuntimeInitPhase::WaitUpdateMarketsList { pending };
                             return RuntimeInitPoll::Pending { changed };
                         }
-                        Ok(RequiredEngineResponsePoll::IdleTimeout) => {
+                        Ok(RequiredEngineResponsePoll::Timeout) => {
                             warn!(target: "moonproto::init",
-                                "UpdateMarketsList received no new Sliced blocks for {:?}; retrying the current init step",
-                                self.step_timeout);
+                                "UpdateMarketsList did not complete within {:?}; retrying the current init step",
+                                self.timeouts.update_markets_list);
                             self.phase = RuntimeInitPhase::SendUpdateMarketsList;
                             return RuntimeInitPoll::Pending { changed };
                         }
@@ -598,7 +596,6 @@ impl RuntimeInitMachine {
                     client.subscriptions.domain_restore = DomainRestoreIntent {
                         fetch_indexes: true,
                     };
-                    client.set_domain_ready(true);
                     self.phase = RuntimeInitPhase::WaitStrategySchema;
                     changed = true;
                     continue;
@@ -608,7 +605,7 @@ impl RuntimeInitMachine {
                         self.phase = RuntimeInitPhase::WaitStrategySchema;
                         return RuntimeInitPoll::Pending { changed };
                     }
-                    let timeout = self.step_timeout;
+                    let timeout = self.timeouts.strategy_schema;
                     let Some(pending) = self.strategy_schema.as_mut() else {
                         self.ensure_strategy_schema_started(client, dispatcher);
                         self.phase = RuntimeInitPhase::WaitStrategySchema;
@@ -632,10 +629,10 @@ impl RuntimeInitMachine {
                             self.phase = RuntimeInitPhase::WaitStrategySchema;
                             return RuntimeInitPoll::Pending { changed };
                         }
-                        StrategySchemaPoll::IdleTimeout => {
+                        StrategySchemaPoll::Timeout => {
                             warn!(target: "moonproto::init",
-                                "strategy schema received no new Sliced blocks for {:?}; retrying the current init step",
-                                self.step_timeout);
+                                "strategy schema did not complete within {:?}; retrying the current init step",
+                                self.timeouts.strategy_schema);
                             self.strategy_schema = None;
                             self.phase = RuntimeInitPhase::WaitStrategySchema;
                             return RuntimeInitPoll::Pending { changed };
@@ -648,6 +645,7 @@ impl RuntimeInitMachine {
                     }
                 }
                 RuntimeInitPhase::PostInit => {
+                    client.set_domain_ready(true);
                     send_post_init_resync(client, dispatcher, &self.cfg, &mut self.result);
                     client.send_registry_subscriptions_after_init();
                     if let Some(mode) = self.cfg.subscribe_trades {
@@ -791,7 +789,7 @@ impl RuntimeInitMachine {
                 self.result.errors.push(format!("{step} error: {message}"));
                 Err(InitError::CriticalStepFailed { step, message })
             }
-            PendingEnginePoll::Timeout => Ok(RequiredEngineResponsePoll::IdleTimeout),
+            PendingEnginePoll::Timeout => Ok(RequiredEngineResponsePoll::Timeout),
             PendingEnginePoll::Disconnected => Err(InitError::SendChannelClosed),
         }
     }
@@ -806,7 +804,45 @@ mod progress_tests {
     }
 
     #[test]
-    fn required_market_idle_timeout_retries_only_the_current_step() {
+    fn default_timeouts_match_each_init_payload_class() {
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let defaults = RuntimeInitMachine::new(ConnectConfig::default(), &mut dispatcher);
+
+        assert_eq!(
+            defaults.timeouts,
+            InitTimeouts {
+                base_auth: Duration::from_millis(
+                    crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS as u64,
+                ),
+                get_markets_list: Duration::from_millis(DEFAULT_GET_MARKETS_LIST_INIT_TIMEOUT_MS,),
+                update_markets_list: Duration::from_millis(
+                    DEFAULT_UPDATE_MARKETS_LIST_INIT_TIMEOUT_MS,
+                ),
+                strategy_schema: Duration::from_millis(DEFAULT_STRATEGY_SCHEMA_INIT_TIMEOUT_MS,),
+            }
+        );
+
+        let override_timeout = Duration::from_secs(7);
+        let overridden = RuntimeInitMachine::new(
+            ConnectConfig::new(InitConfig {
+                step_timeout: Some(override_timeout),
+                ..InitConfig::default()
+            }),
+            &mut dispatcher,
+        );
+        assert_eq!(
+            overridden.timeouts,
+            InitTimeouts {
+                base_auth: override_timeout,
+                get_markets_list: override_timeout,
+                update_markets_list: override_timeout,
+                strategy_schema: override_timeout,
+            }
+        );
+    }
+
+    #[test]
+    fn required_market_timeout_retries_only_the_current_step() {
         let mut dispatcher = crate::events::EventDispatcher::new();
         let mut machine = RuntimeInitMachine::new(
             ConnectConfig::new(InitConfig {
@@ -820,7 +856,7 @@ mod progress_tests {
         machine.result.base_check_ok = true;
         machine.record_attempt(InitStep::GetMarketsList);
         machine.phase = RuntimeInitPhase::WaitGetMarketsList {
-            pending: begin_sliced_engine_init_step(
+            pending: begin_engine_init_step(
                 &client,
                 crate::commands::engine_request::get_markets_list(),
                 Duration::ZERO,
@@ -870,6 +906,33 @@ mod progress_tests {
         ));
         assert_eq!(machine.startup_status().current_step_retries, 0);
         assert_eq!(machine.startup_status().total_retries, 0);
+    }
+
+    #[test]
+    fn domain_gate_stays_closed_until_post_init() {
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut machine = RuntimeInitMachine::new(ConnectConfig::default(), &mut dispatcher);
+        let mut client = test_client();
+        client.authorized = true;
+        machine.strategy_schema = Some(begin_required_strategy_schema_step(
+            &mut client,
+            &dispatcher,
+        ));
+        machine.phase = RuntimeInitPhase::WaitStrategySchema;
+
+        assert!(matches!(
+            machine.poll(&mut client, &mut dispatcher),
+            RuntimeInitPoll::Pending { .. }
+        ));
+        assert!(!client.is_domain_ready());
+
+        machine.mark_completed(InitStep::StrategySchema);
+        machine.phase = RuntimeInitPhase::PostInit;
+        assert!(matches!(
+            machine.poll(&mut client, &mut dispatcher),
+            RuntimeInitPoll::Pending { .. }
+        ));
+        assert!(client.is_domain_ready());
     }
 
     #[test]

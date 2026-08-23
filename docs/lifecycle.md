@@ -94,8 +94,11 @@ show_startup_status(
 
 The snapshot also contains completed steps, active Sliced transfer/block
 counts, duplicate blocks, whole-step retries, reconnect count, RTT, PMTU, and
-the core's server-to-client delivery estimate. It is passive and available in
-regular builds; packet tracing and the `diagnostics` feature are not required.
+the core's server-to-client delivery estimate. These transport-wide counters
+describe the connection, not necessarily the response awaited by
+`current_step`, and never extend that step's deadline. The snapshot is passive
+and available in regular builds; packet tracing and the `diagnostics` feature
+are not required.
 
 There is deliberately no single percentage for the whole Init sequence. The
 strategy schema may overlap the sequential market requests, and the combined
