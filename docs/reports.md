@@ -239,9 +239,48 @@ let add = schema.sqlite_add_column_sql("Orders", field);
 let index = schema.sqlite_unique_index_sql("Orders");
 ```
 
-`newRecID` is the immutable replication key. It is different from an active
-order UID, exchange order id, and the legacy report `db_id`. The current schema
-is also available from `snapshot().report_schema()`.
+`newRecID` is the immutable row address inside one core report database. Use it
+for replication cursors, upserts, soft-delete/restore commands, and physical
+delete events. It is different from an active order UID, exchange order id,
+and the legacy report `db_id`.
+
+`ReportUID` is the immutable 64-bit identity of the report row itself. It is
+preserved when a MoonBot database is copied, so an application aggregating
+several cores can recognize the shared historical rows without confusing their
+per-database `newRecID` values. Rows created independently after the copy have
+independent `ReportUID` values. The value is carried as an `i64`; negative
+values are valid and must not be rejected or truncated.
+
+Resolve optional fields once for each received schema revision and cache their
+indices. Do not call `field_by_name` for every row:
+
+```rust
+use moonproto::{ReportFieldKind, ReportValue};
+
+let report_uid_index = schema
+    .field_by_name("ReportUID")
+    .filter(|field| field.kind == ReportFieldKind::Integer)
+    .map(|field| field.index);
+
+let report_uid = report_uid_index.and_then(|index| match row.value(index) {
+    Some(ReportValue::Integer(value)) => Some(*value),
+    _ => None,
+});
+```
+
+The schema is append-only, so a discovered index remains stable; refresh the
+cache when a new `ReportEvent::Schema` revision arrives. A missing field means
+that the connected core does not provide this identity. Never substitute
+`ReportUID` for `newRecID` in replication or mutation APIs.
+
+MoonProto does not own or rewrite the application's SQLite database. If
+`ReportUID` is added to an existing local replica, previously stored rows keep
+their local default until the application receives those rows again. An
+application that needs historical cross-core deduplication can perform a
+one-time fresh sync; until then, missing or placeholder values are not usable
+as shared identity.
+
+The current schema is also available from `snapshot().report_schema()`.
 
 For each page, use one SQLite transaction and reuse one prepared upsert
 statement. Preparing SQL for every row can turn the local writer into the
