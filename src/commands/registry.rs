@@ -708,6 +708,14 @@ pub(crate) const UI_COMMANDS: &[CommandDescriptor] = &[
         priority = High,
         direction = Outbound
     ),
+    cmd_desc!(
+        Command::UI,
+        30,
+        "THLRequestLimitStateCommand",
+        base = Base,
+        priority = High,
+        direction = Inbound
+    ),
 ];
 
 pub(crate) const STRAT_COMMANDS: &[CommandDescriptor] = &[
@@ -1027,7 +1035,7 @@ mod tests {
     #[test]
     fn descriptor_map_covers_known_typed_domains() {
         assert_eq!(ORDER_COMMANDS.len(), 24);
-        assert_eq!(UI_COMMANDS.len(), 30);
+        assert_eq!(UI_COMMANDS.len(), 31);
         assert_eq!(STRAT_COMMANDS.len(), 11);
         assert_eq!(BALANCE_COMMANDS.len(), 8);
         assert_eq!(API_COMMANDS.len(), 5);
@@ -1200,6 +1208,14 @@ mod tests {
         assert_eq!(request.name, "TKernelLicenseStateRequest");
         assert_eq!(request.priority, CommandPriority::High);
         assert_eq!(request.direction, CommandDirection::Outbound);
+    }
+
+    #[test]
+    fn descriptor_map_includes_hyperliquid_request_limit_state() {
+        let state = find_descriptor(Command::UI, 30).unwrap();
+        assert_eq!(state.name, "THLRequestLimitStateCommand");
+        assert_eq!(state.priority, CommandPriority::High);
+        assert_eq!(state.direction, CommandDirection::Inbound);
     }
 
     #[test]

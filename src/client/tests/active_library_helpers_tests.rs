@@ -103,6 +103,10 @@ fn only_required_startup_payloads_are_allowed_before_domain_ready() {
         "TKernelLicenseStateCommand is an initial server state fact and must not be dropped before domain_ready"
     );
     assert!(
+        incoming_allowed_before_domain_ready(Command::UI, &[30]),
+        "THLRequestLimitStateCommand is sent from SrvConnect and must not be dropped before domain_ready"
+    );
+    assert!(
         incoming_allowed_before_domain_ready(Command::UI, &[26]),
         "live news may arrive while the one-shot SrvConnect history is still in flight"
     );

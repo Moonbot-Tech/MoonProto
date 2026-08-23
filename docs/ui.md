@@ -52,6 +52,12 @@ for event in client.drain_events() {
                     redraw_profit_counters(profit);
                 }
             }
+            SettingsEvent::HyperliquidRequestLimitUpdated => {
+                let Some(state) = client.snapshot() else { continue; };
+                redraw_hyperliquid_requests_left(
+                    state.settings().hyperliquid_requests_left,
+                );
+            }
             _ => {}
         }
     }
@@ -60,10 +66,10 @@ for event in client.drain_events() {
 
 `SettingsState` stores the latest settings snapshot and small derived fields:
 leverage management, runtime state, kernel license/MoonCredits state, profit
-counters, and arb validity time. Client-originated UI commands such as MM-orders
-subscription, emulator ticks, trigger management, reset-profit, restart-now, and
-DEX/spot switching are sent through high-level handles; they are not inbound
-settings state.
+counters, HyperLiquid request quota, and arb validity time. Client-originated UI
+commands such as MM-orders subscription, emulator ticks, trigger management,
+reset-profit, restart-now, and DEX/spot switching are sent through high-level
+handles; they are not inbound settings state.
 
 The separate full portable settings snapshot is documented in
 [shared configuration](shared_config.md). It is requested in the background and
@@ -263,6 +269,30 @@ use moonproto::ResetProfitKind;
 client.settings().reset_profit(ResetProfitKind::CurrentProfit)?;
 client.settings().reset_profit(ResetProfitKind::AllProfit)?;
 ```
+
+### HyperLiquid Request Quota
+
+HyperLiquid limits action requests per user address. The core sends its latest
+remaining count after connect, after each successful quota refresh, and when it
+first observes that the quota is exhausted. Read the retained value after
+`SettingsEvent::HyperliquidRequestLimitUpdated`:
+
+```rust
+if let Some(snapshot) = client.snapshot() {
+    set_requests_left(snapshot.settings().hyperliquid_requests_left);
+
+    // For HyperLiquid this legacy AuthCheck field contains the user address
+    // expected by the request-purchase page.
+    let user_address = snapshot
+        .auth_info()
+        .map(|auth| auth.btc_address.as_str())
+        .filter(|address| !address.is_empty());
+}
+```
+
+`None` means that the connected core has not published a quota value yet or is
+not a HyperLiquid core. The count is core-owned state; terminal code should not
+decrement it optimistically from local order activity.
 
 ### Leverage Management
 

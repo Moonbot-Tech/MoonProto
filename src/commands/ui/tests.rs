@@ -1274,6 +1274,27 @@ fn shared_config_oversized_len_rejected() {
 }
 
 #[test]
+fn hyperliquid_request_limit_matches_reference_soft_read() {
+    let mut raw = header_bytes(CMD_HL_REQUEST_LIMIT_STATE, 30);
+    raw.extend_from_slice(&12_345i64.to_le_bytes());
+    match UICommand::parse(&raw).unwrap() {
+        UICommand::HyperliquidRequestLimitState(state) => {
+            assert_eq!(state.uid, 30);
+            assert_eq!(state.requests_left, Some(12_345));
+        }
+        _ => panic!("wrong variant"),
+    }
+
+    let raw = header_bytes(CMD_HL_REQUEST_LIMIT_STATE, 31);
+    match UICommand::parse(&raw).unwrap() {
+        UICommand::HyperliquidRequestLimitState(state) => {
+            assert_eq!(state.requests_left, None);
+        }
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
 fn shared_config_truncated_tail_is_zero_filled() {
     let mut raw = build_shared_config_blob(5, &[1, 2, 3]);
     raw[11..15].copy_from_slice(&6_u32.to_le_bytes());

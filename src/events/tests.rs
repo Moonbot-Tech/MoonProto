@@ -362,6 +362,28 @@ fn dispatcher_applies_kernel_license_state() {
 }
 
 #[test]
+fn dispatcher_applies_hyperliquid_request_limit_state() {
+    let mut dispatcher = EventDispatcher::new();
+    let mut payload = vec![30u8];
+    payload.extend_from_slice(&CURRENT_PROTO_CMD_VER.to_le_bytes());
+    payload.extend_from_slice(&123u64.to_le_bytes());
+    payload.extend_from_slice(&54_321i64.to_le_bytes());
+
+    let events = dispatcher.dispatch(Command::UI, &payload, 0);
+
+    assert!(matches!(
+        events.as_slice(),
+        [Event::Settings(
+            SettingsEvent::HyperliquidRequestLimitUpdated
+        )]
+    ));
+    assert_eq!(
+        dispatcher.settings().hyperliquid_requests_left,
+        Some(54_321)
+    );
+}
+
+#[test]
 // parity: MoonBot MoonProtoBaseStruct.pas:TCommandRegistry.FromStream
 fn dispatcher_skips_future_version_ui_command() {
     let mut dispatcher = EventDispatcher::new();

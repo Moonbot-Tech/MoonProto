@@ -30,6 +30,7 @@
 //! - 27 — `TNewsHistoryCommand`     (Sliced, UK_NewsHistory, startup news history)
 //! - 28 — `TSharedConfigCommand`    (Sliced, UK_SharedConfig, gzip safe-share payload)
 //! - 29 — `TSharedConfigRequest`    (empty, request the kernel's safe-share config)
+//! - 30 — `THLRequestLimitStateCommand` (High, HyperLiquid action requests left)
 //!
 //! ## ASCfg / ASCfg2 blobs
 //! `TAutoStartConfig` (104 bytes) and `TAutoStartConfig2` (168 bytes) are
@@ -101,6 +102,7 @@ const CMD_NEWS_RELAY: u8 = 26;
 const CMD_NEWS_HISTORY: u8 = 27;
 const CMD_SHARED_CONFIG: u8 = 28;
 const CMD_SHARED_CONFIG_REQUEST: u8 = 29;
+const CMD_HL_REQUEST_LIMIT_STATE: u8 = 30;
 
 pub(crate) const NEWS_RELAY_KIND_NEWS: u8 = 0;
 pub(crate) const NEWS_RELAY_KIND_TAGS: u8 = 1;
@@ -118,6 +120,11 @@ pub(crate) fn is_runtime_state_payload(payload: &[u8]) -> bool {
 #[inline]
 pub(crate) fn is_kernel_license_state_payload(payload: &[u8]) -> bool {
     payload.first().copied() == Some(CMD_KERNEL_LICENSE_STATE)
+}
+
+#[inline]
+pub(crate) fn is_hl_request_limit_state_payload(payload: &[u8]) -> bool {
+    payload.first().copied() == Some(CMD_HL_REQUEST_LIMIT_STATE)
 }
 
 const LEV_CMD_VER: u8 = 1;
@@ -1222,6 +1229,17 @@ pub struct ProfitStateCommand {
     pub rep_count_trades: i32,
 }
 
+/// CmdId=30 `THLRequestLimitStateCommand`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HyperliquidRequestLimitStateCommand {
+    #[cfg(any(test, feature = "diagnostics"))]
+    #[doc(hidden)]
+    pub uid: u64,
+    /// Remaining address-level HyperLiquid action requests. `None` is the
+    /// wire sentinel used before the core has a value and on non-HyperLiquid cores.
+    pub requests_left: Option<u64>,
+}
+
 /// CmdId=25 `TAutoDetectCommand`.
 ///
 /// This is the explicit terminal action behind the AutoDetect/passive-mode
@@ -1656,6 +1674,7 @@ pub enum UICommand {
     NewsRelay(NewsRelayCommand),
     NewsHistory(NewsHistoryCommand),
     SharedConfig(SharedConfigCommand),
+    HyperliquidRequestLimitState(HyperliquidRequestLimitStateCommand),
     /// Command header is well-formed, but the command version is newer than
     /// this library can parse. The command is skipped without state changes.
     Skipped {

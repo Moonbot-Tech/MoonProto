@@ -10,6 +10,7 @@
 //! - `RuntimeState`: started/passive-mode state of the MoonBot core.
 //! - `KernelLicenseState`: license/module/MoonCredits state.
 //! - `ProfitState`: report/profit counters shown by MoonBot settings UI.
+//! - HyperLiquid request limit: remaining address-level action requests.
 //! - `ArbActivateNotify`: arbitrage-valid-until timestamp.
 //!
 //! Client->server action commands (`SettingsRequest`, `StratStartStop`,
@@ -56,6 +57,11 @@ pub struct SettingsState {
     pub kernel_license_state: Option<KernelLicenseStateCommand>,
     /// Current report/profit counters, if received.
     pub profit_state: Option<ProfitStateCommand>,
+    /// Remaining address-level HyperLiquid action requests.
+    ///
+    /// `None` means the core has not published a value yet or the connected
+    /// core is not HyperLiquid.
+    pub hyperliquid_requests_left: Option<u64>,
     /// Raw `TDateTime` days for diagnostics/parity tests.
     ///
     /// Normal terminal code should use [`Self::arb_valid_until_time`] and
@@ -82,6 +88,8 @@ pub enum SettingsEvent {
     KernelLicenseStateUpdated,
     /// Report/profit counters changed.
     ProfitStateUpdated,
+    /// Remaining HyperLiquid address-level action requests changed.
+    HyperliquidRequestLimitUpdated,
     /// Remote update command: version name + release/test flag.
     ///
     /// Terminal clients treat this as a request to run their local updater. The
@@ -278,6 +286,11 @@ impl SettingsState {
             UICommand::ProfitState(s) => {
                 self.profit_state = Some(s);
                 Some(SettingsEvent::ProfitStateUpdated)
+            }
+
+            UICommand::HyperliquidRequestLimitState(s) => {
+                self.hyperliquid_requests_left = s.requests_left;
+                Some(SettingsEvent::HyperliquidRequestLimitUpdated)
             }
 
             UICommand::ArbActivateNotify(a) => {
@@ -567,6 +580,30 @@ mod tests {
         assert_eq!(state.reg_id, 42);
         assert_eq!(state.moon_credits, 100);
         assert!(state.can_use_watcher);
+    }
+
+    #[test]
+    fn hyperliquid_request_limit_updates_and_clears_state() {
+        let mut st = SettingsState::new();
+        let ev = st.apply(UICommand::HyperliquidRequestLimitState(
+            crate::commands::ui::HyperliquidRequestLimitStateCommand {
+                uid: 1,
+                requests_left: Some(12_345),
+            },
+        ));
+        assert!(matches!(
+            ev,
+            Some(SettingsEvent::HyperliquidRequestLimitUpdated)
+        ));
+        assert_eq!(st.hyperliquid_requests_left, Some(12_345));
+
+        st.apply(UICommand::HyperliquidRequestLimitState(
+            crate::commands::ui::HyperliquidRequestLimitStateCommand {
+                uid: 2,
+                requests_left: None,
+            },
+        ));
+        assert_eq!(st.hyperliquid_requests_left, None);
     }
 
     #[test]

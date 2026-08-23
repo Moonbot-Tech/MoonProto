@@ -357,6 +357,21 @@ impl UICommand {
                 Some(UICommand::SharedConfig(SharedConfigCommand { data }))
             }
 
+            CMD_HL_REQUEST_LIMIT_STATE => {
+                // The reference decoder starts from -1 before its soft stream
+                // read, so a missing or truncated tail keeps 0xFF bytes.
+                let mut bytes = [u8::MAX; 8];
+                read_into_prefix(payload, &mut pos, &mut bytes);
+                let requests_left = u64::try_from(i64::from_le_bytes(bytes)).ok();
+                Some(UICommand::HyperliquidRequestLimitState(
+                    HyperliquidRequestLimitStateCommand {
+                        #[cfg(any(test, feature = "diagnostics"))]
+                        uid,
+                        requests_left,
+                    },
+                ))
+            }
+
             _ => Some(UICommand::Unknown { cmd_id, uid }),
         }
     }
