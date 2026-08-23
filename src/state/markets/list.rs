@@ -72,7 +72,7 @@ impl MarketsState {
             markets.push(handle);
         }
 
-        for market in resp.markets {
+        for mut market in resp.markets {
             if consumed.contains_key(&market.bn_market_name) {
                 continue;
             }
@@ -82,6 +82,9 @@ impl MarketsState {
             if new_market_found {
                 self.new_markets_pending_price_refresh += 1;
                 self.new_markets_added.push(market.bn_market_name.clone());
+            }
+            if self.last_session_profit_epoch.is_some() {
+                market.session_profit = Some(0.0);
             }
             let name = market.bn_market_name.clone();
             let handle = MarketHandle::new(market);
@@ -261,7 +264,7 @@ impl MarketsState {
 
     fn apply_one_market_from_list_payload_batch(
         &mut self,
-        market: Market,
+        mut market: Market,
         allow_new_markets: bool,
         pending_markets: &mut Option<Vec<MarketHandle>>,
         pending_handles_by_name: &mut Option<HashMap<String, MarketHandle>>,
@@ -290,6 +293,9 @@ impl MarketsState {
             return false;
         }
 
+        if self.last_session_profit_epoch.is_some() {
+            market.session_profit = Some(0.0);
+        }
         let name = market.bn_market_name.clone();
         let handle = MarketHandle::new(market);
         seed_price_funding_from_market(&handle);

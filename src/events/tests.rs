@@ -526,6 +526,20 @@ fn balance_payload_with_items(cmd_id: u8, uid: u64, epoch: u16, items: &[(&str, 
     out
 }
 
+fn session_profit_payload(uid: u64, epoch: u16, items: &[(u16, f64)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(17 + items.len() * 10);
+    out.push(7);
+    out.extend_from_slice(&crate::commands::registry::CURRENT_PROTO_CMD_VER.to_le_bytes());
+    out.extend_from_slice(&uid.to_le_bytes());
+    out.extend_from_slice(&epoch.to_le_bytes());
+    out.extend_from_slice(&(items.len() as i32).to_le_bytes());
+    for (market_index, session_profit) in items {
+        out.extend_from_slice(&market_index.to_le_bytes());
+        out.extend_from_slice(&session_profit.to_le_bytes());
+    }
+    out
+}
+
 fn write_balance_item_position(
     out: &mut Vec<u8>,
     market_name: &str,
@@ -647,6 +661,7 @@ fn event_market(name: &str) -> Market {
         position_type: PositionType::Cross,
         balance_hash: 0,
         last_balance_epoch: 0,
+        session_profit: None,
         trade_tail: Default::default(),
         price: Default::default(),
         delta_state: Default::default(),
@@ -1678,6 +1693,114 @@ fn dispatcher_balance_incremental_epoch_gate_uses_live_market_epoch() {
     assert_eq!(btc.bn_max_value, 30.0);
     assert_eq!(btc.leverage_x, 3);
     assert_eq!(btc.last_balance_epoch, 100);
+}
+
+#[test]
+fn dispatcher_applies_full_sparse_session_profit_snapshot_by_server_index() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT", "ETHUSDT", "SOLUSDT"]);
+    d.markets.apply_markets_indexes(vec![
+        "SOLUSDT".to_string(),
+        "BTCUSDT".to_string(),
+        "ETHUSDT".to_string(),
+    ]);
+
+    let first = session_profit_payload(10, 5, &[(0, 3.5), (1, -1.25), (99, 88.0)]);
+    let events = d.dispatch(Command::Balance, &first, 1000);
+
+    assert!(matches!(
+        events.as_slice(),
+        [Event::Balance(BalanceEvent::SessionProfitsApplied {
+            nonzero_count: 2,
+            epoch: 5,
+        })]
+    ));
+    assert_eq!(
+        d.markets.get("SOLUSDT").unwrap().session_profit(),
+        Some(3.5)
+    );
+    assert_eq!(
+        d.markets.get("BTCUSDT").unwrap().session_profit(),
+        Some(-1.25)
+    );
+    assert_eq!(
+        d.markets.get("ETHUSDT").unwrap().session_profit(),
+        Some(0.0)
+    );
+
+    let second = session_profit_payload(11, 6, &[(2, 7.0)]);
+    let _ = d.dispatch(Command::Balance, &second, 1001);
+
+    assert_eq!(
+        d.markets.get("SOLUSDT").unwrap().session_profit(),
+        Some(0.0)
+    );
+    assert_eq!(
+        d.markets.get("BTCUSDT").unwrap().session_profit(),
+        Some(0.0)
+    );
+    assert_eq!(
+        d.markets.get("ETHUSDT").unwrap().session_profit(),
+        Some(7.0)
+    );
+}
+
+#[test]
+fn dispatcher_rejects_duplicate_and_stale_session_profit_snapshots() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    d.markets.apply_markets_indexes(vec!["BTCUSDT".to_string()]);
+
+    let _ = d.dispatch(
+        Command::Balance,
+        &session_profit_payload(10, 50, &[(0, 4.0)]),
+        1000,
+    );
+    for epoch in [50, 49] {
+        let events = d.dispatch(
+            Command::Balance,
+            &session_profit_payload(11, epoch, &[(0, 99.0)]),
+            1001,
+        );
+        assert!(matches!(
+            events.as_slice(),
+            [Event::Balance(BalanceEvent::SessionProfitEpochStale {
+                incoming,
+                last: 50,
+            })] if *incoming == epoch
+        ));
+        assert_eq!(
+            d.markets.get("BTCUSDT").unwrap().session_profit(),
+            Some(4.0)
+        );
+    }
+}
+
+#[test]
+fn dispatcher_does_not_apply_session_profit_through_stale_indexes() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    d.markets.apply_markets_indexes(vec!["BTCUSDT".to_string()]);
+    d.markets.mark_indexes_stale();
+
+    let events = d.dispatch(
+        Command::Balance,
+        &session_profit_payload(10, 1, &[(0, 5.0)]),
+        1000,
+    );
+
+    assert!(events.is_empty());
+    assert_eq!(d.markets.get("BTCUSDT").unwrap().session_profit(), None);
+}
+
+#[test]
+fn dispatcher_reports_malformed_session_profit_snapshot() {
+    let mut payload = session_profit_payload(10, 1, &[(0, 5.0)]);
+    payload.pop();
+
+    let events = EventDispatcher::new().dispatch(Command::Balance, &payload, 1000);
+
+    assert!(matches!(events.as_slice(), [Event::ParseFailed { .. }]));
 }
 
 #[test]

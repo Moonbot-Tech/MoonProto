@@ -34,7 +34,8 @@ pub use self::types::MarketsListApplyTiming;
 #[cfg(not(feature = "diagnostics"))]
 pub(crate) use self::types::MarketsListApplyTiming;
 pub use self::types::{
-    BaseCurrencyPrice, MarketBalancePosition, MarketGlobalDeltas, MarketHandle, MarketsEvent,
+    BaseCurrencyPrice, MarketBalancePosition, MarketGlobalDeltas, MarketHandle,
+    MarketSessionProfit, MarketsEvent,
 };
 // The live trade tail and price live on the retained `Market` object itself;
 // re-export them here so the public `state::markets` path is stable.
@@ -114,6 +115,7 @@ pub struct MarketsState {
     last_markets_list_timing: Option<MarketsListApplyTiming>,
     eps_profile: EpsProfile,
     global_deltas: MarketGlobalDeltas,
+    last_session_profit_epoch: Option<u16>,
     last_update_delta500_ms: i64,
     coin_blacklist: Arc<Vec<String>>,
     exclude_blacklisted_markets_from_exchange_delta: bool,

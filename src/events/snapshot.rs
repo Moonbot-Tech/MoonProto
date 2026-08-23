@@ -101,6 +101,14 @@ impl MoonStateSnapshot {
         )
     }
 
+    /// Per-market session profit as shown by the core, in base currency and USD.
+    pub fn session_profit_for(
+        &self,
+        market: &MarketHandle,
+    ) -> Option<crate::state::MarketSessionProfit> {
+        self.markets.session_profit_for(market)
+    }
+
     /// Read-only account-level state.
     pub fn account(&self) -> &AccountState {
         &self.account

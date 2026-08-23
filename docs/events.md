@@ -199,6 +199,11 @@ pub enum Event {
 }
 ```
 
+`Event::Balance` also carries `BalanceEvent::SessionProfitsApplied` after the
+authoritative per-market session-profit snapshot is visible through retained
+market handles. Read `market.session_profit()` for the base-currency value or
+`snapshot.session_profit_for(&market)` for the chart-ready USD value.
+
 `Event::MarketHistory` completes a demand-driven
 `client.history().request_chart_for(...)` request. Match it by the returned
 ticket ID. A `Ready` event is an apply barrier: the four archive sections are

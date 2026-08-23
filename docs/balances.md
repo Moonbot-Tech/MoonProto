@@ -25,6 +25,11 @@ chart/order UI reads that same retained object.
 
 - global account totals in BTC equivalent.
 
+The core also publishes per-market session profit: the value reset by the
+market-table **Reset Session** action and shown as `Session` in a chart header.
+It is retained on each `MarketHandle`, separately from position PnL and the
+global report-profit counters.
+
 Transferable wallet assets are a different state model. They are not chart
 position fields. Use `client.balances().refresh_transfer_assets()` and
 `snapshot().transfer_assets()` for the Spot/Futures/Quarterly asset lists used
@@ -86,6 +91,37 @@ the UI only needs the live balance/position subset.
 Use `snapshot.position_protection_for(&market)` for the chart warning that
 compares the retained position with active non-emulator close orders.
 
+## Per-Market Session Profit
+
+```rust
+let Some(state) = client.snapshot() else { return; };
+let Some(market) = state.markets().find("ETH") else { return; };
+
+// Raw value in the core's base currency.
+if let Some(base) = market.session_profit() {
+    println!("session profit in base currency: {base}");
+}
+
+// The chart-ready value using the retained base-currency/USD rate.
+if let Some(profit) = state.session_profit_for(&market) {
+    println!("Session: {:.2}$", profit.usd);
+}
+```
+
+`MarketHandle::session_profit()` returns `None` until the connected core has
+published this state. After the first snapshot, a real zero is `Some(0.0)`.
+This distinction lets applications remain compatible with older cores without
+presenting unavailable data as zero.
+`snapshot.session_profit_for(&market)` additionally returns `None` until the
+retained base-currency/USD conversion rate is available; the raw base-currency
+value remains readable from the market handle.
+
+The wire update is an authoritative sparse snapshot: it carries only non-zero
+markets, and every omitted known market becomes zero. A newly listed market
+also starts at known zero after session-profit support has been observed.
+`BalanceEvent::SessionProfitsApplied` tells push-driven UI that the retained
+values are ready; applications do not merge packet rows themselves.
+
 ## Getting A Fresh Snapshot
 
 Regular UI code calls `client.balances().refresh()` and reads
@@ -123,6 +159,12 @@ for event in client.drain_events() {
             ..
         }) => {
             println!("balance increment: rows={count} global={global_changed}");
+        }
+        Event::Balance(BalanceEvent::SessionProfitsApplied {
+            nonzero_count,
+            ..
+        }) => {
+            println!("session profit updated: non-zero markets={nonzero_count}");
         }
         _ => {}
     }
@@ -205,6 +247,8 @@ Normal UI state is:
 
 - `snapshot().markets().get("ETHUSDT") -> MarketHandle`;
 - `MarketHandle::balance_position()` for position, liquidation, leverage, PnL;
+- `MarketHandle::session_profit()` or `snapshot().session_profit_for(&market)`
+  for the per-market session counter;
 - `snapshot().balances().global()` for account totals;
 - `snapshot().transfer_assets()` for transferable wallet assets.
 

@@ -61,6 +61,8 @@ pub(crate) const UK_ORDER_CMD_IMMUNE: u8 = 26;
 pub(crate) const UK_NEWS_HISTORY: u8 = 27;
 /// `UK_SharedConfig`: singleton safe-share config snapshot key.
 pub(crate) const UK_SHARED_CONFIG: u8 = 28;
+/// `UK_MarketSessionProfit`: singleton per-market session-profit snapshot key.
+pub(crate) const UK_MARKET_SESSION_PROFIT: u8 = 29;
 
 /// Send priority as protocol metadata, independent from the concrete client
 /// queue implementation. Conversion to `SendPriority` happens at the send edge.
@@ -865,6 +867,17 @@ pub(crate) const BALANCE_COMMANDS: &[CommandDescriptor] = &[
         priority = Low,
         direction = Inbound
     ),
+    cmd_desc!(
+        Command::Balance,
+        7,
+        "TMarketSessionProfitStateCommand",
+        base = Base,
+        priority = Sliced,
+        retries = None,
+        unique = UK_MARKET_SESSION_PROFIT,
+        ukey = UKeyRule::Singleton(1),
+        direction = Inbound
+    ),
 ];
 
 pub(crate) const API_COMMANDS: &[CommandDescriptor] = &[
@@ -1016,7 +1029,7 @@ mod tests {
         assert_eq!(ORDER_COMMANDS.len(), 24);
         assert_eq!(UI_COMMANDS.len(), 30);
         assert_eq!(STRAT_COMMANDS.len(), 11);
-        assert_eq!(BALANCE_COMMANDS.len(), 7);
+        assert_eq!(BALANCE_COMMANDS.len(), 8);
         assert_eq!(API_COMMANDS.len(), 5);
     }
 
@@ -1044,6 +1057,12 @@ mod tests {
         let balance_refresh = find_descriptor(Command::Balance, 5).unwrap();
         assert_eq!(balance_refresh.priority, CommandPriority::High);
         assert_eq!(balance_refresh.max_retries, 3);
+
+        let session_profit = find_descriptor(Command::Balance, 7).unwrap();
+        assert_eq!(session_profit.priority, CommandPriority::Sliced);
+        assert_eq!(session_profit.max_retries, 6);
+        assert_eq!(session_profit.unique_kind, UK_MARKET_SESSION_PROFIT);
+        assert_eq!(session_profit.ukey, UKeyRule::Singleton(1));
     }
 
     #[test]

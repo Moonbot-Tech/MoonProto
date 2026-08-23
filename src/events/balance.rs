@@ -6,7 +6,7 @@
 
 use super::{ArbEvent, Event, EventDispatcher};
 use crate::commands::arb::{parse_arb_payload_compact, parse_arb_prices, ArbPayload};
-use crate::commands::balance::parse_balance;
+use crate::commands::balance::{parse_balance, parse_market_session_profits};
 use crate::protocol::Command;
 
 impl EventDispatcher {
@@ -84,6 +84,14 @@ impl EventDispatcher {
                                 })
                             }
                         });
+                    }
+                }
+                None => Self::push_parse_failed(out, Command::Balance, payload),
+            },
+            7 => match parse_market_session_profits(body) {
+                Some(upd) => {
+                    if let Some(ev) = self.markets.apply_session_profit_snapshot(&upd) {
+                        out.push(Event::Balance(ev));
                     }
                 }
                 None => Self::push_parse_failed(out, Command::Balance, payload),

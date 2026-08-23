@@ -5,7 +5,7 @@
 //! `TMarket`, and UI code then reads `Market.FLiqPrice`, `Market.LeverageX`,
 //! and related fields from that live object.
 
-use crate::commands::balance::{BalanceItem, BalanceUpdate};
+use crate::commands::balance::{BalanceItem, BalanceUpdate, MarketSessionProfitUpdate};
 use crate::commands::market::PositionType;
 use crate::commands::trade::OrderType;
 use crate::state::balances::BalanceEvent;
@@ -21,6 +21,52 @@ impl MarketsState {
             3 => Some(self.apply_balance_snapshot(upd)),
             4 => Some(self.apply_balance_increment(upd)),
             _ => ignored_balance_event(upd.cmd_id, upd.epoch),
+        }
+    }
+
+    pub(crate) fn apply_session_profit_snapshot(
+        &mut self,
+        upd: &MarketSessionProfitUpdate,
+    ) -> Option<BalanceEvent> {
+        if !self.indexes_synchronized {
+            log::warn!(
+                target: "moonproto::balance",
+                "session-profit snapshot dropped while market indexes are stale"
+            );
+            return None;
+        }
+
+        if let Some(last) = self.last_session_profit_epoch {
+            if !epoch_is_ok(last, upd.epoch) {
+                return stale_session_profit_event(upd.epoch, last);
+            }
+        }
+
+        for handle in self.markets.iter() {
+            handle.with_mut(|market| market.session_profit = Some(0.0));
+        }
+
+        let mut nonzero_count = 0;
+        for item in &upd.items {
+            let Some(handle) = self.market_by_index(item.market_index) else {
+                continue;
+            };
+            handle.with_mut(|market| market.session_profit = Some(item.session_profit));
+            nonzero_count += 1;
+        }
+
+        self.last_session_profit_epoch = Some(upd.epoch);
+        Some(BalanceEvent::SessionProfitsApplied {
+            nonzero_count,
+            #[cfg(any(test, feature = "diagnostics"))]
+            epoch: upd.epoch,
+        })
+    }
+
+    pub(crate) fn clear_session_profits_for_new_world(&mut self) {
+        self.last_session_profit_epoch = None;
+        for handle in self.markets.iter() {
+            handle.with_mut(|market| market.session_profit = None);
         }
     }
 
@@ -174,6 +220,18 @@ fn ignored_balance_event(cmd_id: u8, epoch: u16) -> Option<BalanceEvent> {
     #[cfg(not(any(test, feature = "diagnostics")))]
     {
         let _ = (cmd_id, epoch);
+        None
+    }
+}
+
+fn stale_session_profit_event(incoming: u16, last: u16) -> Option<BalanceEvent> {
+    #[cfg(any(test, feature = "diagnostics"))]
+    {
+        Some(BalanceEvent::SessionProfitEpochStale { incoming, last })
+    }
+    #[cfg(not(any(test, feature = "diagnostics")))]
+    {
+        let _ = (incoming, last);
         None
     }
 }

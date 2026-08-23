@@ -35,6 +35,7 @@ if let Some(market) = markets.find("BTC") {
     let price = market.price();
     let tail = market.trade_state();
     let deltas = market.delta_state();
+    let session_profit = state.session_profit_for(&market);
     let max_pos = market.max_pos_limit();
     let protection = state.position_protection_for(&market);
     market.with(|market| {
@@ -46,7 +47,7 @@ if let Some(market) = markets.find("BTC") {
         );
     });
     println!(
-        "liq={} bid={} ask={} mark={} last_trade={} coin1h={} max_pos={} protected={}",
+        "liq={} bid={} ask={} mark={} last_trade={} coin1h={} max_pos={} session_usd={:?} protected={}",
         pos.liq_price,
         price.bid,
         price.ask,
@@ -54,6 +55,7 @@ if let Some(market) = markets.find("BTC") {
         tail.last_trade_price,
         deltas.coin_1h_delta,
         max_pos,
+        session_profit.map(|profit| profit.usd),
         !protection.both.has_warning
     );
 }
@@ -75,6 +77,9 @@ totals view, not the primary per-market UI object.
 
 For chart overlays that only need position fields, `MarketHandle::balance_position`
 returns a small copy without cloning the whole market object.
+`MarketHandle::session_profit()` reads the independent per-market session
+counter in core base currency. `snapshot.session_profit_for(&market)` converts
+the same retained value to USD for the chart header.
 For the "unprotected position" warning, use
 `snapshot.position_protection_for(&market)`: the library counts active
 non-emulator `SellSet` close orders by side, and the UI only decides how to

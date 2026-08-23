@@ -148,6 +148,20 @@ impl MarketsState {
         })
     }
 
+    fn base_to_usd_rate(&self) -> Option<f64> {
+        let base_currency = self.server_base_currency_name.as_deref()?;
+        self.base_currency_price(base_currency)
+            .map(|price| price.last_price)
+            .filter(|rate| rate.is_finite() && *rate > 0.0)
+    }
+
+    /// Current per-market session profit in base currency and USD.
+    pub fn session_profit_for(&self, market: &MarketHandle) -> Option<MarketSessionProfit> {
+        let base = market.session_profit()?;
+        let usd = base * self.base_to_usd_rate()?;
+        Some(MarketSessionProfit { base, usd })
+    }
+
     /// Live trade-tail state for a known market.
     pub fn trade_state(&self, market_name: &str) -> Option<MarketTradeState> {
         self.handles_by_name

@@ -91,6 +91,7 @@ fn test_market(name: &str) -> Market {
         position_type: crate::commands::market::PositionType::Cross,
         balance_hash: 0,
         last_balance_epoch: 0,
+        session_profit: None,
         trade_tail: Default::default(),
         price: Default::default(),
         delta_state: Default::default(),

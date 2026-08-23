@@ -2976,7 +2976,10 @@ fn record_event(
             match ev {
                 BalanceEvent::SnapshotApplied { .. } => st.balance_snapshot_events += 1,
                 BalanceEvent::IncrementalApplied { .. } => st.balance_incremental_events += 1,
-                BalanceEvent::Ignored { .. } | BalanceEvent::EpochStale { .. } => {}
+                BalanceEvent::SessionProfitsApplied { .. } => {}
+                BalanceEvent::Ignored { .. }
+                | BalanceEvent::EpochStale { .. }
+                | BalanceEvent::SessionProfitEpochStale { .. } => {}
             }
             log_server_event(&st, event_no, format!("Balance {ev:?}"));
         }

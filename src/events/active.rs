@@ -211,6 +211,7 @@ impl EventDispatcher {
             && self.last_known_peer_app_token != ctx.peer_app_token
         {
             self.news.clear_for_new_world();
+            self.markets.clear_session_profits_for_new_world();
         }
         self.last_known_peer_app_token = ctx.peer_app_token;
 

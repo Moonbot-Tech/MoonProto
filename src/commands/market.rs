@@ -707,6 +707,12 @@ pub struct Market {
     pub last_balance_epoch: u16,
     #[cfg(not(any(test, feature = "diagnostics")))]
     pub(crate) last_balance_epoch: u16,
+    /// Per-market profit accumulated since the core's session reset.
+    ///
+    /// `None` means the connected core has not published this state. Once the
+    /// first authoritative snapshot arrives, zero is represented as
+    /// `Some(0.0)`.
+    pub session_profit: Option<f64>,
     // --- Active Lib live trade tail state ---
     pub trade_tail: MarketTradeState,
     // --- Active Lib live price state ---
@@ -1264,6 +1270,7 @@ pub(crate) fn read_market_with_local_shift(
         position_type: PositionType::Cross,
         balance_hash: 0,
         last_balance_epoch: 0,
+        session_profit: None,
         trade_tail: MarketTradeState::default(),
         // Live price starts empty; `MarketsState` seeds `price.funding_*` from the
         // market's funding fields when the market enters the universe (Delphi

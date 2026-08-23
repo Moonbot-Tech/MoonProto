@@ -77,6 +77,7 @@ fn mk_market(name: &str, idx: u16) -> Market {
         position_type: PositionType::Cross,
         balance_hash: 0,
         last_balance_epoch: 0,
+        session_profit: None,
         trade_tail: Default::default(),
         price: Default::default(),
         delta_state: Default::default(),
@@ -1721,5 +1722,89 @@ fn get_markets_list_rebuilds_stale_server_indexes() {
     assert!(
         st.market_by_index(2).is_none(),
         "SrvMarkets slot can point to a name that has no local TMarket yet"
+    );
+}
+
+#[test]
+fn new_market_after_session_profit_snapshot_starts_at_known_zero() {
+    use crate::commands::balance::{MarketSessionProfitItem, MarketSessionProfitUpdate};
+
+    let mut st = MarketsState::new();
+    st.apply_markets_list(MarketsListResponse {
+        markets: vec![mk_market("BTCUSDT", 0)],
+        corr_markets: vec![],
+    });
+    st.apply_markets_indexes(vec!["BTCUSDT".to_string()]);
+    st.apply_session_profit_snapshot(&MarketSessionProfitUpdate {
+        epoch: 1,
+        items: vec![MarketSessionProfitItem {
+            market_index: 0,
+            session_profit: 2.0,
+        }],
+    });
+
+    st.markets_list_refresh_needed = true;
+    st.apply_markets_list(MarketsListResponse {
+        markets: vec![mk_market("BTCUSDT", 0), mk_market("ETHUSDT", 1)],
+        corr_markets: vec![],
+    });
+
+    assert_eq!(st.get("BTCUSDT").unwrap().session_profit(), Some(2.0));
+    assert_eq!(st.get("ETHUSDT").unwrap().session_profit(), Some(0.0));
+}
+
+#[test]
+fn new_server_world_clears_session_profit_availability() {
+    use crate::commands::balance::{MarketSessionProfitItem, MarketSessionProfitUpdate};
+
+    let mut st = MarketsState::new();
+    st.apply_markets_list(MarketsListResponse {
+        markets: vec![mk_market("BTCUSDT", 0)],
+        corr_markets: vec![],
+    });
+    st.apply_markets_indexes(vec!["BTCUSDT".to_string()]);
+    st.apply_session_profit_snapshot(&MarketSessionProfitUpdate {
+        epoch: 10,
+        items: vec![MarketSessionProfitItem {
+            market_index: 0,
+            session_profit: 3.0,
+        }],
+    });
+
+    st.clear_session_profits_for_new_world();
+
+    assert_eq!(st.last_session_profit_epoch, None);
+    assert_eq!(st.get("BTCUSDT").unwrap().session_profit(), None);
+}
+
+#[test]
+fn session_profit_usd_uses_retained_base_currency_price() {
+    let mut st = MarketsState::new();
+    let mut market = mk_market("BTCUSDT", 0);
+    market.session_profit = Some(0.0015);
+    st.apply_markets_list(MarketsListResponse {
+        markets: vec![market],
+        corr_markets: vec![],
+    });
+    st.server_base_currency_name = Some("BTC".to_string());
+    std::sync::Arc::make_mut(&mut st.base_currency_prices).insert(
+        "BTC".to_string(),
+        BaseCurrencyPrice {
+            base_currency: "BTC".to_string(),
+            last_price: 60_000.0,
+            usdt_market: None,
+            usdt_rev_market: None,
+            usdt_corr_market: None,
+            usdt_rev_corr_market: None,
+        },
+    );
+    let handle = st.get("BTCUSDT").unwrap();
+
+    assert_eq!(
+        st.session_profit_for(&handle),
+        Some(MarketSessionProfit {
+            base: 0.0015,
+            usd: 90.0,
+        })
     );
 }

@@ -55,6 +55,17 @@ pub enum BalanceEvent {
         epoch: u16,
         global_changed: bool,
     },
+    /// Authoritative per-market session-profit snapshot applied.
+    ///
+    /// The payload contains only non-zero rows; every known market omitted from
+    /// it was reset to zero.
+    SessionProfitsApplied {
+        /// Non-zero rows that resolved to a known market and were applied.
+        nonzero_count: usize,
+        #[cfg(any(test, feature = "diagnostics"))]
+        #[doc(hidden)]
+        epoch: u16,
+    },
     /// Command was recognized, but this command kind has no balance-state effect.
     #[cfg(any(test, feature = "diagnostics"))]
     #[doc(hidden)]
@@ -63,6 +74,10 @@ pub enum BalanceEvent {
     #[cfg(any(test, feature = "diagnostics"))]
     #[doc(hidden)]
     EpochStale { incoming: u16, last: u16 },
+    /// Session-profit snapshot rejected as duplicate or stale.
+    #[cfg(any(test, feature = "diagnostics"))]
+    #[doc(hidden)]
+    SessionProfitEpochStale { incoming: u16, last: u16 },
 }
 
 impl BalancesState {

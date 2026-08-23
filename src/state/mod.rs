@@ -63,7 +63,7 @@ pub use kernel_health::KernelHealth;
 pub use markets::MarketsListApplyTiming;
 pub use markets::{
     BaseCurrencyPrice, MarketBalancePosition, MarketDeltaState, MarketGlobalDeltas, MarketHandle,
-    MarketPrice, MarketTradeState, MarketsEvent, MarketsState,
+    MarketPrice, MarketSessionProfit, MarketTradeState, MarketsEvent, MarketsState,
 };
 pub use news::{NewsEvent, NewsState, NEWS_HISTORY_CAPACITY};
 pub(crate) use order_books::OrderBookControl;

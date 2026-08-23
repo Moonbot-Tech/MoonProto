@@ -60,6 +60,14 @@ impl MarketHandle {
         self.with(MarketBalancePosition::from_market)
     }
 
+    /// Per-market profit accumulated since the core's session reset.
+    ///
+    /// `None` means no authoritative session-profit snapshot has arrived from
+    /// the connected core. A real zero is returned as `Some(0.0)`.
+    pub fn session_profit(&self) -> Option<f64> {
+        self.with(|market| market.session_profit)
+    }
+
     /// Copy the live price row used by chart, funding, and mark-price UI.
     pub fn price(&self) -> MarketPrice {
         self.with(|market| market.price)
@@ -185,6 +193,13 @@ impl MarketBalancePosition {
             last_balance_epoch: market.last_balance_epoch,
         }
     }
+}
+
+/// Per-market session profit in core base currency and USD.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MarketSessionProfit {
+    pub base: f64,
+    pub usd: f64,
 }
 
 /// Last `GetMarketsList` apply phase timing.

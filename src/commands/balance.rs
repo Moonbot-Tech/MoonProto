@@ -68,6 +68,22 @@ pub(crate) struct BalanceUpdate {
     pub items: Vec<BalanceItem>,
 }
 
+/// One non-zero row from the authoritative per-market session-profit snapshot.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MarketSessionProfitItem {
+    pub market_index: u16,
+    pub session_profit: f64,
+}
+
+/// Full sparse per-market session-profit snapshot.
+///
+/// Markets absent from `items` have zero session profit.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct MarketSessionProfitUpdate {
+    pub epoch: u16,
+    pub items: Vec<MarketSessionProfitItem>,
+}
+
 // =============================================================================
 //  Builders (C → S)
 // =============================================================================
@@ -164,6 +180,46 @@ pub(crate) fn parse_balance(cmd_id: u8, data: &[u8]) -> Option<BalanceUpdate> {
     }
 
     Some(result)
+}
+
+/// Parse `TMarketSessionProfitStateCommand` (Balance CmdId=7).
+///
+/// `data` starts after the common command header and contains:
+/// `epoch:u16 + count:i32 + count * (market_index:u16 + profit:f64)`.
+pub(crate) fn parse_market_session_profits(data: &[u8]) -> Option<MarketSessionProfitUpdate> {
+    const HEADER_SIZE: usize = 2 + 4;
+    const ROW_SIZE: usize = 2 + 8;
+
+    if data.len() < HEADER_SIZE {
+        return None;
+    }
+
+    let epoch = u16::from_le_bytes(data[0..2].try_into().ok()?);
+    let count = i32::from_le_bytes(data[2..6].try_into().ok()?);
+    if count < 0 {
+        return None;
+    }
+    let count = count as usize;
+    let rows_len = count.checked_mul(ROW_SIZE)?;
+    if rows_len > data.len() - HEADER_SIZE {
+        return None;
+    }
+
+    let mut items = Vec::new();
+    items.try_reserve_exact(count).ok()?;
+    let mut pos = HEADER_SIZE;
+    for _ in 0..count {
+        let market_index = u16::from_le_bytes(data[pos..pos + 2].try_into().ok()?);
+        pos += 2;
+        let session_profit = f64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+        pos += 8;
+        items.push(MarketSessionProfitItem {
+            market_index,
+            session_profit,
+        });
+    }
+
+    Some(MarketSessionProfitUpdate { epoch, items })
 }
 
 /// Read one TBalanceItem from data at position.
@@ -379,5 +435,61 @@ mod tests {
         let payload = full_balance_payload_with_count(2, &item);
 
         assert!(parse_balance(3, &payload).is_none());
+    }
+
+    #[test]
+    fn session_profit_parser_reads_full_sparse_snapshot() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&9u16.to_le_bytes());
+        payload.extend_from_slice(&2i32.to_le_bytes());
+        payload.extend_from_slice(&3u16.to_le_bytes());
+        payload.extend_from_slice(&12.5f64.to_le_bytes());
+        payload.extend_from_slice(&7u16.to_le_bytes());
+        payload.extend_from_slice(&(-4.25f64).to_le_bytes());
+
+        let parsed = parse_market_session_profits(&payload).unwrap();
+
+        assert_eq!(parsed.epoch, 9);
+        assert_eq!(
+            parsed.items,
+            vec![
+                MarketSessionProfitItem {
+                    market_index: 3,
+                    session_profit: 12.5,
+                },
+                MarketSessionProfitItem {
+                    market_index: 7,
+                    session_profit: -4.25,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn session_profit_parser_accepts_empty_snapshot_and_trailing_bytes() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&0i32.to_le_bytes());
+        payload.extend_from_slice(&[0xAA, 0xBB]);
+
+        let parsed = parse_market_session_profits(&payload).unwrap();
+
+        assert_eq!(parsed.epoch, 1);
+        assert!(parsed.items.is_empty());
+    }
+
+    #[test]
+    fn session_profit_parser_rejects_negative_count_and_truncated_rows() {
+        let mut negative = Vec::new();
+        negative.extend_from_slice(&1u16.to_le_bytes());
+        negative.extend_from_slice(&(-1i32).to_le_bytes());
+        assert!(parse_market_session_profits(&negative).is_none());
+
+        let mut truncated = Vec::new();
+        truncated.extend_from_slice(&1u16.to_le_bytes());
+        truncated.extend_from_slice(&1i32.to_le_bytes());
+        truncated.extend_from_slice(&0u16.to_le_bytes());
+        truncated.extend_from_slice(&[0; 7]);
+        assert!(parse_market_session_profits(&truncated).is_none());
     }
 }
