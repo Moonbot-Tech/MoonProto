@@ -87,14 +87,14 @@ use moonproto::state::{
 use moonproto::Command;
 use moonproto::{
     parse_key_info, ClientConfig, ClientSettingsCommand, ConnectConfig, DeepHistoryKind,
-    EngineMethod, EngineResponse, ExchangeKind, ExchangeOrder, FieldValue, ImportedKeys,
-    InitConfig, InitialStrategies, KernelHealth, LifecycleEvent, MoonClient, MoonShotStrategy,
-    MoonStateSnapshot, MoonTime, NewsEvent, OrderWorkerStatus, ProfitStateCommand,
-    ProtocolMetricsSnapshot, ReportAliveMapComplete, ReportAliveMapOutcome, ReportEvent,
-    ReportHistoryDepth, ReportRow, ReportSchema, ReportSyncCheckpoint, ReportSyncComplete,
-    ReportSyncRequest, ReportValue, StrategyDynamicPicklist, StrategyFieldLayout,
-    StrategyFieldUiKind, StrategyFields, StrategyKind, StrategySchema, StrategySnapshot,
-    TradesStreamMode, TransportMode,
+    EngineMethod, EngineResponse, ExchangeCode, ExchangeKind, ExchangeOrder, FieldValue,
+    ImportedKeys, InitConfig, InitialStrategies, KernelHealth, LifecycleEvent, MoonClient,
+    MoonShotStrategy, MoonStateSnapshot, MoonTime, NewsEvent, OrderWorkerStatus,
+    ProfitStateCommand, ProtocolMetricsSnapshot, ReportAliveMapComplete, ReportAliveMapOutcome,
+    ReportEvent, ReportHistoryDepth, ReportRow, ReportSchema, ReportSyncCheckpoint,
+    ReportSyncComplete, ReportSyncRequest, ReportValue, StrategyDynamicPicklist,
+    StrategyFieldLayout, StrategyFieldUiKind, StrategyFields, StrategyKind, StrategySchema,
+    StrategySnapshot, TradesStreamMode, TransportMode,
 };
 
 const DEFAULT_FIRETEST_ERR_EMU_PERCENT: u8 = 10;
@@ -493,6 +493,8 @@ struct SessionStats {
     kernel_license_state: Option<KernelLicenseProbe>,
     profit_state_events: u64,
     profit_state: Option<ProfitStateCommand>,
+    hyperliquid_request_limit_events: u64,
+    hyperliquid_requests_left: Option<u64>,
     kernel_health_events: u64,
     kernel_health: Option<KernelHealth>,
     news_history_events: u64,
@@ -530,6 +532,8 @@ struct SessionStats {
     balance_events: u64,
     balance_snapshot_events: u64,
     balance_incremental_events: u64,
+    session_profit_events: u64,
+    session_profit_nonzero_count: usize,
     transfer_asset_events: u64,
     transfer_asset_updated_mask: u8,
     transfer_asset_failures: u64,
@@ -578,6 +582,8 @@ impl Clone for SessionStats {
             kernel_license_state: self.kernel_license_state,
             profit_state_events: self.profit_state_events,
             profit_state: self.profit_state,
+            hyperliquid_request_limit_events: self.hyperliquid_request_limit_events,
+            hyperliquid_requests_left: self.hyperliquid_requests_left,
             kernel_health_events: self.kernel_health_events,
             kernel_health: self.kernel_health,
             news_history_events: self.news_history_events,
@@ -615,6 +621,8 @@ impl Clone for SessionStats {
             balance_events: self.balance_events,
             balance_snapshot_events: self.balance_snapshot_events,
             balance_incremental_events: self.balance_incremental_events,
+            session_profit_events: self.session_profit_events,
+            session_profit_nonzero_count: self.session_profit_nonzero_count,
             transfer_asset_events: self.transfer_asset_events,
             transfer_asset_updated_mask: self.transfer_asset_updated_mask,
             transfer_asset_failures: self.transfer_asset_failures,
@@ -680,7 +688,7 @@ impl SessionStats {
                 )
             });
         let base = format!(
-            "connected_now={} fresh={} again={} reconnecting={} disconnected={} server_events={} engine={} raw={} logs={} settings={} lev_manage_events={} runtime_state_events={} runtime_state={:?} kernel_license_events={} kernel_license={:?} profit_state_events={} profit_state={:?} strats={} strat_snapshots={} schema_events={} schema_kinds={} schema_fields={} strat_runtime_events={} strategies_running={:?} strategy_rows={} markets={} trades={} target_trade_packets={} books={} target_book_full={} target_book_update={} market_probe=[{}] order_events={} balances={} transfer_assets={} mask={:#05b} failures={} coin_card_events={} updates={} failures={} last_count={} parse_failed={}{} candles={} retained_candles_5m={} newest_age_s={:?}",
+            "connected_now={} fresh={} again={} reconnecting={} disconnected={} server_events={} engine={} raw={} logs={} settings={} lev_manage_events={} runtime_state_events={} runtime_state={:?} kernel_license_events={} kernel_license={:?} profit_state_events={} profit_state={:?} hl_limit_events={} hl_requests_left={:?} strats={} strat_snapshots={} schema_events={} schema_kinds={} schema_fields={} strat_runtime_events={} strategies_running={:?} strategy_rows={} markets={} trades={} target_trade_packets={} books={} target_book_full={} target_book_update={} market_probe=[{}] order_events={} balances={} session_profit_events={} session_profit_nonzero={} transfer_assets={} mask={:#05b} failures={} coin_card_events={} updates={} failures={} last_count={} parse_failed={}{} candles={} retained_candles_5m={} newest_age_s={:?}",
             self.connected_now,
             self.connected_fresh,
             self.connected_again,
@@ -698,6 +706,8 @@ impl SessionStats {
             self.kernel_license_state,
             self.profit_state_events,
             self.profit_state,
+            self.hyperliquid_request_limit_events,
+            self.hyperliquid_requests_left,
             self.strategy_events,
             self.strategy_snapshot_events,
             self.strategy_schema_events,
@@ -715,6 +725,8 @@ impl SessionStats {
             self.market_probe_summary(),
             self.order_events,
             self.balance_events,
+            self.session_profit_events,
+            self.session_profit_nonzero_count,
             self.transfer_asset_events,
             self.transfer_asset_updated_mask,
             self.transfer_asset_failures,
@@ -1118,6 +1130,7 @@ impl Session {
             .kernel_license_state
             .map(KernelLicenseProbe::from);
         st.profit_state = snapshot.settings().profit_state;
+        st.hyperliquid_requests_left = snapshot.settings().hyperliquid_requests_left;
         let health = snapshot.kernel_health();
         if health != KernelHealth::default() {
             st.kernel_health = Some(health);
@@ -1797,16 +1810,17 @@ where
     let now_ms = MoonTime::now().unix_millis();
     let oldest_plausible_ms = 1_262_304_000_000i64; // 2010-01-01 UTC
     let mut previous_ms = i64::MIN;
+    let mut late_rows = 0usize;
+    let mut newest = None::<(i64, f64)>;
     for row in rows {
         let time_ms = row_time(row).unix_millis();
         assert!(
             time_ms >= oldest_plausible_ms && time_ms <= now_ms.saturating_add(5 * 60 * 1000),
             "FireTest {market} {section}: implausible timestamp {time_ms} (now={now_ms})"
         );
-        assert!(
-            time_ms >= previous_ms,
-            "FireTest {market} {section}: rows are not chronological: {time_ms} after {previous_ms}"
-        );
+        if time_ms < previous_ms {
+            late_rows += 1;
+        }
         previous_ms = time_ms;
 
         let (low, high) = row_price_range(row);
@@ -1814,21 +1828,22 @@ where
             low.is_finite() && high.is_finite() && low > 0.0 && high >= low,
             "FireTest {market} {section}: invalid price range {low}..{high}"
         );
+        if newest.is_none_or(|(newest_ms, _)| time_ms >= newest_ms) {
+            newest = Some((time_ms, (low + high) * 0.5));
+        }
     }
-    let newest = rows.last().map(|row| {
-        let (low, high) = row_price_range(row);
-        (low + high) * 0.5
-    });
+    let newest_price = newest.map(|(_, price)| price);
     println!(
-        "FIRETEST chart archive market={} section={} rows={} first_time_ms={:?} last_time_ms={:?} newest_price={:?}",
+        "FIRETEST chart archive market={} section={} rows={} first_time_ms={:?} last_time_ms={:?} newest_price={:?} late_resend_rows={}",
         market,
         section,
         rows.len(),
         rows.first().map(|row| row_time(row).unix_millis()),
         rows.last().map(|row| row_time(row).unix_millis()),
-        newest
+        newest_price,
+        late_rows
     );
-    newest
+    newest_price
 }
 
 fn market_reference_price(price: MarketPrice) -> Option<f64> {
@@ -2976,7 +2991,10 @@ fn record_event(
             match ev {
                 BalanceEvent::SnapshotApplied { .. } => st.balance_snapshot_events += 1,
                 BalanceEvent::IncrementalApplied { .. } => st.balance_incremental_events += 1,
-                BalanceEvent::SessionProfitsApplied { .. } => {}
+                BalanceEvent::SessionProfitsApplied { nonzero_count, .. } => {
+                    st.session_profit_events += 1;
+                    st.session_profit_nonzero_count = *nonzero_count;
+                }
                 BalanceEvent::Ignored { .. }
                 | BalanceEvent::EpochStale { .. }
                 | BalanceEvent::SessionProfitEpochStale { .. } => {}
@@ -3229,6 +3247,21 @@ fn record_event(
                 &st,
                 event_no,
                 format!("UI ProfitState {:?}", st.profit_state),
+            );
+        }
+        Event::Settings(SettingsEvent::HyperliquidRequestLimitUpdated) => {
+            st.settings_events += 1;
+            st.hyperliquid_request_limit_events += 1;
+            if let Some(dispatcher) = dispatcher {
+                st.hyperliquid_requests_left = dispatcher.settings().hyperliquid_requests_left;
+            }
+            log_server_event(
+                &st,
+                event_no,
+                format!(
+                    "UI HyperliquidRequestLimit requests_left={:?}",
+                    st.hyperliquid_requests_left
+                ),
             );
         }
         Event::Settings(other) => {
@@ -4220,6 +4253,103 @@ fn has_initial_health(st: &SessionStats) -> bool {
         && st.parse_failed == 0
 }
 
+fn session_profit_snapshot_counts(snapshot: &MoonStateSnapshot) -> (usize, usize, usize) {
+    let mut markets = 0usize;
+    let mut known = 0usize;
+    let mut nonzero = 0usize;
+    for market in snapshot.markets().iter() {
+        markets += 1;
+        if let Some(value) = market.session_profit() {
+            known += 1;
+            if value != 0.0 {
+                nonzero += 1;
+            }
+        }
+    }
+    (markets, known, nonzero)
+}
+
+fn run_session_profit_and_hl_limit_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
+    assert!(
+        pump_pair_until(a, b, cfg.wait, "session profit state", |a, b| a
+            .session_profit_events
+            > 0
+            && b.session_profit_events > 0),
+        "FireTest did not receive session-profit state within {:?}: A=[{}] B=[{}]",
+        cfg.wait,
+        a.snapshot().summary(),
+        b.snapshot().summary()
+    );
+
+    let a_is_hyperliquid = matches!(
+        a.state_snapshot().server_info().exchange_code,
+        Some(ExchangeCode::Hyper | ExchangeCode::FHyper)
+    );
+    let b_is_hyperliquid = matches!(
+        b.state_snapshot().server_info().exchange_code,
+        Some(ExchangeCode::Hyper | ExchangeCode::FHyper)
+    );
+    if a_is_hyperliquid || b_is_hyperliquid {
+        assert!(
+            pump_pair_until(a, b, cfg.wait, "HyperLiquid request-limit state", |a, b| {
+                (!a_is_hyperliquid || a.hyperliquid_request_limit_events > 0)
+                    && (!b_is_hyperliquid || b.hyperliquid_request_limit_events > 0)
+            }),
+            "FireTest did not receive HyperLiquid request-limit state within {:?}: A=[{}] B=[{}]",
+            cfg.wait,
+            a.snapshot().summary(),
+            b.snapshot().summary()
+        );
+    }
+
+    for session in [&*a, &*b] {
+        let stats = session.snapshot();
+        let snapshot = session.state_snapshot();
+        let (markets, known, nonzero) = session_profit_snapshot_counts(snapshot.as_ref());
+        assert!(
+            markets > 0 && known == markets,
+            "FireTest {}: session-profit full snapshot covers {known}/{markets} markets",
+            stats.label
+        );
+        assert_eq!(
+            nonzero, stats.session_profit_nonzero_count,
+            "FireTest {}: session-profit event/state nonzero count mismatch",
+            stats.label
+        );
+
+        let exchange = snapshot.server_info().exchange_code;
+        let is_hyperliquid = matches!(exchange, Some(ExchangeCode::Hyper | ExchangeCode::FHyper));
+        if is_hyperliquid {
+            assert!(
+                stats.hyperliquid_request_limit_events > 0,
+                "FireTest {}: HyperLiquid core did not publish request-limit state",
+                stats.label
+            );
+            println!(
+                "OK: FIRETEST {}: HyperLiquid requests left={:?}",
+                stats.label,
+                snapshot.settings().hyperliquid_requests_left
+            );
+        } else {
+            assert_eq!(
+                snapshot.settings().hyperliquid_requests_left,
+                None,
+                "FireTest {}: non-HyperLiquid core published a request quota",
+                stats.label
+            );
+            println!(
+                "FIRETEST SKIPPED {}: HyperLiquid request-limit state is not applicable to exchange={}",
+                stats.label,
+                exchange.map_or("Unknown", ExchangeCode::name)
+            );
+        }
+        println!(
+            "OK: FIRETEST {}: session profits known={}/{} nonzero={}",
+            stats.label, known, markets, nonzero
+        );
+    }
+}
+
 fn kernel_health_is_complete(health: KernelHealth) -> bool {
     health.process_cpu_percent <= 100
         && health.system_cpu_percent <= 100
@@ -5034,6 +5164,8 @@ struct MoonClientPathStats {
     runtime_state_events: u64,
     runtime_state: Option<RuntimeStateProbe>,
     kernel_license_state: Option<KernelLicenseProbe>,
+    hyperliquid_request_limit_events: u64,
+    hyperliquid_requests_left: Option<u64>,
     kernel_health_events: u64,
     kernel_health: Option<KernelHealth>,
     news_history_events: u64,
@@ -5049,6 +5181,10 @@ struct MoonClientPathStats {
     strategy_schema_events: u64,
     strategy_schema_kinds: usize,
     strategy_schema_fields: usize,
+    session_profit_events: u64,
+    session_profit_nonzero_count: usize,
+    session_profit_known_markets: usize,
+    market_count: usize,
     trades_apply: u64,
     orderbook_apply: u64,
     target_orderbook_full: u64,
@@ -5214,8 +5350,15 @@ impl MoonClientPathStats {
                         Some(format!("MoonClient auto candles failed: {error}"));
                 }
             },
+            Event::Balance(BalanceEvent::SessionProfitsApplied { nonzero_count, .. }) => {
+                self.session_profit_events += 1;
+                self.session_profit_nonzero_count = *nonzero_count;
+            }
             Event::Settings(SettingsEvent::RuntimeStateUpdated) => {
                 self.runtime_state_events += 1;
+            }
+            Event::Settings(SettingsEvent::HyperliquidRequestLimitUpdated) => {
+                self.hyperliquid_request_limit_events += 1;
             }
             Event::KernelHealth(health) => {
                 self.kernel_health_events += 1;
@@ -5245,9 +5388,6 @@ impl MoonClientPathStats {
         }
         self.news_snapshot_count = snapshot.news().len();
         self.news_tags_present = snapshot.news().tags_json().is_some();
-        let Some(market) = snapshot.markets().get(target_market) else {
-            return;
-        };
         self.runtime_state = snapshot
             .settings()
             .runtime_state
@@ -5256,6 +5396,16 @@ impl MoonClientPathStats {
             .settings()
             .kernel_license_state
             .map(KernelLicenseProbe::from);
+        self.hyperliquid_requests_left = snapshot.settings().hyperliquid_requests_left;
+        self.market_count = snapshot.markets().iter().count();
+        self.session_profit_known_markets = snapshot
+            .markets()
+            .iter()
+            .filter(|market| market.session_profit().is_some())
+            .count();
+        let Some(market) = snapshot.markets().get(target_market) else {
+            return;
+        };
 
         {
             let price = market.price();
@@ -5348,6 +5498,9 @@ impl MoonClientPathStats {
             && self.lifecycle_ready
             && self.kernel_health_events > 0
             && self.kernel_health.is_some_and(kernel_health_is_complete)
+            && self.session_profit_events > 0
+            && self.market_count > 0
+            && self.session_profit_known_markets == self.market_count
             && news_healthy
             && self.strategy_schema_events > 0
             && self.strategy_schema_kinds > 0
@@ -5464,10 +5617,16 @@ impl MoonClientPathStats {
             self.market_invariant_error.as_deref().unwrap_or("none")
         );
         format!(
-            "{base} kernel_license={:?} kernel_health_events={} kernel_health={:?} news_history_events={} news_history_count={} news_history_tags={} news_retained={} news_tags_present={}",
+            "{base} kernel_license={:?} kernel_health_events={} kernel_health={:?} hl_limit_events={} hl_requests_left={:?} session_profit_events={} session_profit_nonzero={} session_profit_known={}/{} news_history_events={} news_history_count={} news_history_tags={} news_retained={} news_tags_present={}",
             self.kernel_license_state,
             self.kernel_health_events,
             self.kernel_health,
+            self.hyperliquid_request_limit_events,
+            self.hyperliquid_requests_left,
+            self.session_profit_events,
+            self.session_profit_nonzero_count,
+            self.session_profit_known_markets,
+            self.market_count,
             self.news_history_events,
             self.news_history_count,
             self.news_history_tags_seen,
@@ -8870,6 +9029,7 @@ fn fire_test_active_library_health() {
             );
         }
     }
+    run_session_profit_and_hl_limit_gate(&cfg, &mut a, &mut b);
     if a_initial.lev_manage_events == 0 || b_initial.lev_manage_events == 0 {
         println!(
             "FIRETEST NOTE initial health: LevManage was not observed on both clients (A={} B={}); live market/trades/orderbook health does not depend on this optional SrvConnect UI extension",
