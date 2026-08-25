@@ -242,11 +242,13 @@ pub(super) fn runtime_loop(
                         + pending.transfer_assets.len()
                         + pending.engine_actions.len(),
                 );
+            let strategy_edits_changed = dispatcher.tick_strategy_edit_timeouts(Instant::now());
             candles_changed
                 || market_history_changed
                 || coin_card_changed
                 || transfer_assets_changed
                 || account_changed
+                || strategy_edits_changed
         };
         startup_publisher.publish(
             &client,
@@ -1300,6 +1302,25 @@ mod tests {
             .expect("strategy snapshot payload must parse");
         assert_eq!(batch.strategies.len(), 1);
         assert_eq!(batch.strategies[0].strategy_id, strategy.strategy_id);
+        assert!(
+            dispatcher.strats().snapshot(strategy.strategy_id).is_none(),
+            "submitting a local edit must not manufacture core-confirmed state"
+        );
+        assert_eq!(
+            dispatcher
+                .strats()
+                .strategy_edit(strategy.strategy_id)
+                .unwrap()
+                .desired()
+                .strategy_ver,
+            strategy.strategy_ver
+        );
+        assert!(dispatcher.take_queued_events().iter().any(|event| matches!(
+            event,
+            crate::events::Event::Strat(crate::state::StratEvent::EditSubmitted {
+                strategy_ids
+            }) if strategy_ids == &[strategy.strategy_id]
+        )));
     }
 
     #[test]

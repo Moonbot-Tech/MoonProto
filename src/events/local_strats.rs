@@ -2,6 +2,7 @@
 
 use super::{EventDispatcher, StrategySnapshotReply};
 use crate::commands::strategy_serializer::StrategySnapshot;
+use std::time::Instant;
 
 impl EventDispatcher {
     /// Set Delphi `cfg.ServerStratEpoch` analogue for local strategy snapshots.
@@ -34,8 +35,25 @@ impl EventDispatcher {
         self.strats.replace_with_snapshots(strategies);
     }
 
-    pub(crate) fn set_local_strategies_owned(&mut self, strategies: Vec<StrategySnapshot>) {
-        self.strats.replace_with_owned_snapshots(strategies);
+    pub(crate) fn stage_local_strategies_owned(
+        &mut self,
+        strategies: Vec<StrategySnapshot>,
+        submitted_at: crate::MoonTime,
+        deadline: Instant,
+    ) -> crate::state::strats::StrategyEditStageOutcome {
+        self.strats
+            .stage_local_snapshot_batch(strategies, submitted_at, deadline)
+    }
+
+    pub(crate) fn tick_strategy_edit_timeouts(&mut self, now: Instant) -> bool {
+        let strategy_ids = self.strats.tick_strategy_edit_timeouts(now);
+        if strategy_ids.is_empty() {
+            return false;
+        }
+        self.queue_events([crate::events::Event::Strat(
+            crate::state::StratEvent::EditTimedOut { strategy_ids },
+        )]);
+        true
     }
 
     /// Change one local strategy checked flag like Delphi `TStrategy.Checked`.

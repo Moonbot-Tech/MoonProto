@@ -212,6 +212,7 @@ pub use commands::ui::{
     KernelLicenseStateCommand, LevManage, ProfitStateCommand, ResetProfitKind, RuntimeStateCommand,
     SpotMarketKind, TempBlacklistEntry,
 };
+pub use state::{StrategyEdit, StrategyEditStatus};
 // Parameter types named by public high-level handle methods but defined in
 // command submodules (`MoonTrade::move_all_sells`/`move_all_buys`,
 // `MoonCandles::request_coin_card`).

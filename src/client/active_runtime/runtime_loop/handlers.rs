@@ -5,6 +5,7 @@
 use super::*;
 
 pub(super) const TRANSFER_ASSETS_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const STRATEGY_EDIT_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(45);
 
 pub(super) fn engine_pending_deadline() -> Instant {
     Instant::now() + Duration::from_millis(crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS as u64)
@@ -652,7 +653,26 @@ fn handle_strategy_snapshot_batch(
     let server_epoch = dispatcher.mark_local_strategies_changed();
     #[cfg(any(test, feature = "diagnostics"))]
     let state_started = Instant::now();
-    dispatcher.set_local_strategies_owned(strategies);
+    let now = Instant::now();
+    let edit_outcome = dispatcher.stage_local_strategies_owned(
+        strategies,
+        crate::MoonTime::from_unix_millis(client.now_ms()),
+        now + STRATEGY_EDIT_CONFIRMATION_TIMEOUT,
+    );
+    if !edit_outcome.submitted.is_empty() {
+        dispatcher.queue_events([crate::events::Event::Strat(
+            crate::state::StratEvent::EditSubmitted {
+                strategy_ids: edit_outcome.submitted,
+            },
+        )]);
+    }
+    if !edit_outcome.superseded.is_empty() {
+        dispatcher.queue_events([crate::events::Event::Strat(
+            crate::state::StratEvent::EditSuperseded {
+                strategy_ids: edit_outcome.superseded,
+            },
+        )]);
+    }
     #[cfg(any(test, feature = "diagnostics"))]
     client
         .metrics

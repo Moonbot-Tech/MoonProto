@@ -9171,11 +9171,13 @@ fn fire_test_active_library_health() {
         .expect("MoonClient send_settings must queue");
 
     let mutation_seen =
-        pump_pair_until(&mut a, &mut b, cfg.wait, "cross-client mutation", |_, b| {
-            b.last_settings
-                .as_ref()
-                .map(|s| s.x_sell == mutated_settings.x_sell)
-                .unwrap_or(false)
+        pump_pair_until(&mut a, &mut b, cfg.wait, "cross-client mutation", |a, b| {
+            strategy_field_string(a, original_strategy.strategy_id, &field)
+                .is_some_and(|value| value == mutated_field_value)
+                && b.last_settings
+                    .as_ref()
+                    .map(|s| s.x_sell == mutated_settings.x_sell)
+                    .unwrap_or(false)
                 && strategy_field_string(b, original_strategy.strategy_id, &field)
                     .map(|value| value == mutated_field_value)
                     .unwrap_or(false)
@@ -9192,11 +9194,13 @@ fn fire_test_active_library_health() {
         .settings()
         .send(original_settings.clone())
         .expect("MoonClient send_settings must queue");
-    let restored = pump_pair_until(&mut a, &mut b, cfg.wait, "restore mutation", |_, b| {
-        b.last_settings
-            .as_ref()
-            .map(|s| s.x_sell == original_settings.x_sell)
-            .unwrap_or(false)
+    let restored = pump_pair_until(&mut a, &mut b, cfg.wait, "restore mutation", |a, b| {
+        strategy_field_string(a, original_strategy.strategy_id, &field)
+            .is_some_and(|value| value == original_field_value)
+            && b.last_settings
+                .as_ref()
+                .map(|s| s.x_sell == original_settings.x_sell)
+                .unwrap_or(false)
             && strategy_field_string(b, original_strategy.strategy_id, &field)
                 .map(|value| value == original_field_value)
                 .unwrap_or(false)
@@ -9204,11 +9208,11 @@ fn fire_test_active_library_health() {
 
     assert!(
         mutation_seen,
-        "client B did not receive settings + strategy mutation from client A"
+        "client A did not receive a canonical strategy confirmation or client B missed the mutation"
     );
     assert!(
         restored,
-        "client B did not receive restoration of settings + strategy mutation"
+        "client A did not receive a canonical strategy restore confirmation or client B missed it"
     );
 
     let before_blackhole = a.snapshot();

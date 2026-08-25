@@ -95,7 +95,7 @@ pub use seq_ring::{
     SeqRingQtyRow, SeqRingReadMeta, SeqRingReadView, SeqRingReader, SeqRingRow, SeqRingTimedRow,
 };
 pub use settings::{SettingsEvent, SettingsState};
-pub use strats::{StratEvent, StrategyInfo, StratsState};
+pub use strats::{StratEvent, StrategyEdit, StrategyEditStatus, StrategyInfo, StratsState};
 pub use trades::TradesEvent;
 pub(crate) use trades::{
     iter_trades_resend_response, TradesPacketEffect, TradesPacketEffects, TradesState,

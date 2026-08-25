@@ -4261,6 +4261,80 @@ fn invalid_strategy_snapshot_does_not_advance_server_epoch() {
 }
 
 #[test]
+fn matching_strategy_snapshot_emits_edit_confirmation_without_optimistic_state() {
+    use crate::commands::strategy_serializer::{
+        FieldValue, StrategyBatchBuilder, StrategyFields, StrategySnapshot,
+    };
+    use std::time::{Duration, Instant};
+
+    let mut confirmed_fields = StrategyFields::new();
+    confirmed_fields.insert("Comment", FieldValue::String("confirmed".to_string()));
+    let confirmed = StrategySnapshot {
+        strategy_id: 0xF17E,
+        strategy_ver: 1,
+        last_date: 100,
+        checked: true,
+        kind: 1,
+        path: "FireTest".into(),
+        fields: confirmed_fields,
+    };
+    let mut desired = confirmed.clone();
+    desired.strategy_ver = 2;
+    desired.last_date = 200;
+    desired
+        .fields
+        .insert("Comment", FieldValue::String("desired".to_string()));
+
+    let mut d = EventDispatcher::new();
+    apply_comment_strategy_schema(&mut d);
+    d.set_local_strategies(std::slice::from_ref(&confirmed));
+    let stage = d.stage_local_strategies_owned(
+        vec![desired.clone()],
+        crate::MoonTime::from_unix_millis(1_000),
+        Instant::now() + Duration::from_secs(45),
+    );
+    assert_eq!(stage.submitted, vec![desired.strategy_id]);
+    assert_eq!(
+        d.strategy_snapshot(desired.strategy_id)
+            .unwrap()
+            .fields
+            .get_string("Comment"),
+        Some("confirmed")
+    );
+
+    let mut builder = StrategyBatchBuilder::new(d.strats.strategy_schema().unwrap());
+    builder.write_strategy(&desired);
+    let payload = crate::commands::strat::build_snapshot(42, 99, 200, false, &builder.finalize());
+    let mut client = crate::client::Client::new(dummy_client_cfg());
+    client.testing_set_domain_ready(true);
+    let mut out = Vec::new();
+    let mut actions = Vec::new();
+    dispatch_active_packet_for_test(
+        &mut d,
+        Command::Strat,
+        &payload,
+        0,
+        &mut out,
+        &client,
+        &mut actions,
+    );
+
+    assert!(out.iter().any(|event| matches!(
+        event,
+        Event::Strat(crate::state::StratEvent::EditConfirmed { strategy_ids })
+            if strategy_ids == &[desired.strategy_id]
+    )));
+    assert_eq!(
+        d.strategy_snapshot(desired.strategy_id)
+            .unwrap()
+            .fields
+            .get_string("Comment"),
+        Some("desired")
+    );
+    assert!(d.strats.strategy_edit(desired.strategy_id).is_none());
+}
+
+#[test]
 fn snapshot_requested_uses_local_strategies() {
     use crate::commands::strategy_serializer::{FieldValue, StrategyFields, StrategySnapshot};
 

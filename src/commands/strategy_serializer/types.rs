@@ -150,7 +150,7 @@ impl FieldValue {
 /// Fields are stored by core field name. Consumers can use `FieldValue::*`
 /// extractors, typed getters on `StrategyFields`, or higher-level convenience
 /// methods on `StrategySnapshot`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StrategySnapshot {
     pub strategy_id: u64,
     pub strategy_ver: i32,
@@ -185,6 +185,15 @@ pub struct StrategySnapshot {
 #[derive(Debug, Clone, Default)]
 pub struct StrategyFields {
     entries: Vec<(Arc<str>, FieldValue)>,
+}
+
+impl PartialEq for StrategyFields {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len()
+            && self
+                .iter()
+                .all(|(name, value)| other.get(name).is_some_and(|other| other == value))
+    }
 }
 
 impl StrategyFields {

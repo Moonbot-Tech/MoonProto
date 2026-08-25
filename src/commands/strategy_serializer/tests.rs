@@ -228,7 +228,7 @@ fn single_strategy_roundtrip() {
 }
 
 #[test]
-fn writer_uses_schema_field_order_for_name_dict() {
+fn writer_declares_all_known_fields_in_schema_order() {
     let mut fields = StrategyFields::new();
     fields.insert("OrderSize", FieldValue::Double(1.0));
     fields.insert("StrategyName", FieldValue::String("A".to_string()));
@@ -256,13 +256,32 @@ fn writer_uses_schema_field_order_for_name_dict() {
             "StrategyName".to_string(),
             "Comment".to_string(),
             "AcceptCommands".to_string(),
+            "KeepAlert".to_string(),
             "OrderSize".to_string(),
+            "UseStopLoss".to_string(),
+            "StopLoss".to_string(),
+            "PendingOrderSpread".to_string(),
+            "DebugLog".to_string(),
+            "SellOrderColor".to_string(),
+            "SignalType".to_string(),
         ]
     );
 }
 
 #[test]
-fn writer_skips_schema_defaults_unknown_fields_and_type_mismatches() {
+fn strategy_fields_equality_is_semantic_not_insertion_order() {
+    let mut left = StrategyFields::new();
+    left.insert("A", FieldValue::Int32(1));
+    left.insert("B", FieldValue::String("two".to_string()));
+    let mut right = StrategyFields::new();
+    right.insert("B", FieldValue::String("two".to_string()));
+    right.insert("A", FieldValue::Int32(1));
+
+    assert_eq!(left, right);
+}
+
+#[test]
+fn writer_omits_default_rows_but_declares_them_for_receiver_reset() {
     let mut fields = StrategyFields::new();
     fields.insert("StrategyName", FieldValue::String("Local".to_string()));
     fields.insert("KeepAlert", FieldValue::Int32(60));
@@ -289,7 +308,11 @@ fn writer_skips_schema_defaults_unknown_fields_and_type_mismatches() {
     let parsed = parse_strategy_batch(&b.finalize()).unwrap();
     assert_eq!(
         parsed.names,
-        vec!["StrategyName".to_string(), "SellOrderColor".to_string()]
+        sample_schema()
+            .fields
+            .into_iter()
+            .map(|field| field.name)
+            .collect::<Vec<_>>()
     );
     let ps = &parsed.strategies[0];
     assert_eq!(
@@ -320,8 +343,8 @@ fn multiple_strategies_share_name_dict() {
 
     let parsed = parse_strategy_batch(&compressed).unwrap();
     assert_eq!(parsed.strategies.len(), 3);
-    // Names are unique: StrategyName, OrderSize, KeepAlert, AcceptCommands, Comment — 5 names.
-    assert_eq!(parsed.names.len(), 5);
+    // The dictionary carries every field known for this strategy kind once.
+    assert_eq!(parsed.names.len(), sample_schema().fields.len());
     // Paths are unique: 2 of them.
     assert_eq!(parsed.paths.len(), 2);
 }

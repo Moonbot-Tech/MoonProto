@@ -184,6 +184,11 @@ impl MoonStateSnapshot {
         self.strats.snapshot(strategy_id)
     }
 
+    /// Locally submitted strategy edit awaiting core confirmation.
+    pub fn strategy_edit(&self, strategy_id: u64) -> Option<&crate::state::StrategyEdit> {
+        self.strats.strategy_edit(strategy_id)
+    }
+
     /// Iterate full decoded strategy snapshots in retained list order.
     pub fn strategy_snapshots(&self) -> impl Iterator<Item = &StrategySnapshot> {
         self.strats.snapshots()

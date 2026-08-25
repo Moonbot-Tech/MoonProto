@@ -992,7 +992,8 @@ impl MoonClient {
     ///
     /// The runtime uses the live strategy schema fetched during Init, so callers
     /// do not carry serializer field hardcode. The call only queues the intent;
-    /// server echo/update arrives later through `Event::Strat`.
+    /// it does not overwrite core-confirmed strategy snapshots. Confirmation or
+    /// supersession arrives later through `Event::Strat`.
     pub(crate) fn send_strategy_snapshot_batch(
         &self,
         strategies: Vec<crate::commands::strategy_serializer::StrategySnapshot>,

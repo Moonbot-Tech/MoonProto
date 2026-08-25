@@ -40,6 +40,7 @@ impl StratsState {
         if removed {
             self.order.retain(|id| *id != strategy_id);
             self.snapshots_by_id.remove(&strategy_id);
+            self.remove_local_snapshot(strategy_id);
             self.invalidate_snapshot_payload_cache();
         }
         removed

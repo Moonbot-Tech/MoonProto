@@ -13,14 +13,17 @@ use crate::commands::strategy_schema::StrategySchema;
 use crate::commands::strategy_serializer::{StrategyActiveMode, StrategyKind, StrategySnapshot};
 use std::collections::{hash_map::Entry, HashMap};
 use std::sync::Arc;
+use std::time::Instant;
 
 mod folders;
 mod schema;
 mod snapshots;
 mod types;
 
-pub(crate) use self::types::StrategySnapshotPayloadCache;
-pub use self::types::{StratEvent, StrategyInfo};
+pub use self::types::{StratEvent, StrategyEdit, StrategyEditStatus, StrategyInfo};
+pub(crate) use self::types::{
+    StrategyEditStageOutcome, StrategySnapshotApplyOutcome, StrategySnapshotPayloadCache,
+};
 
 /// Client strategy sync state.
 ///
@@ -41,6 +44,15 @@ pub struct StratsState {
     /// They are used both for answering core snapshot requests and for
     /// application reads through public API.
     snapshots_by_id: HashMap<u64, Arc<StrategySnapshot>>,
+    /// Latest complete local list used for future core snapshot requests.
+    ///
+    /// Runtime edits live here until the core echoes canonical snapshots. They
+    /// never overwrite `snapshots_by_id`, which remains core-confirmed state.
+    local_snapshots: Option<Vec<Arc<StrategySnapshot>>>,
+    local_snapshot_index: HashMap<u64, usize>,
+    /// Field edits awaiting a matching or newer core snapshot.
+    strategy_edits: HashMap<u64, StrategyEdit>,
+    next_strategy_edit_deadline: Option<Instant>,
     /// Server epoch of the latest applied snapshot.
     pub last_server_epoch: u64,
     /// Latest raw compressed strategy-schema blob.
@@ -83,6 +95,10 @@ impl StratsState {
         self.order.clear();
         self.folders_by_key.clear();
         self.snapshots_by_id.clear();
+        self.local_snapshots = None;
+        self.local_snapshot_index.clear();
+        self.strategy_edits.clear();
+        self.next_strategy_edit_deadline = None;
         self.invalidate_snapshot_payload_cache();
     }
 
@@ -155,6 +171,8 @@ impl StratsState {
                             snapshot_payload_changed = true;
                         }
                     }
+                    snapshot_payload_changed |=
+                        self.set_local_snapshot_checked(it.strategy_id, it.checked);
                 }
                 if snapshot_payload_changed {
                     self.invalidate_snapshot_payload_cache();
@@ -208,6 +226,9 @@ impl StratsState {
             snapshot.checked = checked;
             self.invalidate_snapshot_payload_cache();
         }
+        if self.set_local_snapshot_checked(strategy_id, checked) {
+            self.invalidate_snapshot_payload_cache();
+        }
         true
     }
 
@@ -234,6 +255,18 @@ impl StratsState {
 
     pub fn snapshot(&self, strategy_id: u64) -> Option<&StrategySnapshot> {
         self.snapshots_by_id.get(&strategy_id).map(Arc::as_ref)
+    }
+
+    /// Locally submitted edit that has not been confirmed by the core.
+    pub fn strategy_edit(&self, strategy_id: u64) -> Option<&StrategyEdit> {
+        self.strategy_edits.get(&strategy_id)
+    }
+
+    /// Iterate locally submitted edits that are pending or timed out.
+    pub fn strategy_edits(&self) -> impl Iterator<Item = (u64, &StrategyEdit)> {
+        self.strategy_edits
+            .iter()
+            .map(|(&strategy_id, edit)| (strategy_id, edit))
     }
 
     /// Global strategy run state reported by the server.

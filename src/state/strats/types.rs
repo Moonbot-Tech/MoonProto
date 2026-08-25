@@ -1,5 +1,8 @@
 use crate::commands::strategy_serializer::strategy_last_date_to_moon_time;
+use crate::commands::strategy_serializer::StrategySnapshot;
 use crate::MoonTime;
+use std::sync::Arc;
+use std::time::Instant;
 
 /// Cached serialized strategy payload used when the core asks this client for
 /// its current local strategy list.
@@ -7,6 +10,74 @@ use crate::MoonTime;
 pub(crate) struct StrategySnapshotPayloadCache {
     pub client_max_last_date: u64,
     pub data: Vec<u8>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct StrategyEditStageOutcome {
+    pub submitted: Vec<u64>,
+    pub superseded: Vec<u64>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct StrategySnapshotApplyOutcome {
+    pub count: usize,
+    pub confirmed: Vec<u64>,
+    pub adjusted: Vec<u64>,
+    pub superseded: Vec<u64>,
+}
+
+/// State of a strategy field edit submitted to the core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrategyEditStatus {
+    /// The edit was sent and no matching core snapshot has arrived yet.
+    Pending,
+    /// No matching core snapshot arrived within the confirmation window.
+    ///
+    /// This is not a rejection: the core may have applied the edit while its
+    /// echo was lost. A later matching snapshot still confirms the edit.
+    TimedOut,
+}
+
+/// One locally submitted strategy edit waiting for core confirmation.
+#[derive(Debug, Clone)]
+pub struct StrategyEdit {
+    desired: Arc<StrategySnapshot>,
+    submitted_at: MoonTime,
+    status: StrategyEditStatus,
+    pub(crate) deadline: Instant,
+}
+
+impl StrategyEdit {
+    pub(crate) fn new(
+        desired: Arc<StrategySnapshot>,
+        submitted_at: MoonTime,
+        deadline: Instant,
+    ) -> Self {
+        Self {
+            desired,
+            submitted_at,
+            status: StrategyEditStatus::Pending,
+            deadline,
+        }
+    }
+
+    /// Exact strategy snapshot submitted by the application.
+    pub fn desired(&self) -> &StrategySnapshot {
+        &self.desired
+    }
+
+    /// Local time at which the runtime submitted this edit.
+    pub fn submitted_at(&self) -> MoonTime {
+        self.submitted_at
+    }
+
+    pub fn status(&self) -> StrategyEditStatus {
+        self.status
+    }
+
+    pub(crate) fn mark_timed_out(&mut self) {
+        self.status = StrategyEditStatus::TimedOut;
+    }
 }
 
 /// Lightweight strategy row kept by the active client.
@@ -78,6 +149,19 @@ pub enum StratEvent {
         #[doc(hidden)]
         raw_data: Vec<u8>,
     },
+    /// Local field edits were serialized and submitted to the core.
+    EditSubmitted { strategy_ids: Vec<u64> },
+    /// The core echoed these exact strategy revisions and fields after applying them.
+    EditConfirmed { strategy_ids: Vec<u64> },
+    /// The core accepted these revisions but returned different canonical fields.
+    EditAdjusted { strategy_ids: Vec<u64> },
+    /// The core retained newer revisions instead of these local edits.
+    EditSuperseded { strategy_ids: Vec<u64> },
+    /// No matching core snapshot arrived within the confirmation window.
+    ///
+    /// The edit remains available through [`StratsState::strategy_edit`](super::StratsState::strategy_edit)
+    /// and a late core echo can still confirm it.
+    EditTimedOut { strategy_ids: Vec<u64> },
     /// Result of a strategy/folder delete command.
     ///
     /// The core can request both a strategy-id delete and a folder-path delete

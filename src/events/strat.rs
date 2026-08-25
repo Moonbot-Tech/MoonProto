@@ -47,11 +47,10 @@ impl EventDispatcher {
             }
             StratCommand::Snapshot(snap) => {
                 let raw_len = snap.data.len();
-                if self
+                let Some(apply_outcome) = self
                     .strats
                     .apply_snapshot_decoded_with_mode_in_place(&snap.data, snap.full)
-                    .is_none()
-                {
+                else {
                     log::warn!(
                         target: "moonproto::events",
                         "failed to decode {} strategy snapshot payload ({} bytes)",
@@ -59,7 +58,7 @@ impl EventDispatcher {
                         raw_len
                     );
                     return;
-                }
+                };
                 self.strats.last_server_epoch = snap.server_epoch;
                 let ev = if snap.full {
                     StratEvent::SnapshotFull {
@@ -79,6 +78,21 @@ impl EventDispatcher {
                     }
                 };
                 out.push(Event::Strat(ev));
+                if !apply_outcome.confirmed.is_empty() {
+                    out.push(Event::Strat(StratEvent::EditConfirmed {
+                        strategy_ids: apply_outcome.confirmed,
+                    }));
+                }
+                if !apply_outcome.adjusted.is_empty() {
+                    out.push(Event::Strat(StratEvent::EditAdjusted {
+                        strategy_ids: apply_outcome.adjusted,
+                    }));
+                }
+                if !apply_outcome.superseded.is_empty() {
+                    out.push(Event::Strat(StratEvent::EditSuperseded {
+                        strategy_ids: apply_outcome.superseded,
+                    }));
+                }
             }
             other => {
                 if let Some(ev) = self.strats.apply(other) {

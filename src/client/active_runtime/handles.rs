@@ -1451,6 +1451,11 @@ impl MoonStrategies<'_> {
     }
 
     /// Synchronize the application's current local strategy list.
+    ///
+    /// Core-confirmed snapshots remain unchanged until the core echoes an
+    /// accepted revision. Use `snapshot.strategy_edit(id)` and `StratEvent`'s
+    /// edit lifecycle events to render pending, confirmed, superseded, and
+    /// timed-out edits honestly.
     pub fn sync_local_strategies(
         &self,
         strategies: Vec<crate::commands::strategy_serializer::StrategySnapshot>,

@@ -12,6 +12,12 @@ after the snapshot serializer payload is decoded and applied successfully,
 matching the core snapshot-epoch contract. A malformed snapshot is logged and
 is not reported as `SnapshotFull` / `SnapshotPartial`.
 
+`strategy_snapshot(id)` and `strategy_snapshots()` are core-confirmed state.
+Submitting an edited list does not overwrite them optimistically. While an edit
+is in flight, `strategy_edit(id)` exposes the exact desired snapshot and its
+`Pending` or `TimedOut` status. This lets a UI draw the desired value with a
+pending marker without presenting it as core state.
+
 Before init, user code gives the library its current local strategies through
 `InitConfig::initial_strategies`. The runtime owns that list after that point:
 Init sends it as the post-init strategy snapshot, answers later server snapshot
@@ -336,11 +342,26 @@ its whole local strategy list after `MoonClient::connect`, use
 `client.strategies().sync_local_strategies(strategies)`. The application still
 owns the strategy editor/persistence; this call tells Active Lib that the local
 list changed. Active Lib increments the local strategy epoch, updates the
-runtime-owned copy used for future server snapshot requests, and publishes the
-current list from the same schema that Init fetched from the server. The call
-queues intent and returns immediately; if startup is still running, the runtime
-defers the intent until the Init/schema gate has opened. Server echo/update
-arrives later through `Event::Strat`.
+runtime-owned copy used for future server snapshot requests. The call queues
+intent and returns immediately; if startup is still running, the runtime defers
+the intent until the Init/schema gate has opened. The core already echoes
+accepted strategy revisions and returns its newer revision when the rollback
+guard wins. Active Lib maps those existing snapshots to:
+
+- `StratEvent::EditSubmitted` when changed rows are sent;
+- `StratEvent::EditConfirmed` when the core echoes the same `StrategyID`,
+  revision and the same canonical fields;
+- `StratEvent::EditAdjusted` when the core accepts the revision but returns
+  different canonical fields;
+- `StratEvent::EditSuperseded` when the core returns a newer revision;
+- `StratEvent::EditTimedOut` when no resolving snapshot arrives within 45
+  seconds.
+
+Timeout is deliberately not treated as rejection. The core may have applied an
+edit whose echo was lost, so Active Lib keeps the desired edit and accepts a
+late confirmation. The latest complete local list also remains the source for
+automatic snapshot replies after reconnect. No extra polling or wire command is
+required.
 
 ## Strategy Fields
 
@@ -390,6 +411,13 @@ UInt32(u32)
 UInt64(u64)
 Single(f32)
 ```
+
+Outgoing snapshots keep default-valued fields out of each compact strategy
+record, but the batch dictionary still declares every schema field known for
+the included strategy kinds. The core therefore resets a known-but-absent
+field to its schema default. A field absent from the dictionary is unknown to
+the sender and remains untouched, which preserves compatibility with newer
+core fields.
 
 Raw serializer parsers remain available for diagnostics and custom protocol
 tools, but they are hidden from the normal API surface. Applications should use
@@ -446,6 +474,7 @@ let mut editor = StrategyEditor::from_snapshot(schema, snapshot)?;
 editor.set_string(field_names::STRATEGY_NAME, "Local strategy")?;
 editor.set_number("OrderSize", 250.0)?;
 editor.set_checked(true);
+editor.touch_now();
 let edited = editor.into_snapshot();
 ```
 
@@ -460,6 +489,12 @@ strategies.push(edited);
 
 client.strategies().sync_local_strategies(strategies)?;
 ```
+
+Every generic editor change must call `touch` or `touch_now` once after its
+field changes. The core's rollback guard compares `last_date` and
+`strategy_ver`; reusing an old revision cannot provide a meaningful
+confirmation. Typed editors such as `MoonShotStrategy::into_snapshot` perform
+this touch automatically.
 
 ## Sending Strategy Commands
 

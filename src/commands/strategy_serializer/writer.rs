@@ -4,7 +4,7 @@ use super::{FieldValue, StrategySnapshot, TID_ZERO_FLAG};
 use crate::commands::strategy_schema::{StrategySchema, StrategySchemaField};
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
 /// Builder for producing a DEFLATE-compressed snapshot. Wire-format mirror of
@@ -19,6 +19,8 @@ use std::io::Write;
 #[derive(Debug)]
 pub(crate) struct StrategyBatchBuilder<'a> {
     field_by_name: HashMap<&'a str, (usize, &'a StrategySchemaField)>,
+    schema_fields: &'a [StrategySchemaField],
+    dictionary_kinds: HashSet<u8>,
     name_dict: Vec<String>,
     name_idx: HashMap<String, u16>,
     path_dict: Vec<String>,
@@ -37,6 +39,8 @@ impl<'a> StrategyBatchBuilder<'a> {
             .collect();
         Self {
             field_by_name,
+            schema_fields: &schema.fields,
+            dictionary_kinds: HashSet::new(),
             name_dict: Vec::new(),
             name_idx: HashMap::new(),
             path_dict: Vec::new(),
@@ -75,6 +79,21 @@ impl<'a> StrategyBatchBuilder<'a> {
     /// Add a single strategy.
     pub(crate) fn write_strategy(&mut self, s: &StrategySnapshot) {
         let path_id = self.path_index(&s.path);
+
+        // The name dictionary declares every field this sender knows for the
+        // strategy kind. The core resets a known-but-absent field to its
+        // default; fields unknown to the sender remain untouched.
+        if self.dictionary_kinds.insert(s.kind) {
+            for field in self.schema_fields {
+                let name = field.name.as_str();
+                if field.visible_for_kind(s.kind) && !self.name_idx.contains_key(name) {
+                    let idx = self.name_dict.len() as u16;
+                    self.name_dict.push(field.name.clone());
+                    self.name_idx.insert(field.name.clone(), idx);
+                }
+            }
+        }
+
         // Header
         self.body.extend_from_slice(&s.strategy_id.to_le_bytes());
         self.body.extend_from_slice(&s.strategy_ver.to_le_bytes());

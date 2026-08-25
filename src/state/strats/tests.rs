@@ -9,7 +9,7 @@ use crate::commands::strategy_schema::{
 use crate::commands::strategy_serializer::{FieldValue, StrategyFields};
 use std::hint::black_box;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn schema_for_strategy_name(kinds: &[u8]) -> StrategySchema {
     StrategySchema {
@@ -120,7 +120,7 @@ fn bench_firetest_strategy_snapshot_payload() {
         let mut state = StratsState::new();
         state
             .apply_snapshot_decoded_with_mode_in_place(black_box(&raw), false)
-            .unwrap_or(0)
+            .map_or(0, |outcome| outcome.count)
     });
 
     let mut warm_state = StratsState::new();
@@ -130,7 +130,7 @@ fn bench_firetest_strategy_snapshot_payload() {
     let (apply_warm_avg_us, apply_warm_max_us, apply_warm_sum) = measure_us(iters, || {
         warm_state
             .apply_snapshot_decoded_with_mode_in_place(black_box(&raw), false)
-            .unwrap_or(0)
+            .map_or(0, |outcome| outcome.count)
     });
 
     println!(
@@ -563,7 +563,7 @@ fn in_place_complete_snapshot_seeds_serialized_reply_cache() {
         .apply_snapshot_decoded_with_mode_in_place(&payload, false)
         .unwrap();
 
-    assert_eq!(count, 1);
+    assert_eq!(count.count, 1);
     let cache = s
         .snapshot_payload_cache
         .as_ref()
@@ -650,7 +650,7 @@ fn in_place_skipped_old_snapshot_does_not_seed_stale_reply_cache() {
         .apply_snapshot_decoded_with_mode_in_place(&stale_payload, false)
         .unwrap();
 
-    assert_eq!(count, 1);
+    assert_eq!(count.count, 1);
     let info = s.get(777).unwrap();
     assert_eq!(info.strategy_ver, 7);
     assert_eq!(info.last_date, 200);
@@ -967,4 +967,212 @@ fn snapshot_applies_new_zero_version_strategy() {
     assert_eq!(info.last_date, 0);
     assert_eq!(&*info.folder_path, "ZeroPath");
     assert!(info.checked);
+}
+
+fn named_snapshot(strategy_ver: i32, last_date: u64, name: &str) -> StrategySnapshot {
+    let mut fields = StrategyFields::new();
+    fields.insert("StrategyName", FieldValue::String(name.to_string()));
+    StrategySnapshot {
+        strategy_id: 100,
+        strategy_ver,
+        last_date,
+        checked: true,
+        kind: 1,
+        path: "Folder".into(),
+        fields,
+    }
+}
+
+fn encode_named_snapshot(schema: &StrategySchema, snapshot: &StrategySnapshot) -> Vec<u8> {
+    let mut builder = crate::commands::strategy_serializer::StrategyBatchBuilder::new(schema);
+    builder.write_strategy(snapshot);
+    builder.finalize()
+}
+
+#[test]
+fn local_strategy_edit_keeps_confirmed_state_until_matching_core_echo() {
+    let schema = schema_for_strategy_name(&[1]);
+    let mut state = StratsState::new();
+    state.schema = Some(Arc::new(schema.clone()));
+    state.upsert_from_snapshot(&named_snapshot(1, 100, "Confirmed"));
+    let deadline = Instant::now() + Duration::from_secs(45);
+
+    let stage = state.stage_local_snapshot_batch(
+        vec![named_snapshot(2, 200, "Desired")],
+        crate::MoonTime::from_unix_millis(1_000),
+        deadline,
+    );
+
+    assert_eq!(stage.submitted, vec![100]);
+    assert!(stage.superseded.is_empty());
+    assert_eq!(
+        state
+            .snapshot(100)
+            .unwrap()
+            .fields
+            .get_string("StrategyName"),
+        Some("Confirmed")
+    );
+    let edit = state.strategy_edit(100).unwrap();
+    assert_eq!(edit.status(), StrategyEditStatus::Pending);
+    assert_eq!(
+        edit.desired().fields.get_string("StrategyName"),
+        Some("Desired")
+    );
+    let outgoing = state.snapshot_payload_cache().unwrap();
+    let parsed = crate::commands::strategy_serializer::parse_strategy_batch(&outgoing.data)
+        .expect("outgoing local strategy list must remain serializable");
+    assert_eq!(
+        parsed.strategies[0].fields.get_string("StrategyName"),
+        Some("Desired")
+    );
+
+    let echo = named_snapshot(2, 200, "Desired");
+    let outcome = state
+        .apply_snapshot_decoded_with_mode_in_place(&encode_named_snapshot(&schema, &echo), false)
+        .unwrap();
+    assert_eq!(outcome.confirmed, vec![100]);
+    assert!(outcome.superseded.is_empty());
+    assert!(state.strategy_edit(100).is_none());
+    assert_eq!(state.snapshot(100).unwrap(), &echo);
+}
+
+#[test]
+fn newer_core_revision_supersedes_pending_strategy_edit() {
+    let schema = schema_for_strategy_name(&[1]);
+    let mut state = StratsState::new();
+    state.upsert_from_snapshot(&named_snapshot(1, 100, "Confirmed"));
+    state.stage_local_snapshot_batch(
+        vec![named_snapshot(2, 200, "Desired")],
+        crate::MoonTime::from_unix_millis(1_000),
+        Instant::now() + Duration::from_secs(45),
+    );
+
+    let newer = named_snapshot(3, 300, "Core newer");
+    let outcome = state
+        .apply_snapshot_decoded_with_mode_in_place(&encode_named_snapshot(&schema, &newer), false)
+        .unwrap();
+
+    assert!(outcome.confirmed.is_empty());
+    assert_eq!(outcome.superseded, vec![100]);
+    assert!(state.strategy_edit(100).is_none());
+    assert_eq!(state.snapshot(100).unwrap(), &newer);
+}
+
+#[test]
+fn matching_revision_with_different_core_fields_is_reported_as_adjusted() {
+    let schema = schema_for_strategy_name(&[1]);
+    let mut state = StratsState::new();
+    state.upsert_from_snapshot(&named_snapshot(1, 100, "Confirmed"));
+    state.stage_local_snapshot_batch(
+        vec![named_snapshot(2, 200, "Desired")],
+        crate::MoonTime::from_unix_millis(1_000),
+        Instant::now() + Duration::from_secs(45),
+    );
+
+    let adjusted = named_snapshot(2, 200, "Core canonical");
+    let outcome = state
+        .apply_snapshot_decoded_with_mode_in_place(
+            &encode_named_snapshot(&schema, &adjusted),
+            false,
+        )
+        .unwrap();
+
+    assert!(outcome.confirmed.is_empty());
+    assert_eq!(outcome.adjusted, vec![100]);
+    assert!(outcome.superseded.is_empty());
+    assert!(state.strategy_edit(100).is_none());
+    assert_eq!(state.snapshot(100).unwrap(), &adjusted);
+}
+
+#[test]
+fn omitted_schema_default_still_confirms_the_requested_strategy_value() {
+    let schema = schema_for_strategy_name(&[1]);
+    let mut state = StratsState::new();
+    state.schema = Some(Arc::new(schema.clone()));
+    state.upsert_from_snapshot(&named_snapshot(1, 100, "Confirmed"));
+    let desired = named_snapshot(2, 200, "");
+    state.stage_local_snapshot_batch(
+        vec![desired.clone()],
+        crate::MoonTime::from_unix_millis(1_000),
+        Instant::now() + Duration::from_secs(45),
+    );
+
+    let outcome = state
+        .apply_snapshot_decoded_with_mode_in_place(&encode_named_snapshot(&schema, &desired), false)
+        .unwrap();
+
+    assert_eq!(outcome.confirmed, vec![100]);
+    assert!(outcome.adjusted.is_empty());
+    assert!(state.strategy_edit(100).is_none());
+}
+
+#[test]
+fn earlier_echo_does_not_confirm_a_later_strategy_edit() {
+    let schema = schema_for_strategy_name(&[1]);
+    let mut state = StratsState::new();
+    state.upsert_from_snapshot(&named_snapshot(1, 100, "Confirmed"));
+    let deadline = Instant::now() + Duration::from_secs(45);
+    state.stage_local_snapshot_batch(
+        vec![named_snapshot(2, 200, "First edit")],
+        crate::MoonTime::from_unix_millis(1_000),
+        deadline,
+    );
+    state.stage_local_snapshot_batch(
+        vec![named_snapshot(3, 300, "Second edit")],
+        crate::MoonTime::from_unix_millis(1_100),
+        deadline,
+    );
+
+    let first_echo = named_snapshot(2, 200, "First edit");
+    let outcome = state
+        .apply_snapshot_decoded_with_mode_in_place(
+            &encode_named_snapshot(&schema, &first_echo),
+            false,
+        )
+        .unwrap();
+    assert!(outcome.confirmed.is_empty());
+    assert!(outcome.superseded.is_empty());
+    assert_eq!(state.snapshot(100).unwrap(), &first_echo);
+    assert_eq!(state.strategy_edit(100).unwrap().desired().strategy_ver, 3);
+
+    let second_echo = named_snapshot(3, 300, "Second edit");
+    let outcome = state
+        .apply_snapshot_decoded_with_mode_in_place(
+            &encode_named_snapshot(&schema, &second_echo),
+            false,
+        )
+        .unwrap();
+    assert_eq!(outcome.confirmed, vec![100]);
+    assert!(state.strategy_edit(100).is_none());
+}
+
+#[test]
+fn timed_out_strategy_edit_can_still_be_confirmed_later() {
+    let schema = schema_for_strategy_name(&[1]);
+    let mut state = StratsState::new();
+    state.upsert_from_snapshot(&named_snapshot(1, 100, "Confirmed"));
+    let now = Instant::now();
+    let desired = named_snapshot(2, 200, "Desired");
+    state.stage_local_snapshot_batch(
+        vec![desired.clone()],
+        crate::MoonTime::from_unix_millis(1_000),
+        now + Duration::from_secs(45),
+    );
+
+    assert!(state.tick_strategy_edit_timeouts(now).is_empty());
+    assert_eq!(
+        state.tick_strategy_edit_timeouts(now + Duration::from_secs(45)),
+        vec![100]
+    );
+    assert_eq!(
+        state.strategy_edit(100).unwrap().status(),
+        StrategyEditStatus::TimedOut
+    );
+
+    let outcome = state
+        .apply_snapshot_decoded_with_mode_in_place(&encode_named_snapshot(&schema, &desired), false)
+        .unwrap();
+    assert_eq!(outcome.confirmed, vec![100]);
+    assert!(state.strategy_edit(100).is_none());
 }
