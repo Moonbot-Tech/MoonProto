@@ -134,6 +134,21 @@ pub struct StartupStatus {
     pub total_init_retries: u32,
     /// Reconnect episodes observed while this `MoonClient` was starting.
     pub reconnect_count: u32,
+    /// Local UDP port currently owned by this client.
+    pub current_local_udp_port: Option<u16>,
+    /// Successfully sent physical UDP datagrams on the current socket.
+    pub current_port_sent_packets: u64,
+    /// Physical UDP datagrams received on the current socket, before protocol
+    /// validation.
+    pub current_port_received_packets: u64,
+    /// Local UDP port closed by the latest automatic reconnect.
+    pub previous_local_udp_port: Option<u16>,
+    /// Successfully sent physical UDP datagrams before the latest port change.
+    pub sent_packets_before_last_port_change: u64,
+    /// Physical UDP datagrams received before the latest port change.
+    pub received_packets_before_last_port_change: u64,
+    /// Number of local sockets closed for automatic reconnect/port rotation.
+    pub local_port_change_count: u32,
     /// Last full client/core UDP round-trip time reported by Ping.
     pub round_trip_ms: Option<u32>,
     /// Last path MTU reported by Ping.
@@ -194,9 +209,8 @@ pub struct InitConfig {
     /// Per-step Engine API wait override.
     ///
     /// By default, `BaseCheck`/`AuthCheck` use 12 seconds per attempt,
-    /// `UpdateMarketsList` uses 15 seconds, `GetMarketsList` uses 20 seconds,
-    /// and the larger strategy schema uses 30 seconds. Setting this value
-    /// overrides every default.
+    /// while `UpdateMarketsList`, `GetMarketsList`, and the larger strategy
+    /// schema each use 45 seconds. Setting this value overrides every default.
     /// A pending server-update marker enables the update-aware
     /// BaseCheck branch: one normal BaseCheck attempt, then up to 10 retries
     /// with 2000 ms between attempts. A mandatory Sliced timeout retries only

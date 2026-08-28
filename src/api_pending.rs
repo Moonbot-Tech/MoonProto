@@ -67,6 +67,7 @@ impl ApiPending {
     }
 
     #[inline]
+    #[cfg(test)]
     fn default_timeout() -> Duration {
         Duration::from_millis(DEFAULT_PENDING_TIMEOUT_MS as u64)
     }
@@ -96,6 +97,7 @@ impl ApiPending {
     ///
     /// If a registration already existed for the same `uid`, the old sender is dropped (the old
     /// receiver gets "channel closed").
+    #[cfg(test)]
     pub(crate) fn register(&self, uid: u64) -> mpsc::Receiver<EngineResponse> {
         self.register_with_timeout(uid, Self::default_timeout())
     }
@@ -195,6 +197,11 @@ impl ApiPending {
                 false
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn deadline(&self, uid: u64) -> Option<Instant> {
+        self.lock_state().map.get(&uid).map(|entry| entry.deadline)
     }
 
     /// Number of active waits.

@@ -68,6 +68,17 @@ impl Client {
         &self,
         request_payload: &[u8],
     ) -> mpsc::Receiver<EngineResponse> {
+        self.send_api_request_async_with_timeout(
+            request_payload,
+            Duration::from_millis(crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS as u64),
+        )
+    }
+
+    pub(crate) fn send_api_request_async_with_timeout(
+        &self,
+        request_payload: &[u8],
+        timeout: Duration,
+    ) -> mpsc::Receiver<EngineResponse> {
         // Keep malformed raw requests as errors, not process panics: older code
         // sliced `request_payload[3..11]` directly.
         let Some(uid) = engine_request_uid(request_payload) else {
@@ -87,7 +98,10 @@ impl Client {
             let (_tx, rx) = mpsc::channel();
             return rx;
         }
-        let rx = self.pending_api.api_pending.register(uid);
+        let rx = self
+            .pending_api
+            .api_pending
+            .register_with_timeout(uid, timeout);
         self.send_api_request(request_payload);
         rx
     }

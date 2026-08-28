@@ -23,6 +23,41 @@ fn dummy_client() -> Client {
     })
 }
 
+#[test]
+fn automatic_rebind_preserves_previous_socket_packet_counts() {
+    let mut client = dummy_client();
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    client.transport.install_socket(socket, port);
+    client.transport.current_sent_packets = 17;
+    client.transport.current_received_packets = 23;
+
+    ProtocolCore {
+        client: &mut client,
+    }
+    .do_force_disconnect();
+
+    assert!(client.transport.socket.is_none());
+    assert_eq!(client.transport.current_local_port, None);
+    assert_eq!(client.transport.current_sent_packets, 0);
+    assert_eq!(client.transport.current_received_packets, 0);
+    assert_eq!(client.transport.previous_local_port, Some(port));
+    assert_eq!(client.transport.previous_sent_packets, 17);
+    assert_eq!(client.transport.previous_received_packets, 23);
+    assert_eq!(client.transport.rebind_count, 1);
+
+    let next_socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let next_port = next_socket.local_addr().unwrap().port();
+    client.transport.install_socket(next_socket, next_port);
+
+    assert_eq!(client.transport.current_local_port, Some(next_port));
+    assert_eq!(client.transport.current_sent_packets, 0);
+    assert_eq!(client.transport.current_received_packets, 0);
+    assert_eq!(client.transport.previous_local_port, Some(port));
+    assert_eq!(client.transport.previous_sent_packets, 17);
+    assert_eq!(client.transport.previous_received_packets, 23);
+}
+
 fn test_market(name: &str) -> Market {
     Market {
         bn_market_name: name.to_string(),

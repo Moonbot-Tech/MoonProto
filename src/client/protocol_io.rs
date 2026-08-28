@@ -136,13 +136,23 @@ impl Client {
             None => return,
         };
 
-        if let Some(Err(e)) = extra_result {
-            if self.should_log("send_extra_err", 1000) {
-                warn!("send_to(extra, cmd={cmd}) failed: {e}");
+        if let Some(result) = extra_result {
+            match result {
+                Ok(_) => {
+                    self.transport.current_sent_packets =
+                        self.transport.current_sent_packets.wrapping_add(1);
+                }
+                Err(e) => {
+                    if self.should_log("send_extra_err", 1000) {
+                        warn!("send_to(extra, cmd={cmd}) failed: {e}");
+                    }
+                }
             }
         }
         match main_result {
             Ok(_) => {
+                self.transport.current_sent_packets =
+                    self.transport.current_sent_packets.wrapping_add(1);
                 #[cfg(any(test, feature = "diagnostics"))]
                 self.metrics
                     .err_emu_diagnostics

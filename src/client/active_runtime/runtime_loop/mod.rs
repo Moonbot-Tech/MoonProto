@@ -392,6 +392,14 @@ impl StartupStatusPublisher {
         }
 
         self.cached.state = state;
+        self.cached.current_local_udp_port = client.transport.current_local_port;
+        self.cached.current_port_sent_packets = client.transport.current_sent_packets;
+        self.cached.current_port_received_packets = client.transport.current_received_packets;
+        self.cached.previous_local_udp_port = client.transport.previous_local_port;
+        self.cached.sent_packets_before_last_port_change = client.transport.previous_sent_packets;
+        self.cached.received_packets_before_last_port_change =
+            client.transport.previous_received_packets;
+        self.cached.local_port_change_count = client.transport.rebind_count;
         if self.startup_finished {
             self.store(now);
             return;
@@ -514,6 +522,13 @@ mod startup_status_tests {
         client.round_trip_delay = 321;
         client.actual_pmtu = 1200;
         client.rs = 0.91;
+        client.transport.current_local_port = Some(31000);
+        client.transport.current_sent_packets = 17;
+        client.transport.current_received_packets = 23;
+        client.transport.previous_local_port = Some(30999);
+        client.transport.previous_sent_packets = 11;
+        client.transport.previous_received_packets = 13;
+        client.transport.rebind_count = 1;
         receive_partial_sliced(&mut client, 7);
         publisher.last_rate_sample_at = Instant::now() - Duration::from_secs(1);
 
@@ -538,6 +553,13 @@ mod startup_status_tests {
         assert_eq!(status.round_trip_ms, Some(321));
         assert_eq!(status.path_mtu_bytes, Some(1200));
         assert_eq!(status.downlink_delivery_percent, Some(91));
+        assert_eq!(status.current_local_udp_port, Some(31000));
+        assert_eq!(status.current_port_sent_packets, 17);
+        assert_eq!(status.current_port_received_packets, 23);
+        assert_eq!(status.previous_local_udp_port, Some(30999));
+        assert_eq!(status.sent_packets_before_last_port_change, 11);
+        assert_eq!(status.received_packets_before_last_port_change, 13);
+        assert_eq!(status.local_port_change_count, 1);
     }
 
     #[test]

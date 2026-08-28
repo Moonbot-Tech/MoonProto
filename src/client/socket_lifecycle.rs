@@ -63,8 +63,9 @@ impl Client {
                         "bound UDP socket on {}:{}",
                         bind_family, self.transport.next_port
                     );
+                    let local_port = self.transport.next_port;
                     self.transport.next_port += 1;
-                    self.transport.socket = Some(sock);
+                    self.transport.install_socket(sock, local_port);
                     // Reset the cached server address — it may change on reconnect via DNS.
                     self.transport.cached_server_addr = None;
                     self.start_inline_reader_session();

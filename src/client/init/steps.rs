@@ -34,7 +34,7 @@ pub(super) fn begin_engine_init_step(
     timeout: Duration,
 ) -> PendingEngineInit {
     let request_uid = engine_request_uid(&request_payload);
-    let rx = client.send_api_request_async(&request_payload);
+    let rx = client.send_api_request_async_with_timeout(&request_payload, timeout);
     PendingEngineInit {
         request_uid,
         rx,
@@ -59,6 +59,37 @@ pub(super) fn poll_engine_init_step(
                 PendingEnginePoll::Pending
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_init_pending_uid_uses_the_step_deadline() {
+        let client = Client::new(ClientConfig::new("127.0.0.1", 3000, [0; 16], [0; 16]));
+        let timeout = Duration::from_secs(45);
+        let pending = begin_engine_init_step(
+            &client,
+            crate::commands::engine_request::update_markets_list(),
+            timeout,
+        );
+        let uid = pending.request_uid.expect("valid Engine request UID");
+        let registered_deadline = client
+            .pending_api
+            .api_pending
+            .deadline(uid)
+            .expect("Init request must be registered");
+        let registration_lead = pending
+            .deadline
+            .checked_duration_since(registered_deadline)
+            .expect("ApiPending registration must precede the Init deadline");
+
+        assert!(
+            registration_lead < Duration::from_secs(1),
+            "ApiPending UID and Init step must expire together"
+        );
     }
 }
 

@@ -89,16 +89,22 @@ show_startup_status(
     status.received_sliced_bytes,
     status.receive_rate_bytes_per_sec,
     status.idle_for_ms,
+    status.current_local_udp_port,
+    status.current_port_sent_packets,
+    status.current_port_received_packets,
 );
 ```
 
 The snapshot also contains completed steps, active Sliced transfer/block
 counts, duplicate blocks, whole-step retries, reconnect count, RTT, PMTU, and
-the core's server-to-client delivery estimate. These transport-wide counters
-describe the connection, not necessarily the response awaited by
-`current_step`, and never extend that step's deadline. The snapshot is passive
-and available in regular builds; packet tracing and the `diagnostics` feature
-are not required.
+the core's server-to-client delivery estimate. It also reports the current and
+previous local UDP ports, physical packet counts for the current socket, and
+the final send/receive counts captured before the latest automatic port change.
+The core may see different external ports when NAT remaps these local ports.
+These transport-wide counters describe the connection, not necessarily the
+response awaited by `current_step`, and never extend that step's deadline. The
+snapshot is passive and available in regular builds; packet tracing and the
+`diagnostics` feature are not required.
 
 There is deliberately no single percentage for the whole Init sequence. The
 strategy schema may overlap the sequential market requests, and the combined

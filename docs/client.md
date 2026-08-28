@@ -295,18 +295,19 @@ Periodic market refresh starts only after the mandatory strategy schema has
 completed and init opens the domain gate, so startup requests do not compete
 with background refresh traffic.
 Critical BaseCheck/AuthCheck waits use a 12-second attempt timeout.
-`UpdateMarketsList` gets 15 seconds, `GetMarketsList` gets 20 seconds, and the
-larger strategy schema gets 30 seconds. Expiry retries only the current step
-and preserves completed init gates. Transport traffic, including unrelated
-Sliced blocks, never extends an application-response deadline.
+`UpdateMarketsList`, `GetMarketsList`, and the larger strategy schema each get
+45 seconds. Expiry retries only the current step and preserves completed init
+gates. Transport traffic, including unrelated Sliced blocks, never extends an
+application-response deadline.
 Server errors and malformed mandatory responses still fail init and leave the
 domain gate closed.
 
 Long-running applications can expose the live wait without guessing from a
 fixed timeout. `MoonClient::startup_status()` reports the current gate,
 cumulative startup time, useful Sliced bytes and recent receive rate, active
-block counts, idle time, retries/reconnects, RTT, PMTU, and downlink delivery
-quality. Read it from the application's normal UI timer while waiting for
+block counts, idle time, retries/reconnects, current/previous local UDP ports
+with per-socket packet counts, RTT, PMTU, and downlink delivery quality. Read it
+from the application's normal UI timer while waiting for
 `LifecycleEvent::Ready`; no dedicated feed thread is required. See
 [Lifecycle Events](lifecycle.md#live-startup-status).
 

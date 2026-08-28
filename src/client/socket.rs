@@ -7,8 +7,9 @@ use std::net::{SocketAddr, UdpSocket};
 /// Transport state carved out of [`super::Client`]: the UDP socket, the
 /// receive/send buffers, the slicing receiver, the bind-port cursor, the cached
 /// server address, and the bind-failure tracking. These are the hot recv/send
-/// path. Field names, types, and meaning are unchanged from when they lived
-/// directly on `Client`.
+/// path. Fields moved from `Client` keep their original meaning; passive
+/// per-socket packet counters live here because this object owns socket
+/// replacement.
 ///
 /// Note: `last_socket_recreate` is **not** here — it is a reconnect-throttle
 /// clock owned by the handshake/reconnect core and stays on `Client`.
@@ -26,6 +27,20 @@ pub(crate) struct ClientTransport {
     pub(crate) cached_server_addr: Option<SocketAddr>,
     /// Next UDP bind port to try (200-port walk in `bind_socket`).
     pub(crate) next_port: u16,
+    /// Local UDP port of the currently bound socket.
+    pub(crate) current_local_port: Option<u16>,
+    /// Successfully sent physical UDP datagrams on the current socket.
+    pub(crate) current_sent_packets: u64,
+    /// Physical UDP datagrams returned by `recv_from` on the current socket.
+    pub(crate) current_received_packets: u64,
+    /// Local UDP port closed by the latest automatic reconnect.
+    pub(crate) previous_local_port: Option<u16>,
+    /// Successfully sent physical UDP datagrams before that socket was closed.
+    pub(crate) previous_sent_packets: u64,
+    /// Physical UDP datagrams received before that socket was closed.
+    pub(crate) previous_received_packets: u64,
+    /// Number of sockets closed for automatic reconnect/port rotation.
+    pub(crate) rebind_count: u32,
     /// How many consecutive `bind_socket` 200-port walks failed (for `BindFailed`).
     pub(crate) bind_failure_streak: u32,
     /// Wall-clock ms of the first bind failure in the current streak.
@@ -51,6 +66,13 @@ impl ClientTransport {
             recv_events: PollEvents::new(),
             cached_server_addr: None,
             next_port,
+            current_local_port: None,
+            current_sent_packets: 0,
+            current_received_packets: 0,
+            previous_local_port: None,
+            previous_sent_packets: 0,
+            previous_received_packets: 0,
+            rebind_count: 0,
             bind_failure_streak: 0,
             first_bind_failure_ms: super::constants::NEVER_TIME_MS,
             last_bind_failed_event_ms: super::constants::NEVER_TIME_MS,
@@ -58,6 +80,25 @@ impl ClientTransport {
             transport_mode_state: crate::transport::ClientTransportModeState::new(),
             send_buf: Vec::with_capacity(2048), // typical send packet ~500-1500 bytes
         }
+    }
+
+    pub(crate) fn install_socket(&mut self, socket: UdpSocket, local_port: u16) {
+        self.socket = Some(socket);
+        self.current_local_port = Some(local_port);
+        self.current_sent_packets = 0;
+        self.current_received_packets = 0;
+    }
+
+    pub(crate) fn close_for_rebind(&mut self) {
+        if self.socket.take().is_none() {
+            return;
+        }
+        self.previous_local_port = self.current_local_port.take();
+        self.previous_sent_packets = self.current_sent_packets;
+        self.previous_received_packets = self.current_received_packets;
+        self.current_sent_packets = 0;
+        self.current_received_packets = 0;
+        self.rebind_count = self.rebind_count.wrapping_add(1);
     }
 }
 

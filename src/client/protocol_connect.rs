@@ -212,7 +212,7 @@ impl ProtocolCore<'_> {
             self.send_session_close(self.client.now_ms());
         }
         self.client.clear_recv_poller();
-        self.client.transport.socket = None;
+        self.client.transport.close_for_rebind();
         if !self.client.soft_reconnect {
             self.client.full_reset();
             self.client.clear_outbound_session_data();

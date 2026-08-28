@@ -108,6 +108,24 @@ fn inline_reader_test_client() -> (UdpSocket, SocketAddr, Client) {
     (server_sock, client_addr, client)
 }
 
+#[test]
+fn socket_packet_counters_track_physical_send_and_receive() {
+    let (server_sock, client_addr, mut client) = inline_reader_test_client();
+    client.transport.current_local_port = Some(client_addr.port());
+
+    client.dispatch_send(
+        Command::Ping.to_byte(),
+        &[0xAA],
+        Some(&[0xBB]),
+        server_sock.local_addr().unwrap(),
+    );
+    assert_eq!(client.transport.current_sent_packets, 2);
+
+    server_sock.send_to(&[0xCC], client_addr).unwrap();
+    pump_inline_reader(&mut client);
+    assert_eq!(client.transport.current_received_packets, 1);
+}
+
 fn pump_inline_reader(client: &mut Client) {
     let _events = pump_inline_reader_collect(client);
 }

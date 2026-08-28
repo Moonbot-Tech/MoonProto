@@ -64,6 +64,11 @@ impl ProtocolCore<'_> {
                 Ok((n, _)) => {
                     drained_any = true;
                     datagrams += 1;
+                    self.client.transport.current_received_packets = self
+                        .client
+                        .transport
+                        .current_received_packets
+                        .wrapping_add(1);
                     let continue_recv = self.process_datagram(&buf[..n], n as u64, mode);
                     self.drain_post_receive_delivery(cur_tm, mode);
                     if !continue_recv {

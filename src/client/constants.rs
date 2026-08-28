@@ -10,9 +10,9 @@ pub(super) const DELPHI_BASE_CHECK_UPDATE_RETRY_PAUSE_MS: u64 = 2_000; // MoonPr
 pub(super) const DELPHI_INIT_AUTH_RETRY_PAUSE_MS: u64 = 200; // Unit1.pas:5064-5068
 
 // === Active-library init policy ===
-pub(super) const DEFAULT_GET_MARKETS_LIST_INIT_TIMEOUT_MS: u64 = 20_000;
-pub(super) const DEFAULT_UPDATE_MARKETS_LIST_INIT_TIMEOUT_MS: u64 = 15_000;
-pub(super) const DEFAULT_STRATEGY_SCHEMA_INIT_TIMEOUT_MS: u64 = 30_000;
+pub(super) const DEFAULT_GET_MARKETS_LIST_INIT_TIMEOUT_MS: u64 = 45_000;
+pub(super) const DEFAULT_UPDATE_MARKETS_LIST_INIT_TIMEOUT_MS: u64 = 45_000;
+pub(super) const DEFAULT_STRATEGY_SCHEMA_INIT_TIMEOUT_MS: u64 = 45_000;
 // Rust active-lib can start domain Init immediately after `MPC_Fine`, before the
 // server has had one Ping roundtrip to publish a non-zero `RoundTripDelay`.
 // With RTT=0 the Delphi Sliced formula becomes a 10ms retry clock and can burn
