@@ -25,6 +25,7 @@ pub(crate) mod history_store;
 pub(crate) mod history_worker;
 pub(crate) mod kernel_health;
 pub(crate) mod markets;
+mod memory_warmup;
 pub(crate) mod news;
 pub(crate) mod order_books;
 pub(crate) mod orders;
@@ -88,6 +89,9 @@ pub use report::{
 pub(crate) use report::{
     ReportAliveMapRequest, ReportControl, ReportPageApplyAction, ReportReplicationState,
 };
+#[cfg(feature = "diagnostics")]
+#[doc(hidden)]
+pub use seq_ring::SeqRingMemoryResidency;
 #[cfg(test)]
 pub(crate) use seq_ring::SeqRingWriter;
 pub use seq_ring::{

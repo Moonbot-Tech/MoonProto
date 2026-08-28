@@ -72,6 +72,65 @@ fn default_companion_slots_stay_logical_until_data_or_read() {
 }
 
 #[test]
+fn warmup_skips_lazy_storage_and_sees_reader_materialization() {
+    let (mut writer, reader) = SeqRingWriter::<u64>::new(1_024).unwrap();
+
+    writer.push_default_lazy();
+    assert_eq!(writer.warm_up_pages(4_096), 0);
+
+    let mut out = Vec::new();
+    reader.copy_last(1, &mut out);
+    assert!(writer.warm_up_pages(4_096) >= 2);
+}
+
+#[test]
+fn warmup_does_not_take_the_ring_lock() {
+    let (mut writer, reader) = SeqRingWriter::<u64>::new(1_024).unwrap();
+    writer.push(7);
+
+    let mut touched = 0;
+    reader.with_last(1, |_| {
+        touched = writer.warm_up_pages(4_096);
+    });
+
+    assert!(touched >= 2);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "run alone: trims the test process working set"]
+fn warmup_restores_backing_pages_to_the_windows_working_set() {
+    use std::time::Instant;
+    use windows_sys::Win32::System::ProcessStatus::K32EmptyWorkingSet;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    const BACKING_BYTES: usize = 32 * 1_024 * 1_024;
+
+    let page_size = crate::state::memory_warmup::system_page_size().unwrap();
+    let capacity = BACKING_BYTES / std::mem::size_of::<u64>();
+    let (mut writer, reader) = SeqRingWriter::<u64>::new(capacity).unwrap();
+    writer.push(7);
+
+    // SAFETY: the current-process pseudo-handle is always valid. This test is
+    // ignored by default because the call trims the whole test process.
+    assert_ne!(unsafe { K32EmptyWorkingSet(GetCurrentProcess()) }, 0);
+    let before = reader.diag_memory_residency();
+
+    let started = Instant::now();
+    let touched = writer.warm_up_pages(page_size);
+    let elapsed = started.elapsed();
+    let after = reader.diag_memory_residency();
+
+    eprintln!(
+        "retained-ring warmup: pages={touched}, resident_before={:?}, resident_after={:?}, elapsed={elapsed:?}",
+        before.resident_pages, after.resident_pages
+    );
+    assert_eq!(touched, before.materialized_pages);
+    assert!(before.resident_pages.unwrap() < before.materialized_pages);
+    assert_eq!(after.resident_pages, Some(after.materialized_pages));
+}
+
+#[test]
 fn copies_last_rows_in_sequence_order() {
     let (mut writer, reader) = SeqRingWriter::<u64>::new(4).unwrap();
     writer.push_batch(&[10, 11, 12]);

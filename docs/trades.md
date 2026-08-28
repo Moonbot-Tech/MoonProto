@@ -506,6 +506,13 @@ trades subscription scope becomes active. Regular applications use
 Sizing is a startup choice on `ClientConfig`; recreate the client to apply a
 different policy. Use `subscribe_trades_for(...)` when the application only
 needs retained chart history for selected markets.
+While the worker is idle, it gradually touches the materialized retained-ring
+pages using the operating system's detected page size. The walk runs on the
+single writer and takes no ring lock. Each stable backing address is captured
+once when its ring materializes; the periodic walk adds no work to packet
+dispatch. Rings that have never received data stay unallocated and are skipped.
+Removing the trades subscription removes the owned history worker and therefore
+stops the warmup automatically.
 After the runtime has stopped, MoonProto releases its current snapshot and
 owned histories. A snapshot or history reader explicitly retained by
 application code remains valid, and therefore keeps its referenced rings alive,

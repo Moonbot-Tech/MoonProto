@@ -28,6 +28,7 @@ use crate::MoonTime;
 
 const STORE_WORKER_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(250);
 const STORE_WORKER_RECV_TIMEOUT: Duration = Duration::from_millis(50);
+const STORE_WORKER_WARMUP_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MarketHistoryTradeInput {
@@ -460,12 +461,17 @@ fn worker_loop(
 ) {
     let mut registry = MarketHistoryRegistry::new(default_config);
     let mut last_maintenance = Instant::now();
+    let mut last_warmup = Instant::now();
+    let mut warmup_market_index = 0usize;
     let mut last_now_time = MoonTime::ZERO;
+    let page_size = crate::state::memory_warmup::system_page_size();
 
     loop {
+        let command = rx.recv_timeout(STORE_WORKER_RECV_TIMEOUT);
+        let idle = matches!(command, Err(mpsc::RecvTimeoutError::Timeout));
         let keep_running = catch_unwind(AssertUnwindSafe(|| {
             handle_worker_command(
-                rx.recv_timeout(STORE_WORKER_RECV_TIMEOUT),
+                command,
                 &mut registry,
                 &read_index,
                 &mut last_now_time,
@@ -482,6 +488,13 @@ fn worker_loop(
                     panic_payload_message(payload.as_ref())
                 );
             }
+        }
+
+        if idle && last_warmup.elapsed() >= STORE_WORKER_WARMUP_INTERVAL {
+            if let Some(page_size) = page_size {
+                registry.warm_up_next_market(page_size, &mut warmup_market_index);
+            }
+            last_warmup = Instant::now();
         }
 
         if last_maintenance.elapsed() >= STORE_WORKER_MAINTENANCE_INTERVAL {

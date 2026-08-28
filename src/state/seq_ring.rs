@@ -9,7 +9,9 @@
 //! rendering bulk-copies ranges, derived calculations scan borrowed slices, and
 //! neither path pays per-row atomics.
 
-use std::sync::Arc;
+use std::mem::{size_of_val, MaybeUninit};
+use std::ptr::NonNull;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::{RwLock, RwLockReadGuard};
 
@@ -196,6 +198,15 @@ pub(crate) struct SeqRingWriter<T: SeqRingRow> {
     inner: Arc<SeqRingInner<T>>,
 }
 
+/// Diagnostics-only operating-system residency for one retained ring.
+#[cfg(any(test, feature = "diagnostics"))]
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SeqRingMemoryResidency {
+    pub materialized_pages: usize,
+    pub resident_pages: Option<usize>,
+}
+
 #[derive(Clone)]
 pub struct SeqRingReader<T: SeqRingRow> {
     inner: Arc<SeqRingInner<T>>,
@@ -247,7 +258,85 @@ impl<'a, T: SeqRingRow> SeqRingReadView<'a, T> {
 }
 
 struct SeqRingInner<T: SeqRingRow> {
+    warm_range: OnceLock<StableBackingRange>,
     state: RwLock<SeqRingState<T>>,
+}
+
+#[derive(Clone, Copy)]
+struct StableBackingRange {
+    base: NonNull<MaybeUninit<u8>>,
+    byte_len: usize,
+}
+
+// The pointer names the fixed backing allocation owned by the enclosing
+// `SeqRingInner`. It is published only after allocation and never changes;
+// retaining the inner keeps the allocation alive.
+unsafe impl Send for StableBackingRange {}
+unsafe impl Sync for StableBackingRange {}
+
+impl StableBackingRange {
+    fn from_rows<T>(rows: &mut [T]) -> Option<Self> {
+        let byte_len = size_of_val(rows);
+        if byte_len == 0 {
+            return None;
+        }
+        Some(Self {
+            base: NonNull::new(rows.as_mut_ptr().cast::<MaybeUninit<u8>>())?,
+            byte_len,
+        })
+    }
+
+    /// Touch one byte in every virtual-memory page covered by this allocation.
+    ///
+    /// The caller must be the ring's sole writer. Public readers may run at the
+    /// same time because this method does not mutate the allocation.
+    unsafe fn touch_pages(self, page_size: usize) -> usize {
+        if page_size == 0 || self.byte_len == 0 {
+            return 0;
+        }
+
+        let base_address = self.base.as_ptr().addr();
+        let mut offset = 0usize;
+        let mut touched = 0usize;
+        loop {
+            // SAFETY: `offset` remains inside the live allocation. Reading a
+            // `MaybeUninit<u8>` is valid even when the selected byte is padding;
+            // volatile keeps the page touch observable to the optimizer.
+            let _ = unsafe { self.base.as_ptr().add(offset).read_volatile() };
+            touched += 1;
+
+            let address = base_address.wrapping_add(offset);
+            let advance = page_size - address % page_size;
+            let remaining = self.byte_len - offset;
+            if advance >= remaining {
+                break;
+            }
+            offset += advance;
+        }
+        touched
+    }
+
+    #[cfg(any(test, feature = "diagnostics"))]
+    fn page_count(self, page_size: usize) -> usize {
+        if page_size == 0 || self.byte_len == 0 {
+            return 0;
+        }
+        let base_address = self.base.as_ptr().addr();
+        let mut address = base_address;
+        let end_address = base_address.saturating_add(self.byte_len);
+        let mut pages = 0usize;
+        while address < end_address {
+            pages += 1;
+            let Some(next_address) = address.checked_add(page_size - address % page_size) else {
+                break;
+            };
+            if next_address <= address {
+                break;
+            }
+            address = next_address;
+        }
+        pages
+    }
 }
 
 struct SeqRingState<T: SeqRingRow> {
@@ -267,6 +356,7 @@ impl<T: SeqRingRow> SeqRingWriter<T> {
             return Err(SeqRingError::ZeroCapacity);
         }
         let inner = Arc::new(SeqRingInner {
+            warm_range: OnceLock::new(),
             state: RwLock::new(SeqRingState {
                 rows: Box::new([]),
                 capacity,
@@ -295,7 +385,7 @@ impl<T: SeqRingRow> SeqRingWriter<T> {
     /// aggregates instead of disappearing silently.
     pub(crate) fn push_with_evicted(&mut self, row: T) -> (u64, Option<T>) {
         let mut state = self.inner.state.write();
-        state.ensure_rows();
+        state.ensure_rows(&self.inner.warm_range);
         let seq = state.next_seq;
         let idx = state.slot_index(seq);
         let evicted = if state.len == state.capacity {
@@ -342,7 +432,7 @@ impl<T: SeqRingRow> SeqRingWriter<T> {
             return;
         }
         let mut state = self.inner.state.write();
-        state.ensure_rows();
+        state.ensure_rows(&self.inner.warm_range);
         for &row in rows {
             let seq = state.next_seq;
             let idx = state.slot_index(seq);
@@ -372,7 +462,7 @@ impl<T: SeqRingRow> SeqRingWriter<T> {
         };
         state.len = 0;
         if !rows.is_empty() {
-            state.ensure_rows();
+            state.ensure_rows(&self.inner.warm_range);
             for &row in rows {
                 let seq = state.next_seq;
                 let idx = state.slot_index(seq);
@@ -390,7 +480,7 @@ impl<T: SeqRingRow> SeqRingWriter<T> {
         if !state.contains_seq(seq) {
             return false;
         }
-        state.ensure_rows();
+        state.ensure_rows(&self.inner.warm_range);
         let idx = state.slot_index(seq);
         state.rows[idx] = row;
         state.bump_revision();
@@ -405,9 +495,46 @@ impl<T: SeqRingRow> SeqRingWriter<T> {
         state.next_seq = 0;
         state.len = 0;
     }
+
+    /// Touch the materialized backing pages without taking the ring lock.
+    ///
+    /// `SeqRingWriter` is single-owner and not cloneable. The retained-history
+    /// worker calls this only between writes, while public handles are readers.
+    pub(crate) fn warm_up_pages(&mut self, page_size: usize) -> usize {
+        let Some(range) = self.inner.warm_range.get().copied() else {
+            return 0;
+        };
+        // SAFETY: `&mut self` belongs to the sole history writer, so no row
+        // mutation can overlap this read-only page walk. `inner` keeps the
+        // fixed backing allocation alive for the complete call.
+        unsafe { range.touch_pages(page_size) }
+    }
 }
 
 impl<T: SeqRingRow> SeqRingReader<T> {
+    /// Query materialized and resident pages without reading ring rows.
+    #[cfg(any(test, feature = "diagnostics"))]
+    #[doc(hidden)]
+    pub fn diag_memory_residency(&self) -> SeqRingMemoryResidency {
+        let Some(page_size) = crate::state::memory_warmup::system_page_size() else {
+            return SeqRingMemoryResidency::default();
+        };
+        let Some(range) = self.inner.warm_range.get().copied() else {
+            return SeqRingMemoryResidency {
+                materialized_pages: 0,
+                resident_pages: crate::state::memory_warmup::resident_page_count(0, 0, page_size),
+            };
+        };
+        SeqRingMemoryResidency {
+            materialized_pages: range.page_count(page_size),
+            resident_pages: crate::state::memory_warmup::resident_page_count(
+                range.base.as_ptr().addr(),
+                range.byte_len,
+                page_size,
+            ),
+        }
+    }
+
     pub fn capacity(&self) -> usize {
         self.inner.state.read().capacity
     }
@@ -852,9 +979,12 @@ impl<T: SeqRingQtyRow> SeqRingReader<T> {
 }
 
 impl<T: SeqRingRow> SeqRingState<T> {
-    fn ensure_rows(&mut self) {
+    fn ensure_rows(&mut self, warm_range: &OnceLock<StableBackingRange>) {
         if self.rows.is_empty() {
             self.rows = vec![T::default(); self.capacity].into_boxed_slice();
+            if let Some(range) = StableBackingRange::from_rows(&mut self.rows) {
+                let _ = warm_range.set(range);
+            }
         }
     }
 
@@ -939,7 +1069,7 @@ impl<T: SeqRingRow> SeqRingInner<T> {
         drop(state);
 
         let mut state = self.state.write();
-        state.ensure_rows();
+        state.ensure_rows(&self.warm_range);
         drop(state);
         self.state.read()
     }

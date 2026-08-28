@@ -144,6 +144,28 @@ impl MarketHistoryRegistry {
         }
     }
 
+    pub(crate) fn warm_up_next_market(
+        &mut self,
+        page_size: usize,
+        market_index: &mut usize,
+    ) -> usize {
+        if self.stores.is_empty() || page_size == 0 {
+            *market_index = 0;
+            return 0;
+        }
+        if *market_index >= self.stores.len() {
+            *market_index = 0;
+        }
+
+        let touched = self
+            .stores
+            .values_mut()
+            .nth(*market_index)
+            .map_or(0, |store| store.warm_up_memory(page_size));
+        *market_index += 1;
+        touched
+    }
+
     #[cfg(any(test, feature = "diagnostics"))]
     pub(crate) fn diag_fill_market_history_to_capacity(
         &mut self,

@@ -223,6 +223,18 @@ impl MarketHistoryStore {
         self.derived.trade_deltas = DerivedDeltaSnapshot::default();
     }
 
+    pub(crate) fn warm_up_memory(&mut self, page_size: usize) -> usize {
+        warm_optional_ring(&mut self.futures_trades, page_size)
+            + warm_optional_ring(&mut self.spot_trades, page_size)
+            + warm_optional_ring(&mut self.liquidations, page_size)
+            + warm_optional_ring(&mut self.mm_orders, page_size)
+            + warm_optional_ring(&mut self.mm_order_companion, page_size)
+            + warm_optional_ring(&mut self.last_prices, page_size)
+            + warm_optional_ring(&mut self.mark_prices, page_size)
+            + warm_optional_ring(&mut self.mini_candles, page_size)
+            + warm_optional_ring(&mut self.candles_5m, page_size)
+    }
+
     #[cfg(test)]
     pub(crate) fn readers(&self) -> MarketHistoryReaders {
         self.readers.clone()
@@ -769,6 +781,15 @@ where
     let (writer, reader) =
         SeqRingWriter::<T>::new(capacity).expect("capacity was checked before creating SeqRing");
     (Some(writer), Some(reader))
+}
+
+fn warm_optional_ring<T>(writer: &mut Option<SeqRingWriter<T>>, page_size: usize) -> usize
+where
+    T: crate::state::seq_ring::SeqRingRow,
+{
+    writer
+        .as_mut()
+        .map_or(0, |writer| writer.warm_up_pages(page_size))
 }
 
 fn last_mini_time(reader: Option<&SeqRingReader<MiniCandle>>) -> Option<MoonTime> {

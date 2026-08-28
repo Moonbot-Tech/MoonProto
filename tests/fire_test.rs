@@ -81,8 +81,9 @@ use moonproto::events::Event;
 use moonproto::shared_config::SharedConfig;
 use moonproto::state::{
     ApplyResult, BalanceEvent, LastPricePoint, MarkPricePoint, MarketHistoryApplySummary,
-    MarketHistoryCounts, MarketHistoryEvent, MarketPrice, MiniCandle, Order, OrderBookEvent,
-    OrderBookKind, OrderEvent, SettingsEvent, StratEvent, TradeHistoryRow, TradesEvent,
+    MarketHistoryConfig, MarketHistoryCounts, MarketHistoryEvent, MarketHistorySizing, MarketPrice,
+    MiniCandle, Order, OrderBookEvent, OrderBookKind, OrderEvent, SettingsEvent, StratEvent,
+    TradeHistoryRow, TradesEvent,
 };
 use moonproto::Command;
 use moonproto::{
@@ -859,6 +860,22 @@ impl Session {
         keys: ImportedKeys,
         provided_strategy: Option<StrategySnapshot>,
     ) -> Self {
+        Self::connect_with_market_history(
+            label,
+            cfg,
+            keys,
+            provided_strategy,
+            MarketHistorySizing::default(),
+        )
+    }
+
+    fn connect_with_market_history(
+        label: &str,
+        cfg: &FireConfig,
+        keys: ImportedKeys,
+        provided_strategy: Option<StrategySnapshot>,
+        market_history: MarketHistorySizing,
+    ) -> Self {
         let stats = Arc::new(Mutex::new(SessionStats {
             label: label.to_string(),
             market: cfg.market.clone(),
@@ -887,7 +904,8 @@ impl Session {
         let client = MoonClient::connect(
             ClientConfig::new(&cfg.host, cfg.port, keys.master_key, keys.mac_key)
                 .with_transport_mode(cfg.transport_mode)
-                .with_client_id(rand::random()),
+                .with_client_id(rand::random())
+                .with_market_history(market_history),
             ConnectConfig::new(init).with_connect_timeout(cfg.connect_timeout),
         )
         .unwrap_or_else(|err| panic!("FIRETEST {label}: MoonClient connect failed: {err}"));
@@ -8799,6 +8817,104 @@ fn news_service_gate_uses_license_expiration() {
         Some(MoonTime::from_unix_millis(10_001)),
         now
     ));
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "live MoonBot server required; trims the FireTest process working set"]
+fn fire_test_retained_memory_warmup() {
+    use windows_sys::Win32::System::ProcessStatus::K32EmptyWorkingSet;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    const BACKING_BYTES: usize = 32 * 1_024 * 1_024;
+    const WARMUP_TIMEOUT: Duration = Duration::from_secs(3);
+
+    let _live_test_lock = firetest_live_test_lock();
+    let cfg = FireConfig::load_required();
+    let key_info = parse_key_info(&cfg.key_b64).expect("invalid MoonProto key in FireTest config");
+    let capacity = BACKING_BYTES / std::mem::size_of::<TradeHistoryRow>();
+    let history = MarketHistoryConfig {
+        futures_trades_capacity: capacity,
+        spot_trades_capacity: 0,
+        liquidation_capacity: 0,
+        mm_orders_capacity: 0,
+        last_price_capacity: 0,
+        mini_candles_capacity: 0,
+        candles_5m_capacity: 0,
+    };
+    let _err_emu = ErrEmuGuard::set(0);
+    let mut session = Session::connect_with_market_history(
+        "MemoryWarmup",
+        &cfg,
+        key_info.keys,
+        None,
+        MarketHistorySizing::fixed(history),
+    );
+    assert!(
+        session
+            .client
+            .diag_fill_market_history_to_capacity_default_span(
+                cfg.market.clone(),
+                MoonTime::now().unix_millis(),
+            )
+            .expect("retained-history diagnostics fill must complete"),
+        "retained-history diagnostics fill rejected market {}",
+        cfg.market
+    );
+
+    let reader_start = Instant::now();
+    let reader = loop {
+        session.pump(Duration::from_millis(25));
+        if let Some(reader) = session.client.snapshot().and_then(|snapshot| {
+            let market = snapshot.markets().get(&cfg.market)?;
+            snapshot
+                .market_history_readers_for(&market)
+                .and_then(|readers| readers.futures_trades)
+        }) {
+            break reader;
+        }
+        assert!(
+            reader_start.elapsed() < cfg.wait,
+            "warmup futures ring was not published within {:?}",
+            cfg.wait
+        );
+    };
+    let materialized = reader.diag_memory_residency();
+    assert!(materialized.materialized_pages > 1);
+
+    // SAFETY: the current-process pseudo-handle is always valid. This test is
+    // ignored because trimming affects every thread in the FireTest process.
+    assert_ne!(unsafe { K32EmptyWorkingSet(GetCurrentProcess()) }, 0);
+    let cold = reader.diag_memory_residency();
+    let cold_resident = cold
+        .resident_pages
+        .expect("Windows working-set residency query must succeed");
+    assert!(
+        cold_resident < cold.materialized_pages,
+        "EmptyWorkingSet left the whole retained ring resident"
+    );
+
+    let started = Instant::now();
+    let warm = loop {
+        std::thread::sleep(Duration::from_millis(25));
+        let residency = reader.diag_memory_residency();
+        if residency.resident_pages == Some(residency.materialized_pages) {
+            break residency;
+        }
+        assert!(
+            started.elapsed() < WARMUP_TIMEOUT,
+            "live history worker did not restore the retained ring within {WARMUP_TIMEOUT:?}: cold={cold:?}, current={residency:?}"
+        );
+    };
+
+    println!(
+        "OK: FIRETEST retained-memory warmup market={} pages={} resident_before={} resident_after={} elapsed={:?}",
+        cfg.market,
+        warm.materialized_pages,
+        cold_resident,
+        warm.resident_pages.unwrap(),
+        started.elapsed()
+    );
 }
 
 #[test]

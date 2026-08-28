@@ -71,6 +71,35 @@ fn auto_config_matches_production_depth_and_ignores_unused_market_count() {
 }
 
 #[test]
+fn registry_warmup_visits_only_materialized_market_rings() {
+    let config = MarketHistoryConfig {
+        futures_trades_capacity: 1_024,
+        spot_trades_capacity: 0,
+        liquidation_capacity: 0,
+        mm_orders_capacity: 0,
+        last_price_capacity: 0,
+        mini_candles_capacity: 0,
+        candles_5m_capacity: 0,
+    };
+    let mut registry = MarketHistoryRegistry::new(config);
+    registry.configure_markets(&["BTCUSDT", "ETHUSDT"], Some(&TradeStorageScope::All));
+    registry
+        .get_mut("BTCUSDT")
+        .unwrap()
+        .append_futures_trade(trade(45_000.0, 100.0, 1.0));
+
+    let mut market_index = 0;
+    let first = registry.warm_up_next_market(4_096, &mut market_index);
+    let second = registry.warm_up_next_market(4_096, &mut market_index);
+
+    assert!(first > 0 || second > 0);
+    assert!(first == 0 || second == 0);
+    assert_eq!(market_index, 2);
+    assert_eq!(registry.warm_up_next_market(0, &mut market_index), 0);
+    assert_eq!(market_index, 0);
+}
+
+#[test]
 fn auto_budget_percent_clamps_and_scales_heavy_histories() {
     let total = 64 * GB;
 

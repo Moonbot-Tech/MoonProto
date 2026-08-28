@@ -54,5 +54,15 @@ $env:MOONPROTO_FIRETEST_PROFILE = "quick"
 cargo test --release --features diagnostics --test fire_test -- --ignored --nocapture
 ```
 
+Live retained-memory warmup check (Windows only):
+
+```powershell
+cargo test --release --features diagnostics --test fire_test fire_test_retained_memory_warmup -- --ignored --nocapture --test-threads=1
+```
+
+This check trims the FireTest process working set, then verifies through the
+public `MoonClient` path that its owned history worker restores a materialized
+retained ring. It does not mutate the MoonBot server.
+
 Quick FireTest is the frequent development gate. Full FireTest is the
 destructive/stress gate for “this is a good point” decisions.
