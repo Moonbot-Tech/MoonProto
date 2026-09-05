@@ -537,6 +537,28 @@ fn sender_strat_snapshot_payload_uses_sliced_snapshot_u_key() {
 }
 
 #[test]
+fn sender_strat_deltas_survive_full_snapshot_replacement() {
+    let (sender, _, send_q, _, _, _) = make_sender();
+
+    sender.strat_send_snapshot_payload(1, 0, false, &[10]);
+    sender.strat_send_snapshot_payload(2, 0, true, &[20]);
+    sender.strat_send_snapshot_payload(3, 0, false, &[30]);
+    sender.strat_send_snapshot_payload(4, 0, true, &[40]);
+
+    let sent = take_send_items(&send_q);
+    assert_eq!(sent.len(), 3);
+    assert_eq!(
+        sent.iter()
+            .map(|item| *item.data.last().unwrap())
+            .collect::<Vec<_>>(),
+        [10, 30, 40]
+    );
+    assert!(sent[0].u_key.is_none());
+    assert!(sent[1].u_key.is_none());
+    assert_eq!(sent[2].u_key, UniqueKey::strat_snapshot());
+}
+
+#[test]
 fn sender_balance_request_refresh_uses_balance_channel_defaults() {
     let (sender, _, send_q, _, _, _) = make_sender();
 

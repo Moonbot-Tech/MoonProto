@@ -36,6 +36,8 @@ pub struct StratsState {
     pub by_id: HashMap<u64, StrategyInfo>,
     /// Retained strategy-list order. `by_id` is only the lookup index.
     order: Vec<u64>,
+    /// Date of the last accepted Full order, independent of strategy edit dates.
+    last_modified: u64,
     /// Folder tree keyed case-insensitively.
     /// Values keep the first observed spelling of the full folder path.
     folders_by_key: HashMap<String, String>,
@@ -289,6 +291,12 @@ impl StratsState {
         self.order
             .iter()
             .filter_map(|strategy_id| self.snapshots_by_id.get(strategy_id).map(Arc::as_ref))
+    }
+
+    /// Core-confirmed date of the global strategy order (UTC milliseconds).
+    /// Zero means no versioned Full snapshot has been received yet.
+    pub fn last_modified(&self) -> u64 {
+        self.last_modified
     }
 
     /// Owned export of all retained strategy snapshots in retained list order.

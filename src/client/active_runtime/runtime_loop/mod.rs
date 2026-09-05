@@ -1299,11 +1299,7 @@ mod tests {
             RuntimeCommand::StrategySnapshotBatch(vec![strategy.clone()]),
             &mut pending,
         ));
-        assert_eq!(
-            dispatcher.local_strategy_epoch(),
-            42,
-            "Delphi increments cfg.ServerStratEpoch before sending an edited local snapshot"
-        );
+        assert!(dispatcher.local_strategy_epoch() > 1_000_000_000_000);
 
         let (sliced, high, low) = client.take_send_queues_for_test();
         let item = sliced
@@ -1318,7 +1314,11 @@ mod tests {
         else {
             panic!("expected TStratSnapshot");
         };
-        assert_eq!(snapshot.server_epoch, 42);
+        assert_eq!(snapshot.server_epoch, dispatcher.local_strategy_epoch());
+        assert!(
+            snapshot.full,
+            "a changed list carries order in Full row sequence"
+        );
         assert_eq!(snapshot.client_max_last_date, strategy.last_date);
         let batch = crate::commands::strategy_serializer::parse_strategy_batch(&snapshot.data)
             .expect("strategy snapshot payload must parse");

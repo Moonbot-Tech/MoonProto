@@ -1,11 +1,11 @@
-﻿//! Local strategy list API and `TStratSnapshotRequest` reply provider.
+//! Local strategy list API and `TStratSnapshotRequest` reply provider.
 
 use super::{EventDispatcher, StrategySnapshotReply};
 use crate::commands::strategy_serializer::StrategySnapshot;
 use std::time::Instant;
 
 impl EventDispatcher {
-    /// Set Delphi `cfg.ServerStratEpoch` analogue for local strategy snapshots.
+    /// Load the date belonging to a persisted local strategy order (0 if unknown).
     ///
     /// Use this when loading persisted local strategy state before init. The
     /// value is written into `TStratSnapshot.ServerEpoch` when the dispatcher
@@ -19,9 +19,12 @@ impl EventDispatcher {
         self.local_strategy_epoch
     }
 
-    /// Delphi local strategy edit: `Inc(cfg.ServerStratEpoch)`.
-    pub(crate) fn mark_local_strategies_changed(&mut self) -> u64 {
-        self.local_strategy_epoch = self.local_strategy_epoch.saturating_add(1);
+    /// Delphi local reorder: `Max(UnixTimeMsUTC, LastModified + 1)`.
+    pub(crate) fn mark_local_strategies_changed(&mut self, now_ms: i64) -> u64 {
+        self.local_strategy_epoch = self
+            .local_strategy_epoch
+            .saturating_add(1)
+            .max(now_ms as u64);
         self.local_strategy_epoch
     }
 

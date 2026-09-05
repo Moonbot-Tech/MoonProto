@@ -23,6 +23,34 @@ enum EditResolution {
 }
 
 impl StratsState {
+    pub(crate) fn local_order_matches(&self, strategies: &[StrategySnapshot]) -> bool {
+        let incoming = strategies.iter().map(|s| s.strategy_id);
+        match &self.local_snapshots {
+            Some(local) => local.iter().map(|s| s.strategy_id).eq(incoming),
+            None => self.order.iter().copied().eq(incoming),
+        }
+    }
+
+    pub(crate) fn apply_server_order(&mut self, order: &[u64], date: u64, update_local: bool) {
+        if self.last_modified != 0 && date <= self.last_modified {
+            return;
+        }
+        let ranks: HashMap<_, _> = order.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+        // Stable sorting keeps absent Own strategies without implicitly deleting them.
+        self.order
+            .sort_by_key(|id| ranks.get(id).copied().unwrap_or(usize::MAX));
+        if update_local {
+            if let Some(local) = &mut self.local_snapshots {
+                local.sort_by_key(|s| ranks.get(&s.strategy_id).copied().unwrap_or(usize::MAX));
+                for (i, s) in local.iter().enumerate() {
+                    self.local_snapshot_index.insert(s.strategy_id, i);
+                }
+            }
+        }
+        self.last_modified = date;
+        self.invalidate_snapshot_payload_cache();
+    }
+
     pub(super) fn invalidate_snapshot_payload_cache(&mut self) {
         self.snapshot_payload_cache = None;
     }
@@ -450,11 +478,13 @@ impl StratsState {
         let mut changed = false;
         let client_max_last_date = Cell::new(0u64);
         let skipped_old = Cell::new(false);
+        let mut order = Vec::new();
         let mut outcome = StrategySnapshotApplyOutcome::default();
         outcome.count = parse_strategy_batch_for_each_with_schema_field_types_skip_old(
             deflate_data,
             field_types.as_deref(),
             |strategy_id, strategy_ver, last_date| {
+                order.push(strategy_id);
                 client_max_last_date.set(client_max_last_date.get().max(last_date));
                 let old_or_equal = existing_versions.get(&strategy_id).is_some_and(
                     |(existing_last_date, existing_strategy_ver)| {
@@ -480,6 +510,7 @@ impl StratsState {
                 changed |= self.apply_server_snapshot(s, &mut outcome);
             },
         )?;
+        outcome.order = order;
         self.update_snapshot_payload_cache_after_apply(
             outcome.count,
             client_max_last_date.get(),
@@ -487,6 +518,9 @@ impl StratsState {
             changed,
             skipped_old.get(),
         );
+        if outcome.order != self.order {
+            self.invalidate_snapshot_payload_cache();
+        }
         Some(outcome)
     }
 

@@ -153,9 +153,8 @@ pub(crate) struct EventDispatcher {
     /// UI and the account screen read them. Default (all-`None`) before BaseCheck.
     session_server_info: std::sync::Arc<ServerInfo>,
     session_auth_info: Option<std::sync::Arc<AuthCheckResponse>>,
-    /// Delphi `cfg.ServerStratEpoch` for snapshots sent by this client.
-    /// Do not confuse it with `StratsState::last_server_epoch`, which mirrors
-    /// Delphi `cfg.LocalStratEpoch` after receiving a server snapshot.
+    /// Date of the local strategy order, carried in the legacy ServerEpoch slot.
+    /// Parameter revisions remain independent, one per strategy.
     local_strategy_epoch: u64,
     /// Last known `ServerToken` for detecting a hard reconnect.
     ///

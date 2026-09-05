@@ -654,7 +654,10 @@ fn handle_strategy_snapshot_batch(
         );
         return false;
     }
-    let server_epoch = dispatcher.mark_local_strategies_changed();
+    let order_changed = !dispatcher.strats().local_order_matches(&strategies);
+    if order_changed {
+        dispatcher.mark_local_strategies_changed(crate::MoonTime::now().unix_millis());
+    }
     #[cfg(any(test, feature = "diagnostics"))]
     let state_started = Instant::now();
     let now = Instant::now();
@@ -711,9 +714,9 @@ fn handle_strategy_snapshot_batch(
     #[cfg(any(test, feature = "diagnostics"))]
     let send_started = Instant::now();
     client.strat_send_snapshot_payload(
-        server_epoch,
+        reply.server_epoch,
         reply.client_max_last_date,
-        false,
+        order_changed,
         &reply.data,
     );
     #[cfg(any(test, feature = "diagnostics"))]

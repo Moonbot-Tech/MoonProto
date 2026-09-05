@@ -990,6 +990,92 @@ fn encode_named_snapshot(schema: &StrategySchema, snapshot: &StrategySnapshot) -
 }
 
 #[test]
+fn full_order_survives_skipped_rows_old_full_and_preserves_own_strategies() {
+    let schema = schema_for_strategy_name(&[1]);
+    let a = named_snapshot(1, 100, "A");
+    let mut b = named_snapshot(1, 100, "B");
+    b.strategy_id = 200;
+    let mut own = named_snapshot(1, 100, "Own");
+    own.strategy_id = 300;
+    let mut state = StratsState::new();
+    state.schema = Some(Arc::new(schema.clone()));
+    state.replace_with_snapshots(&[a.clone(), b.clone(), own]);
+    let mut builder = crate::commands::strategy_serializer::StrategyBatchBuilder::new(&schema);
+    builder.write_strategy(&b);
+    builder.write_strategy(&a);
+    let reordered = builder.finalize();
+    let applied = state
+        .apply_snapshot_decoded_with_mode_in_place(&reordered, true)
+        .unwrap();
+    assert_eq!(
+        applied.order,
+        [200, 100],
+        "even skipped equal rows carry order"
+    );
+    state.apply_server_order(&applied.order, 2000, true);
+    assert_eq!(
+        state.snapshots().map(|s| s.strategy_id).collect::<Vec<_>>(),
+        [200, 100, 300]
+    );
+
+    let newer_a = named_snapshot(1, 101, "A edited");
+    let mut builder = crate::commands::strategy_serializer::StrategyBatchBuilder::new(&schema);
+    builder.write_strategy(&newer_a);
+    builder.write_strategy(&b);
+    let old_order = builder.finalize();
+    let applied = state
+        .apply_snapshot_decoded_with_mode_in_place(&old_order, true)
+        .unwrap();
+    state.apply_server_order(&applied.order, 1999, true);
+    assert_eq!(
+        state.snapshot(100).unwrap().last_date,
+        101,
+        "old order must not reject fresh parameters"
+    );
+    assert_eq!(state.last_modified(), 2000);
+    let cache = state.snapshot_payload_cache().unwrap();
+    let decoded = crate::commands::strategy_serializer::parse_strategy_batch(&cache.data).unwrap();
+    assert_eq!(
+        decoded
+            .strategies
+            .iter()
+            .map(|s| s.strategy_id)
+            .collect::<Vec<_>>(),
+        [200, 100, 300]
+    );
+
+    state.apply_server_order(&[100, 200], 2000, true);
+    assert_eq!(
+        state.snapshots().next().unwrap().strategy_id,
+        200,
+        "equal date cannot reorder"
+    );
+}
+
+#[test]
+fn canonical_order_updates_local_reply_without_losing_pending_parameters() {
+    let a = named_snapshot(1, 100, "A");
+    let mut b = named_snapshot(1, 100, "B");
+    b.strategy_id = 200;
+    let mut state = StratsState::new();
+    state.replace_with_snapshots(&[a.clone(), b.clone()]);
+    let edited_a = named_snapshot(1, 101, "A edited");
+    state.stage_local_snapshot_batch(
+        vec![edited_a.clone(), b.clone()],
+        crate::MoonTime::now(),
+        Instant::now(),
+    );
+    state.apply_server_order(&[200, 100], 10, true);
+    assert!(state.local_order_matches(&[b.clone(), edited_a.clone()]));
+    assert_eq!(state.local_snapshots.as_ref().unwrap()[1].last_date, 101);
+    state.apply_server_order(&[100, 200], 11, false);
+    assert!(
+        state.local_order_matches(&[b, edited_a]),
+        "a newer pending local order is not overwritten"
+    );
+}
+
+#[test]
 fn local_strategy_edit_keeps_confirmed_state_until_matching_core_echo() {
     let schema = schema_for_strategy_name(&[1]);
     let mut state = StratsState::new();

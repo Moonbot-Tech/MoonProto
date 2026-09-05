@@ -21,6 +21,7 @@ pub(crate) struct StrategyEditStageOutcome {
 #[derive(Debug, Default)]
 pub(crate) struct StrategySnapshotApplyOutcome {
     pub count: usize,
+    pub order: Vec<u64>,
     pub confirmed: Vec<u64>,
     pub adjusted: Vec<u64>,
     pub superseded: Vec<u64>,

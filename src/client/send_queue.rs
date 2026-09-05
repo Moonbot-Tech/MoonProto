@@ -180,6 +180,16 @@ fn descriptor_u_key(
             kind: desc.unique_kind,
             uid,
         }),
+        UKeyRule::StrategySnapshot => payload.get(31).map(|full| {
+            if *full != 0 {
+                UniqueKey {
+                    kind: desc.unique_kind,
+                    uid: 1,
+                }
+            } else {
+                UniqueKey::none()
+            }
+        }),
         // Delphi `TBaseMarketCommand.SetUKey` uses the local `TMarket` pointer.
         // No current client-sent unique command depends on that inherited rule;
         // require an explicit key if one appears instead of guessing from

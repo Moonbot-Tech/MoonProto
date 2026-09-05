@@ -174,7 +174,7 @@ impl MoonStateSnapshot {
         &self.strats
     }
 
-    /// Local strategy-list epoch used by outgoing local strategy snapshots.
+    /// Local strategy-order timestamp used by outgoing full strategy snapshots.
     pub fn local_strategy_epoch(&self) -> u64 {
         self.local_strategy_epoch
     }

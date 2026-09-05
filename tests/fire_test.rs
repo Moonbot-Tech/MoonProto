@@ -7755,6 +7755,148 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session) {
     println!("OK: real non-emulator SOL order was created, canceled, and removed; balance stream was observed independently");
 }
 
+#[test]
+#[ignore = "live MoonBot server required; creates and removes strategy order fixtures"]
+fn fire_test_strategy_order_sync() {
+    let _lock = firetest_live_test_lock();
+    let cfg = FireConfig::load_required();
+    assert!(cfg.allow_mutation);
+    let keys = parse_key_info(&cfg.key_b64)
+        .expect("invalid FireTest key")
+        .keys;
+    let _loss = ErrEmuGuard::set(0);
+    let mut a = Session::connect("Order-A", &cfg, keys, None);
+    let mut b = Session::connect("Order-B", &cfg, keys, None);
+    run_strategy_order_sync_gate(&cfg, keys, &mut a, &mut b);
+}
+
+fn strategy_order(session: &Session) -> Vec<u64> {
+    session
+        .state_snapshot()
+        .strategy_snapshots()
+        .map(|s| s.strategy_id)
+        .collect()
+}
+
+fn run_strategy_order_sync_gate(
+    cfg: &FireConfig,
+    keys: ImportedKeys,
+    a: &mut Session,
+    b: &mut Session,
+) {
+    let ids = [rand::random::<u64>(), rand::random::<u64>()];
+    let folder = format!("FireTestOrder-{}", ids[0]);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut strategies = a.state_snapshot().strategy_snapshot_vec();
+        for (i, id) in ids.iter().enumerate() {
+            let mut fixture = firetest_strategy(cfg);
+            fixture.strategy_id = *id;
+            fixture.checked = false;
+            fixture.path = folder.clone().into();
+            fixture.fields.insert(
+                "StrategyName",
+                FieldValue::String(format!("FireTest Order {i}")),
+            );
+            strategies.push(fixture);
+        }
+        a.sync_local_strategies(&strategies);
+        assert!(pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "strategy order fixtures",
+            |a, b| {
+                ids.iter().all(|id| {
+                    a.strategy_snapshot(*id).is_some() && b.strategy_snapshot(*id).is_some()
+                }) && strategy_order(a) == strategy_order(b)
+            }
+        ));
+
+        for step in 0..4 {
+            let source = if step % 2 == 0 { &mut *a } else { &mut *b };
+            let mut desired = source.state_snapshot().strategy_snapshot_vec();
+            let positions = ids.map(|id| desired.iter().position(|s| s.strategy_id == id).unwrap());
+            desired.swap(positions[0], positions[1]);
+            let comment = format!("Order and content step {step}");
+            if step % 2 == 1 {
+                let fixture = desired
+                    .iter_mut()
+                    .find(|s| s.strategy_id == ids[0])
+                    .unwrap();
+                fixture.last_date = fixture.last_date.max(now_epoch_ms()).saturating_add(1);
+                fixture
+                    .fields
+                    .insert("Comment", FieldValue::String(comment.clone()));
+            }
+            let expected: Vec<_> = desired.iter().map(|s| s.strategy_id).collect();
+            source.sync_local_strategies(&desired);
+            assert!(
+                pump_pair_until_sessions(
+                    a,
+                    b,
+                    cfg.connect_timeout,
+                    "bidirectional strategy order",
+                    |a, b| {
+                        strategy_order(a) == expected
+                            && strategy_order(b) == expected
+                            && (step % 2 == 0
+                                || [a, b].iter().all(|s| {
+                                    s.strategy_snapshot(ids[0]).unwrap().fields.get("Comment")
+                                        == Some(&FieldValue::String(comment.clone()))
+                                }))
+                    }
+                ),
+                "step {step}: global order or edited content was not confirmed on both clients"
+            );
+            println!(
+                "FIRETEST strategy order step={step}: rows={} date={}",
+                expected.len(),
+                a.state_snapshot().strats().last_modified()
+            );
+        }
+
+        let expected = strategy_order(a);
+        // Unknown order dates must be repaired by canonical Full even without content deltas.
+        for label in ["Order-cold", "Order-reconnected"] {
+            let mut c = Session::connect(label, cfg, keys, None);
+            assert!(pump_pair_until_sessions(
+                a,
+                &mut c,
+                cfg.connect_timeout,
+                label,
+                |_, c| strategy_order(c) == expected
+            ));
+            c.client.disconnect().unwrap();
+            c.client.wait_finished().unwrap();
+        }
+    }));
+    for id in ids {
+        a.client
+            .strategies()
+            .delete(id, "")
+            .expect("delete order fixture");
+    }
+    let cleaned = pump_pair_until_sessions(
+        a,
+        b,
+        cfg.connect_timeout,
+        "strategy order cleanup",
+        |a, b| {
+            ids.iter()
+                .all(|id| a.strategy_snapshot(*id).is_none() && b.strategy_snapshot(*id).is_none())
+        },
+    );
+    a.client
+        .strategies()
+        .delete(0, folder)
+        .expect("delete empty test folder");
+    assert!(cleaned, "test strategies were not removed from the core");
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+    println!("OK: strategy order, edit+order, cold/reconnected clients; test strategies removed");
+}
+
 fn run_moonshot_strategy_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
     let restore_strategies_running = wait_strategy_runtime_state(cfg, a, b);
     let restore_emu_mode = ensure_server_emulator_mode(cfg, a, b);
@@ -9239,6 +9381,7 @@ fn fire_test_active_library_health() {
     run_report_database_gate(&cfg, keys, &mut a);
     run_order_lifecycle_gate(&cfg, &mut a, &mut b);
     run_real_order_cancel_gate(&cfg, &mut a, &mut b);
+    run_strategy_order_sync_gate(&cfg, keys, &mut a, &mut b);
     run_moonshot_strategy_gate(&cfg, &mut a, &mut b);
     run_runtime_restart_now_gate(&cfg, &mut a, &mut b);
 

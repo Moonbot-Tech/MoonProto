@@ -60,6 +60,14 @@ impl EventDispatcher {
                     return;
                 };
                 self.strats.last_server_epoch = snap.server_epoch;
+                if snap.full {
+                    self.strats.apply_server_order(
+                        &apply_outcome.order,
+                        snap.server_epoch,
+                        snap.server_epoch >= self.local_strategy_epoch,
+                    );
+                    self.local_strategy_epoch = self.local_strategy_epoch.max(snap.server_epoch);
+                }
                 let ev = if snap.full {
                     StratEvent::SnapshotFull {
                         server_epoch: snap.server_epoch,

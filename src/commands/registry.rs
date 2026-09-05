@@ -109,6 +109,7 @@ pub(crate) enum UKeyRule {
     SendContextClientId,
     CandleUpdate,
     CandleTimeframeState,
+    StrategySnapshot,
 }
 
 /// Direction is client-side documentation/checking metadata. It does not change
@@ -751,7 +752,7 @@ pub(crate) const STRAT_COMMANDS: &[CommandDescriptor] = &[
         priority = Sliced,
         retries = None,
         unique = UK_STRAT_SNAPSHOT,
-        ukey = UKeyRule::Singleton(1),
+        ukey = UKeyRule::StrategySnapshot,
         direction = Both
     ),
     cmd_desc!(

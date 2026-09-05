@@ -1462,6 +1462,8 @@ impl MoonStrategies<'_> {
     }
 
     /// Synchronize the application's current local strategy list.
+    /// The vector defines global order. A changed sequence is sent as one Full
+    /// snapshot with a library-assigned order date; row edit dates remain separate.
     ///
     /// Core-confirmed snapshots remain unchanged until the core echoes an
     /// accepted revision. Use `snapshot.strategy_edit(id)` and `StratEvent`'s

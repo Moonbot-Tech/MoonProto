@@ -7,10 +7,10 @@ or answer server snapshot requests by hand.
 
 The active runtime maintains `StratsState` and emits `Event::Strat`. Snapshot
 payloads are decoded automatically into both the lightweight `StrategyInfo`
-state and full `StrategySnapshot` values. `last_server_epoch` advances only
-after the snapshot serializer payload is decoded and applied successfully,
-matching the core snapshot-epoch contract. A malformed snapshot is logged and
-is not reported as `SnapshotFull` / `SnapshotPartial`.
+state and full `StrategySnapshot` values. `last_server_epoch` records the last
+successfully decoded snapshot's timestamp; it is not the accepted order version.
+Use `last_modified()` for that. A malformed snapshot is logged and is not
+reported as `SnapshotFull` / `SnapshotPartial`.
 
 `strategy_snapshot(id)` and `strategy_snapshots()` are core-confirmed state.
 Submitting an edited list does not overwrite them optimistically. While an edit
@@ -99,6 +99,27 @@ Server snapshot requests are answered by the runtime from the library-owned
 local strategy list. Terminal code does not need to handle that packet or build
 a snapshot reply; the normal `MoonClient` event sink suppresses the hidden
 request event after latching/sending the reply.
+
+## Strategy Order
+
+Pass the complete editor list to `sync_local_strategies` in the desired order.
+For a reorder, the library sends one Full snapshot: its row sequence is the
+order, including any parameter edits made in the same action. No separate
+order command or application-assigned timestamp is needed. Keep the core's
+folder grouping: strategies in one folder form a contiguous group.
+
+The core and library accept a newer Full order independently of per-strategy
+edit dates. An older Full cannot roll back order, but can still supply newer
+parameters. A Full never implicitly deletes missing strategies; use `delete`.
+Read the confirmed order through `strategy_snapshots()` after `SnapshotFull`.
+Keep an editor draft while edits are pending instead of rebuilding each next
+edit from the still-unconfirmed core snapshot.
+
+Known limits: after all delivery retries fail, the next reorder, Full sync or
+reconnect repairs order; there is no periodic order repair. Concurrent reorders
+with equal dates are not separately arbitrated. Empty folders and recovery of
+lost delete commands are not part of order synchronization. Folder-path edits
+still require the strategy's normal edit-date update.
 
 ## Global Strategy Runtime State
 
@@ -334,15 +355,15 @@ let owned_for_export: Vec<StrategySnapshot> = client
 persistence handoff, or offline editing. Rendering code should normally use
 `strategy_snapshots()` / `strategy_snapshot(id)` and borrow the retained state.
 
-The epoch passed to `InitialStrategies::new` is the local strategy-list epoch
-for this client. It is the value written into outgoing local strategy snapshots
-for both post-init send and future automatic snapshot replies; it is not the
-remote server epoch learned from incoming snapshots. If the application reloads
+The date passed to `InitialStrategies::new` belongs to that persisted list's
+order. Persist `state.strats().last_modified()` together with its confirmed
+strategy list; use `0` for an old cache without this metadata. Do not substitute
+the cache load time. If the application reloads
 its whole local strategy list after `MoonClient::connect`, use
 `client.strategies().sync_local_strategies(strategies)`. The application still
 owns the strategy editor/persistence; this call tells Active Lib that the local
-list changed. Active Lib increments the local strategy epoch, updates the
-runtime-owned copy used for future server snapshot requests. The call queues
+list changed. Active Lib updates the order date only when the list sequence
+changes and keeps the runtime-owned copy for future server snapshot requests. The call queues
 intent and returns immediately; if startup is still running, the runtime defers
 the intent until the Init/schema gate has opened. The core already echoes
 accepted strategy revisions and returns its newer revision when the rollback
@@ -571,8 +592,9 @@ client
 ```
 
 This is still an Active Lib intent, not a raw protocol call: "local strategies
-changed; synchronize them". The runtime advances the local strategy epoch and
-keeps the list used for future automatic snapshot replies. If the call is made
+changed; synchronize them". The vector defines the global order, not an order
+within each folder. The runtime keeps the list for automatic snapshot replies
+and assigns a fresh UTC date when its sequence changes. If the call is made
 while Init is still in progress, the command is held in the runtime FIFO and
 serialized only after the live server schema is available.
 
