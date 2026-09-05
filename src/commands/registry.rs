@@ -895,6 +895,14 @@ pub(crate) const BALANCE_COMMANDS: &[CommandDescriptor] = &[
         ukey = UKeyRule::Singleton(1),
         direction = Inbound
     ),
+    cmd_desc!(
+        Command::Balance,
+        8,
+        "TBalanceDigestCommand",
+        base = Base,
+        priority = High,
+        direction = Both
+    ),
 ];
 
 pub(crate) const API_COMMANDS: &[CommandDescriptor] = &[
@@ -1046,7 +1054,7 @@ mod tests {
         assert_eq!(ORDER_COMMANDS.len(), 24);
         assert_eq!(UI_COMMANDS.len(), 32);
         assert_eq!(STRAT_COMMANDS.len(), 11);
-        assert_eq!(BALANCE_COMMANDS.len(), 8);
+        assert_eq!(BALANCE_COMMANDS.len(), 9);
         assert_eq!(API_COMMANDS.len(), 5);
     }
 
@@ -1080,6 +1088,13 @@ mod tests {
         assert_eq!(session_profit.max_retries, 6);
         assert_eq!(session_profit.unique_kind, UK_MARKET_SESSION_PROFIT);
         assert_eq!(session_profit.ukey, UKeyRule::Singleton(1));
+
+        let digest = find_descriptor(Command::Balance, 8).unwrap();
+        assert_eq!(digest.priority, CommandPriority::High);
+        assert_eq!(digest.max_retries, 3);
+        assert_eq!(digest.direction, CommandDirection::Both);
+        assert_eq!(digest.ukey, UKeyRule::None);
+        assert!(digest.default_encrypted);
     }
 
     #[test]

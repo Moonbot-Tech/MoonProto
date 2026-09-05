@@ -19,6 +19,9 @@ impl Client {
                 crate::events::ActiveAction::RequestStrategySchema => {
                     self.strat_schema_request();
                 }
+                crate::events::ActiveAction::BalanceDigest { digest } => {
+                    self.balance_send_digest(digest);
+                }
                 crate::events::ActiveAction::RequestOrderBookFull {
                     market_index,
                     book_kind,

@@ -1,4 +1,5 @@
 use super::*;
+mod balance_digest;
 use crate::commands::arb::build_arb_prices;
 use crate::commands::balance::build_request_balance_refresh;
 use crate::commands::engine_api::EngineMethod;
@@ -1664,7 +1665,7 @@ fn dispatcher_balance_updates_live_market_fields() {
 
 #[test]
 // parity: MoonBot MoonProtoEngine.pas:TMoonProtoEngine.OnBalanceSnapshot
-fn dispatcher_full_balance_resets_missing_live_market_but_preserves_hash_epoch() {
+fn dispatcher_full_balance_resets_missing_live_market_hash_but_preserves_epoch() {
     let mut d = EventDispatcher::new();
     seed_event_markets(&mut d, &["BTCUSDT", "ETHUSDT"]);
 
@@ -1685,7 +1686,7 @@ fn dispatcher_full_balance_resets_missing_live_market_but_preserves_hash_epoch()
     assert_eq!(after.total_profit(), 0.0);
     assert_eq!(after.leverage_x, 1);
     assert_eq!(after.bn_max_value, 333.0);
-    assert_eq!(after.balance_hash, 77);
+    assert_eq!(after.balance_hash, 0);
     assert_eq!(after.last_balance_epoch, 5);
 }
 

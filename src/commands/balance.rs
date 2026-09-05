@@ -8,8 +8,7 @@ use super::registry::{read_string, CURRENT_PROTO_CMD_VER};
 use crate::commands::market::PositionType;
 use crate::commands::trade::OrderType;
 
-const MAX_BALANCE_ITEMS: usize = u16::MAX as usize + 1;
-const BALANCE_ITEM_MIN_WIRE_SIZE: usize = 2;
+const BALANCE_ITEM_MIN_WIRE_SIZE: usize = 2 + 8 + 4;
 
 /// One market's decoded balance row.
 ///
@@ -104,6 +103,26 @@ pub(crate) fn build_request_balance_refresh(uid: u64) -> Vec<u8> {
     out
 }
 
+/// Balance CmdId=8: the client requests repair without an exchange refresh.
+pub(crate) fn build_balance_digest(uid: u64, epoch: u16, digest: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(21);
+    out.push(8);
+    out.extend_from_slice(&CURRENT_PROTO_CMD_VER.to_le_bytes());
+    out.extend_from_slice(&uid.to_le_bytes());
+    out.extend_from_slice(&epoch.to_le_bytes());
+    out.extend_from_slice(&digest.to_le_bytes());
+    out
+}
+
+/// Read the epoch and digest after the standard command header.
+pub(crate) fn parse_balance_digest(data: &[u8]) -> (u16, u64) {
+    let mut pos = 0;
+    (
+        read_u16_zero_tail(data, &mut pos),
+        read_u64_zero_tail(data, &mut pos),
+    )
+}
+
 // =============================================================================
 //  Parsers (S → C)
 // =============================================================================
@@ -154,14 +173,11 @@ pub(crate) fn parse_balance(cmd_id: u8, data: &[u8]) -> Option<BalanceUpdate> {
         return Some(result);
     }
     let count = count_raw as usize;
-    if count > MAX_BALANCE_ITEMS {
-        log::warn!(
-            target: "moonproto::balance",
-            "Balance row count {count} exceeds cap {MAX_BALANCE_ITEMS}"
-        );
-        return None;
-    }
-    let min_wire = count.checked_mul(BALANCE_ITEM_MIN_WIRE_SIZE)?;
+    // Only the final row may have zero-tailed fixed fields; earlier rows must
+    // leave the next name prefix readable. Bound allocation by actual bytes.
+    let min_wire = (count - 1)
+        .checked_mul(BALANCE_ITEM_MIN_WIRE_SIZE)?
+        .checked_add(2)?;
     if data.len().saturating_sub(pos) < min_wire {
         log::warn!(
             target: "moonproto::balance",
@@ -371,6 +387,47 @@ mod tests {
     }
 
     #[test]
+    fn balance_digest_wire_layout_and_short_reads() {
+        let payload = build_balance_digest(0x0102_0304_0506_0708, 0x1122, 0x8899_AABB_CCDD_EEFF);
+        assert_eq!(payload.len(), 21);
+        assert_eq!(payload[0], 8);
+        assert_eq!(payload[1..3], CURRENT_PROTO_CMD_VER.to_le_bytes());
+        assert_eq!(
+            payload[3..],
+            [8, 7, 6, 5, 4, 3, 2, 1, 0x22, 0x11, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88]
+        );
+        assert_eq!(
+            parse_balance_digest(&payload[11..]),
+            (0x1122, 0x8899_AABB_CCDD_EEFF)
+        );
+        assert_eq!(parse_balance_digest(&[]), (0, 0));
+        assert_eq!(parse_balance_digest(&[0x22]), (0x22, 0));
+        assert_eq!(
+            parse_balance_digest(&[0x22, 0x11, 0xff, 0xee]),
+            (0x1122, 0xeeff)
+        );
+        let mut extended = payload[11..].to_vec();
+        extended.extend_from_slice(&[1, 2]);
+        assert_eq!(
+            parse_balance_digest(&extended),
+            (0x1122, 0x8899_AABB_CCDD_EEFF)
+        );
+    }
+
+    #[test]
+    fn balance_parser_accepts_more_than_u16_rows_when_the_payload_contains_them() {
+        let count = u16::MAX as i32 + 2;
+        let mut rows = Vec::new();
+        for i in 0..count {
+            rows.extend_from_slice(&zero_flags_item(&format!("MARKET{i}"), i as u64));
+        }
+        let payload = full_balance_payload_with_count(count, &rows);
+        let parsed = parse_balance(3, &payload).unwrap();
+        assert_eq!(parsed.items.len(), count as usize);
+        assert_eq!(parsed.items.last().unwrap().balance_hash, 65536);
+    }
+
+    #[test]
     // parity: MoonBot MoonProtoBalanceStruct.pas:TBalanceItem.ReadFromStream
     fn balance_parser_rejects_truncated_next_item() {
         let item = zero_flags_item("BTCUSDT", 99);
@@ -423,7 +480,7 @@ mod tests {
 
     #[test]
     fn balance_parser_rejects_absurd_count_before_loop() {
-        let payload = full_balance_payload_with_count((MAX_BALANCE_ITEMS as i32) + 1, &[]);
+        let payload = full_balance_payload_with_count(i32::MAX, &[]);
 
         assert!(parse_balance(3, &payload).is_none());
     }

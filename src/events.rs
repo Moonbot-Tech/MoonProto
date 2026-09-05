@@ -824,7 +824,7 @@ impl EventDispatcher {
         now_ms: i64,
         out: &mut Vec<Event>,
     ) {
-        self.dispatch_into_with_history(cmd, payload, now_ms, None, None, out);
+        self.dispatch_into_with_history(cmd, payload, now_ms, None, out, &mut Vec::new());
     }
 
     fn dispatch_into_with_history(
@@ -832,10 +832,11 @@ impl EventDispatcher {
         cmd: Command,
         payload: &[u8],
         now_ms: i64,
-        history_now_time_days: Option<f64>,
         active_ctx: Option<&ActiveDispatchContext>,
         out: &mut Vec<Event>,
+        actions: &mut Vec<ActiveAction>,
     ) {
+        let history_now_time_days = active_ctx.map(|ctx| ctx.now_time_days);
         match cmd {
             Command::Order => self.client_new_data_order(payload, now_ms, out),
             Command::OrderBook => self.client_new_data_order_book(payload, now_ms, out),
@@ -848,7 +849,9 @@ impl EventDispatcher {
                 history_now_time_days,
                 out,
             ),
-            Command::Balance => self.client_new_data_balance(payload, history_now_time_days, out),
+            Command::Balance => {
+                self.client_new_data_balance(payload, history_now_time_days, out, actions)
+            }
             Command::Strat => self.client_new_data_strat(payload, out),
             Command::UI => self.client_new_data_ui(payload, out),
             Command::API => {

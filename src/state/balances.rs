@@ -6,6 +6,13 @@
 //! object instead of stitching together a separate balance table.
 
 use crate::commands::balance::BalanceUpdate;
+use crate::state::epoch::epoch_is_ok;
+
+// parity: HelpClasses.HashMix. Mix high double bits back into the low half.
+pub(crate) fn balance_hash_mix(hash: u64, value: u64) -> u64 {
+    let hash = (hash ^ value).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    hash ^ (hash >> 32)
+}
 
 /// Global account balance totals in BTC-equivalent units.
 #[derive(Debug, Clone, Default)]
@@ -23,6 +30,19 @@ pub struct GlobalBalance {
     pub total_pnl: f64,
 }
 
+impl GlobalBalance {
+    pub(crate) fn balance_hash(&self) -> u64 {
+        [
+            self.btc_balance_total,
+            self.btc_balance_locked,
+            self.btc_balance_full,
+            self.special_coin_balance,
+        ]
+        .into_iter()
+        .fold(0, |hash, value| balance_hash_mix(hash, value.to_bits()))
+    }
+}
+
 /// Account-level balance state published through active-session snapshots.
 ///
 /// Per-market rows are read from the live markets
@@ -33,8 +53,8 @@ pub struct GlobalBalance {
 pub struct BalancesState {
     /// Account totals (BTC, special coin, total PnL).
     pub global: GlobalBalance,
-    /// Last applied balance-packet epoch. Diagnostic; per-market epoch gating
-    /// lives on the retained `Market` objects.
+    /// Latest balance/digest epoch, used to ignore stale digests. Full snapshots
+    /// reset it unconditionally; individual rows retain their own epoch gates.
     pub(crate) last_epoch: u16,
 }
 
@@ -107,7 +127,9 @@ impl BalancesState {
             self.global.special_coin_balance = upd.special_coin_balance;
         }
         self.global.total_pnl = total_pnl;
-        self.last_epoch = upd.epoch;
+        if upd.cmd_id == 3 || epoch_is_ok(self.last_epoch, upd.epoch) {
+            self.last_epoch = upd.epoch;
+        }
     }
 
     pub fn global(&self) -> &GlobalBalance {

@@ -40,11 +40,25 @@ Incoming balance rows are applied only for markets already known to
 
 Full snapshots are authoritative for the current known market universe. If a
 known market is missing from a full snapshot, the library resets the live market
-balance/position fields to zero and `leverage_x = 1`, while preserving
-protocol bookkeeping such as stale-check hashes/epochs.
+balance/position fields to zero and `leverage_x = 1`. The missing row's stored
+balance hash is also cleared; its per-market epoch is preserved.
 
 Incremental updates merge only the changed rows and optionally update global
 totals. Stale incremental rows are skipped per market.
+
+The core sends a compact balance digest about every ten seconds instead of
+repeating unchanged full snapshots. The library compares it with retained state
+and automatically requests a full snapshot on mismatch, without making the core
+query the exchange. Applications need no polling or repair logic. Recovery
+depends on delivery of the digest and the full snapshot, not a fixed ten-second
+deadline. Matching digests produce no application event.
+
+For the chart's exchange-reported cumulative PnL, use
+`market.balance_position().total_profit()`, including when there is no open
+position. It sums the three retained profit fields. Binance supplies its
+both/long/short totals; Bybit, Gate, Bitget, OKX, and HyperLiquid put their
+aggregate value in `total_profit_b`. This is distinct from the resettable
+session profit described below.
 
 ## Reading Current State
 
@@ -142,6 +156,8 @@ for event in client.drain_events() {
 ```
 
 The next snapshot arrives through the normal `MoonClient` event/snapshot path.
+Unlike automatic digest repair, this explicit refresh also asks the core to
+refresh its balances from the exchange.
 
 ## Events
 

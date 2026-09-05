@@ -66,6 +66,9 @@ pub(crate) enum ActiveAction {
     RequestMarketsList,
     RequestUpdateMarketsList,
     RequestStrategySchema,
+    BalanceDigest {
+        digest: u64,
+    },
     RequestOrderBookFull {
         market_index: u16,
         book_kind: u8,
@@ -249,14 +252,7 @@ impl EventDispatcher {
         }
 
         let start_len = out.len();
-        self.dispatch_into_with_history(
-            cmd,
-            payload,
-            now_ms,
-            Some(ctx.now_time_days),
-            Some(ctx),
-            out,
-        );
+        self.dispatch_into_with_history(cmd, payload, now_ms, Some(ctx), out, actions);
         self.sync_market_history_storage();
         for repair in self.order_repairs.drain(..) {
             actions.push(ActiveAction::RequestOrderStatus {

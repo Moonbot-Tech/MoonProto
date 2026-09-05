@@ -14,6 +14,17 @@ use crate::state::epoch::epoch_is_ok;
 use super::{Market, MarketsState};
 
 impl MarketsState {
+    // parity: MoonProtoBalanceStruct.CalcBalanceDigest over SrvMarkets.
+    pub(crate) fn balance_digest(&self, global_hash: u64) -> u64 {
+        self.market_indexes.iter().fold(global_hash, |hash, name| {
+            let row_hash = self
+                .handles_by_name
+                .get(name)
+                .map_or(0, |handle| handle.with(|m| m.balance_hash));
+            crate::state::balances::balance_hash_mix(hash, row_hash)
+        })
+    }
+
     // parity: MoonBot MoonProtoEngine.pas:ApplyBalanceItem (cmd dispatch)
     pub(crate) fn apply_balance_update(&mut self, upd: &BalanceUpdate) -> Option<BalanceEvent> {
         match upd.cmd_id {
@@ -210,6 +221,7 @@ fn reset_missing_balance(market: &mut Market) {
     market.total_profit_s = 0.0;
     market.leverage_x = 1;
     market.position_type = PositionType::Cross;
+    market.balance_hash = 0;
 }
 
 fn ignored_balance_event(cmd_id: u8, epoch: u16) -> Option<BalanceEvent> {

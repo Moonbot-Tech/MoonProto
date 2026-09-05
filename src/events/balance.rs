@@ -1,13 +1,14 @@
-﻿//! Active `MPC_Balance` dispatch.
+//! Active `MPC_Balance` dispatch.
 //!
 //! Mirrors Delphi balance/arb receive routing: parse subcommand, apply balances
 //! against known markets, and expose compact arbitrage payload only for known
 //! market indexes.
 
-use super::{ArbEvent, Event, EventDispatcher};
+use super::{ActiveAction, ArbEvent, Event, EventDispatcher};
 use crate::commands::arb::{parse_arb_payload_compact, parse_arb_prices, ArbPayload};
-use crate::commands::balance::{parse_balance, parse_market_session_profits};
+use crate::commands::balance::{parse_balance, parse_balance_digest, parse_market_session_profits};
 use crate::protocol::Command;
+use crate::state::epoch::epoch_is_ok;
 
 impl EventDispatcher {
     pub(super) fn client_new_data_balance(
@@ -15,6 +16,7 @@ impl EventDispatcher {
         payload: &[u8],
         now_time_days: Option<f64>,
         out: &mut Vec<Event>,
+        actions: &mut Vec<ActiveAction>,
     ) {
         if payload.len() < 11 {
             Self::push_parse_failed(out, Command::Balance, payload);
@@ -96,6 +98,21 @@ impl EventDispatcher {
                 }
                 None => Self::push_parse_failed(out, Command::Balance, payload),
             },
+            8 => {
+                let (epoch, digest) = parse_balance_digest(body);
+                if !epoch_is_ok(self.balances.last_epoch, epoch) {
+                    return;
+                }
+                self.balances.last_epoch = epoch;
+                let mine = self
+                    .markets
+                    .balance_digest(self.balances.global.balance_hash());
+                if mine != digest {
+                    log::info!(target: "moonproto::balance",
+                        "Balance digest mismatch: kernel {digest:016x}, ours {mine:016x}, requesting full snapshot");
+                    actions.push(ActiveAction::BalanceDigest { digest: mine });
+                }
+            }
             _ => {}
         }
     }
