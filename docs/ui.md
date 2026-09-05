@@ -4,7 +4,7 @@ The UI channel carries bot settings and UI-originated control commands:
 settings snapshots, strategy start/stop, market-maker subscription, version
 update control, leverage management, trigger management, DEX/spot switching, and
 arb activation notifications. It also carries retained runtime, license, and
-profit-counter state.
+profit-counter state and [confirmed core diagnostics](problems.md).
 
 Applications normally receive UI updates through `Event::Settings` and send
 user intents through `MoonClient` settings/update/switch helpers.
@@ -220,6 +220,10 @@ has an active take/sell order, and there is no protocol acknowledgement. It is
 an administrative one-shot command; retry only after retained order state shows
 that the active take/sell is gone. This is different from
 `client.disconnect()`, which stops only the local Rust client.
+For deployment, verify that the process actually exited before replacing its
+executable; a disconnected client does not prove shutdown. The
+[`shutdown_core` example](../examples/shutdown_core.rs) sends this request using
+`MOONPROTO_KEY` and a `HOST:PORT` argument; it does not confirm process exit.
 
 ### License And MoonCredits State
 

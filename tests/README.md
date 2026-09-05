@@ -51,8 +51,27 @@ FireTest:
 
 ```powershell
 $env:MOONPROTO_FIRETEST_PROFILE = "quick"
-cargo test --release --features diagnostics --test fire_test -- --ignored --nocapture
+cargo test --release --features diagnostics --test fire_test fire_test_active_library_health -- --exact --ignored --nocapture
 ```
+
+Set `MOONPROTO_FIRETEST_PROFILE = "full"` for the full health scenario. Keep the
+exact name filter: without it, Cargo also runs the separate ignored tests below;
+the quick-profile setting does not make those tests read-only.
+
+Focused strategy checks on an updated test core (`allow_mutation = true`):
+
+```powershell
+cargo test --release --features diagnostics --test fire_test fire_test_strategy_folder_sync -- --exact --ignored --nocapture
+cargo test --release --features diagnostics --test fire_test fire_test_strategy_order_sync -- --exact --ignored --nocapture
+```
+
+These create their own strategy/folder fixtures, check two-way delivery plus cold
+and reconnected clients, and remove their fixtures. Folder sync covers empty and
+nested folders, combined rename/path edits, and deletion. Order sync covers
+reorders with and without parameter edits.
+
+`fire_test_core_problems` checks diagnostic-list delivery and test notifications;
+see [its opt-in clear behavior](../docs/problems.md#firetest) before running it.
 
 Live retained-memory warmup check (Windows only):
 

@@ -57,6 +57,8 @@ See [orders](orders.md), [trade actions](trade_actions.md), and
 | Feature | Meaning | API |
 |---|---|---|
 | Strategy list and editor | Read, create, edit, delete, and synchronize full strategy objects using the live server schema. | `snapshot.strategy_snapshots()`, `MoonShotStrategy` / `StrategyEditor`, and `client.strategies().sync_local_strategies(...)`. |
+| Strategy order | The complete editor list defines the global linear order; parameter-only edits still send only changed rows. | `sync_local_strategies(...)`; read confirmed `snapshot.strategy_snapshots()` after `SnapshotFull`. |
+| Empty folders and folder rename | Synchronize a complete folder tree, including empty parents; rename a populated subtree together with its strategy paths. | `snapshot.strats().folder_paths()`, `sync_local_folders(...)`, `sync_local_strategies_with_folders(...)`; see [folders](strats.md#folders-including-empty-folders). |
 | Checked strategies | Change which strategies are selected without guessing the core's state. | `set_checked(...)` and `send_checked_delta()`; server confirmation updates retained state. |
 | Start/stop strategies | Start checked strategies or stop all, with the actual core state retained separately from checkbox state. | `client.strategies().start()` / `stop()`; read `snapshot.strats().strategies_running()`. |
 | AutoDetect / passive mode | Enable or disable core detection. This does not replace the separate strategy start/stop state. | `client.settings().set_auto_detect_active(...)`; read `runtime_state.auto_detect_active`. |
@@ -81,6 +83,7 @@ See [strategies](strats.md), [UI and settings](ui.md), and [events](events.md).
 | Feature | Meaning | API |
 |---|---|---|
 | Balances and positions | Account totals plus per-market live position state. | `client.balances().refresh()`; read `snapshot.balances()` and `market.balance_position()`. |
+| Exchange PnL | Exchange-reported cumulative profit for a market, also when its position is closed. Not the resettable Session counter. | `market.balance_position().total_profit()`; delivery repair is automatic, no polling needed. |
 | Asset transfer | List transferable Spot/Futures/Quarterly assets, move assets between wallets, or convert dust to BNB where supported. | `client.balances().refresh_transfer_assets()`, `transfer_asset(...)`, `convert_dust_bnb()`. |
 | Hedge and margin mode | Read hedge mode; change hedge mode or one market's cross/isolated position type through the core. | `client.account().refresh_hedge_mode()`, `set_hedge_mode(...)`, `change_position_type_for(...)`. |
 | API-key expiration | Current exchange API-key expiration time, when the connected engine reports it. | `client.account().refresh_api_expiration_time()`; read `snapshot.account().api_expiration()`. |

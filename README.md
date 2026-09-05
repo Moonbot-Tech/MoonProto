@@ -166,6 +166,7 @@ cargo run --release --example history_bars   -- "<key>" "HOST:PORT" BTCUSDT 1h
 | [`order_snapshot`](examples/order_snapshot.rs) | Fresh order snapshot through `MoonClient`. |
 | [`cancel_open_order`](examples/cancel_open_order.rs) | Tracked cancel intent through `client.orders()`. |
 | [`multi_client_test`](examples/multi_client_test.rs) | Two independent `MoonClient` runtimes. |
+| [`shutdown_core`](examples/shutdown_core.rs) | Guarded core shutdown request; takes `MOONPROTO_KEY` from the environment. Verify process exit separately. |
 
 ## Documentation
 
@@ -221,13 +222,16 @@ cargo test --test integration_smoke -- --ignored --nocapture
 
 ```powershell
 $env:MOONPROTO_FIRETEST_PROFILE = "quick"
-cargo test --release --features diagnostics --test fire_test -- --ignored --nocapture
+cargo test --release --features diagnostics --test fire_test fire_test_active_library_health -- --exact --ignored --nocapture
 ```
 
 - **Quick profile** (< 30 s, one client) — connect / AuthDone / InitDone, base/auth checks, markets & server-index map, strategy schema, core CPU/memory/core-count telemetry, startup news/tags, trades & orderbook subscriptions, retained trades/price/history, MarkPrice + funding/balance/order UI state, `ParseFailed == 0`, and PMTU/CPU gates (`>5 ms` in protocol/apply sections is a hard red flag).
 - **Full profile** (destructive/stress, `allow_mutation = true`) — two live clients, `err_emu` packet loss (10% → 50%), chunked candles under loss, settings/strategy broadcast and restore, report-schema/database migration plus offline catch-up, an emulator order lifecycle, and a real SOLUSDT safety gate: place a $1000 long limit 5% below market, cancel it through the tracked Active Lib order path, and verify that balance changes arrive without a manual balance request. It also exercises simple operations at 50% loss, forced reconnect and post-reconnect delivery, plus sliced/retry/parse/PMTU/CPU diagnostics; `>5 ms` in protocol/apply sections is a hard red flag.
 
 Set `MOONPROTO_FIRETEST_ERR_EMU=0` to disable the client-side packet-loss emulation (default 10%). FireTest writes strategy diagnostics under `target/` (`firetest_strategy_info_<profile>.txt`, `firetest_strategy_raw/`). See [`tests/README.md`](tests/README.md) for the full test-layer map and [`tests/fire_test.rs`](tests/fire_test.rs) for scenario-specific overrides.
+
+Keep the exact test-name filter above: running every ignored test also runs
+the separate mutation/stress scenarios, regardless of the quick-profile setting.
 
 ## Repository Layout
 

@@ -298,7 +298,7 @@ rows, and `MoonTime` helpers.
 
 Before Init opens the general domain gate, ordinary mutable trading packets are
 dropped rather than delivered to UI code. Startup-safe strategy schema/request
-and runtime state, core runtime/license state, and news/history payloads are
+and runtime state, core runtime/license/diagnostic state, and news/history payloads are
 accepted earlier; a pre-init strategy snapshot request is answered only after
 strategy state is ready. After Init, trades packets additionally require an
 explicit trades subscription intent. This keeps unexpected stream data from

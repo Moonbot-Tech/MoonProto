@@ -69,11 +69,11 @@ for event in client.drain_events() {
                 strategy_deleted,
                 folder_deleted,
             } => {
-                if *strategy_deleted {
-                    remove_strategy(*strategy_id);
+                if strategy_deleted {
+                    remove_strategy(strategy_id);
                 }
-                if *folder_deleted {
-                    remove_empty_folder(folder_path);
+                if folder_deleted {
+                    remove_empty_folder(&folder_path);
                 }
             }
             StratEvent::CheckedSynced { changed, is_delta } => {
@@ -149,11 +149,45 @@ folder, omit its path and all descendants. Parents are created automatically;
 a folder containing a retained strategy cannot be removed by omission. The
 library assigns the folder timestamp. Confirmation is a `SnapshotFull` with
 the updated `folder_paths()`, not a per-folder `Deleted` event.
+`Ok(())` means the intent was queued, not accepted by the core. Keep the complete
+folder list in the editor while awaiting confirmation: building the next edit
+from an older confirmed snapshot can undo your own pending folder changes.
+`EditConfirmed` and the other `Edit*` events track strategy rows, not folder-only
+edits or reorder-only actions.
 
 For a rename or move containing strategies, update their paths and edit dates,
 replace the old folder paths in the complete tree, then submit both together:
 
 ```rust
+use moonproto::StrategyEditor;
+
+let state = client.snapshot().expect("state is ready");
+let schema = state.strats().strategy_schema().expect("schema is ready");
+// Use the existing spelling from folder_paths(). This renames the whole subtree.
+let old = "Research";
+let new = "Archive";
+let prefix = format!("{old}/");
+let rename = |path: &str| {
+    if path == old {
+        new.to_owned()
+    } else if let Some(rest) = path.strip_prefix(&prefix) {
+        format!("{new}/{rest}")
+    } else {
+        path.to_owned()
+    }
+};
+
+let mut edited_strategies = state.strategy_snapshot_vec();
+for row in &mut edited_strategies {
+    let path = rename(&row.path);
+    if path != row.path.as_ref() {
+        let mut editor = StrategyEditor::from_snapshot(schema, row)?;
+        editor.set_path(path);
+        editor.touch_now();
+        *row = editor.into_snapshot();
+    }
+}
+let paths = state.strats().folder_paths().map(rename).collect();
 client.strategies().sync_local_strategies_with_folders(edited_strategies, paths)?;
 ```
 
@@ -170,6 +204,7 @@ reconnect preserve the complete folder tree, including an empty tree.
 Paths use `/`, are case-insensitive, and must fit 255 UTF-8 bytes. New folder
 intents reject empty path segments, surrounding whitespace, quotes, line breaks,
 NUL, or a tree exceeding the snapshot dictionary's capacity.
+A case-only rename is not a distinct folder-tree change.
 
 Known limits: concurrent complete folder edits use the newer timestamp; a lost
 empty folder can be recreated. Equal timestamps are not separately arbitrated.
@@ -604,21 +639,6 @@ client.strategies().set_checked(strategy_id, true)?;
 client.strategies().send_checked_delta()?;
 ```
 
-For normal active-library flow, pass the local list before init and let the
-runtime answer server snapshot requests:
-
-```rust
-use moonproto::{InitConfig, InitialStrategies};
-
-let init = InitConfig {
-    initial_strategies: Some(InitialStrategies::new(
-        load_local_strategy_epoch(),
-        load_current_strategies(),
-    )),
-    ..Default::default()
-};
-```
-
 Checked-state sends should also go through the active-library state. This
 matches the MoonBot checked-delta model: local UI changes update `checked`,
 leave `prev_checked` untouched, and the outgoing delta contains only items where
@@ -641,25 +661,3 @@ snapshot helpers, but those helpers are hidden diagnostics. Regular
 applications should prefer `MoonClient` helpers so the library-owned strategy
 state stays authoritative. Checked-state echo messages are inbound only; client
 code must not send them.
-
-When the terminal's local strategy list changes after startup, synchronize the
-current list through the same active-library strategy handle:
-
-```rust
-client
-    .strategies()
-    .sync_local_strategies(load_current_strategies())?;
-```
-
-This is still an Active Lib intent, not a raw protocol call: "local strategies
-changed; synchronize them". The vector defines the global order, not an order
-within each folder. The runtime keeps the list for automatic snapshot replies
-and assigns a fresh UTC date when its sequence changes. If the call is made
-while Init is still in progress, the command is held in the runtime FIFO and
-serialized only after the live server schema is available.
-
-Active Lib owns schema-order serialization, field visibility/type checks,
-default elision, and automatic replies to later core snapshot requests.
-Application code edits typed strategy objects and calls
-`client.strategies().sync_local_strategies(...)`; it does not reproduce the
-snapshot serializer or intercept the request path.

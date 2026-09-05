@@ -38,6 +38,23 @@ for parsing. `first_seen` and `confirmed` are UTC `MoonTime` values.
 - `Event::Settings(SettingsEvent::ProblemConfirmed { problem })`: a newly confirmed
   fact was inserted or updated by kind. Use this event for a notification.
 
+```rust
+use moonproto::{Event, state::SettingsEvent};
+
+for event in client.drain_events() {
+    match event {
+        Event::Settings(SettingsEvent::ProblemConfirmed { problem }) => {
+            println!("New core problem: {}: {}", problem.title, problem.message);
+        }
+        Event::Settings(SettingsEvent::ProblemsUpdated) => {
+            // Rebuild the list from client.snapshot().settings().problems.
+            // A full list is not a new notification for each existing row.
+        }
+        _ => {}
+    }
+}
+```
+
 State is applied before the event is published. Repeated confirmations of an
 existing fact are deliberately **not broadcast**; text, time, and count can be
 older than the core's current row until the next full list.
