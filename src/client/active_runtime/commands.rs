@@ -110,6 +110,7 @@ pub(super) enum UiRuntimeCommand {
     ChartTextState(crate::commands::ui::ChartTextStateCommand),
     OrdersHistoryRequest(String),
     RestartNow,
+    Shutdown,
     KernelLicenseStateRequest,
     AutoDetect(bool),
 }
@@ -269,6 +270,7 @@ impl UiRuntimeCommand {
             Self::ChartTextState(_) => (33, 1),
             Self::OrdersHistoryRequest(_) => (34, 1),
             Self::RestartNow => (35, 0),
+            Self::Shutdown => (42, 0),
             Self::KernelLicenseStateRequest => (36, 0),
             Self::AutoDetect(_) => (37, 0),
             Self::SharedConfigRequest => (38, 0),

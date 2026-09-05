@@ -571,6 +571,17 @@ fn restart_now_is_empty_ui_command() {
 }
 
 #[test]
+// parity: MoonProtoUIStruct.pas:TShutdownCommand
+fn shutdown_is_empty_ui_command() {
+    let raw = build_shutdown(31);
+    assert_eq!(raw, header_bytes(CMD_SHUTDOWN, 31));
+    match UICommand::parse(&raw).unwrap() {
+        UICommand::Shutdown { uid } => assert_eq!(uid, 31),
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
 // parity: MoonProtoUIStruct.pas:TKernelLicenseStateCommand
 fn kernel_license_state_roundtrip_and_zero_tail() {
     let mut raw = header_bytes(CMD_KERNEL_LICENSE_STATE, 22);

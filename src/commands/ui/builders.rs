@@ -384,3 +384,11 @@ pub(crate) fn build_shared_config_request(uid: u64) -> Vec<u8> {
     write_header(&mut out, CMD_SHARED_CONFIG_REQUEST, uid);
     out
 }
+
+/// CmdId=31 `TShutdownCommand` (empty body).
+#[doc(hidden)]
+pub(crate) fn build_shutdown(uid: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(11);
+    write_header(&mut out, CMD_SHUTDOWN, uid);
+    out
+}

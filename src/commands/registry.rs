@@ -716,6 +716,14 @@ pub(crate) const UI_COMMANDS: &[CommandDescriptor] = &[
         priority = High,
         direction = Inbound
     ),
+    cmd_desc!(
+        Command::UI,
+        31,
+        "TShutdownCommand",
+        base = Base,
+        priority = High,
+        direction = Outbound
+    ),
 ];
 
 pub(crate) const STRAT_COMMANDS: &[CommandDescriptor] = &[
@@ -1035,7 +1043,7 @@ mod tests {
     #[test]
     fn descriptor_map_covers_known_typed_domains() {
         assert_eq!(ORDER_COMMANDS.len(), 24);
-        assert_eq!(UI_COMMANDS.len(), 31);
+        assert_eq!(UI_COMMANDS.len(), 32);
         assert_eq!(STRAT_COMMANDS.len(), 11);
         assert_eq!(BALANCE_COMMANDS.len(), 8);
         assert_eq!(API_COMMANDS.len(), 5);
@@ -1216,6 +1224,14 @@ mod tests {
         assert_eq!(state.name, "THLRequestLimitStateCommand");
         assert_eq!(state.priority, CommandPriority::High);
         assert_eq!(state.direction, CommandDirection::Inbound);
+    }
+
+    #[test]
+    fn descriptor_map_includes_shutdown() {
+        let shutdown = find_descriptor(Command::UI, 31).unwrap();
+        assert_eq!(shutdown.name, "TShutdownCommand");
+        assert_eq!(shutdown.priority, CommandPriority::High);
+        assert_eq!(shutdown.direction, CommandDirection::Outbound);
     }
 
     #[test]

@@ -218,6 +218,23 @@ fn server_update_ui_commands_mark_delphi_base_check_flag() {
 }
 
 #[test]
+fn core_shutdown_queues_one_encrypted_high_ui_command() {
+    let mut client = Client::new(dummy_cfg());
+    client.set_domain_ready(true);
+
+    client.ui_shutdown();
+
+    let (sliced, high, low) = client.take_send_queues_for_test();
+    assert!(sliced.is_empty());
+    assert!(low.is_empty());
+    assert_eq!(high.len(), 1);
+    assert_eq!(high[0].cmd, Command::UI.to_byte());
+    assert_eq!(high[0].data.len(), 11);
+    assert_eq!(high[0].data[0], 31);
+    assert!(high[0].encrypted);
+}
+
+#[test]
 fn base_check_without_server_update_uses_one_sendandwait_attempt() {
     let mut client = Client::new(dummy_cfg());
     let mut dispatcher = EventDispatcher::new();

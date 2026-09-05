@@ -93,7 +93,7 @@ See [strategies](strats.md), [UI and settings](ui.md), and [events](events.md).
 | Core health | Core process CPU/memory, host CPU/free memory, logical CPU count, client/core RTT, and core/exchange order API request latency. | `Event::KernelHealth` and `snapshot.kernel_health()`. |
 | News and tags | Retained/live news JSON with same-ID translation updates plus the latest complete tags catalog. | `Event::News` and `snapshot.news()`. |
 | Server logs | Authenticated core log lines for terminal logs. | `Event::ServerLog`. |
-| Remote update and mode switch | Ask the core to run its release/named update flow or switch DEX/Spot selection. | Use `client.settings()` release/version update and DEX/Spot switch methods. |
+| Remote administration | Ask the core to run its release/named update flow, switch DEX/Spot selection, or shut down when no active take/sell order exists. | Use the typed methods on `client.settings()`; core shutdown is a one-shot request without an acknowledgement. |
 
 See [balances](balances.md), [Engine API](engine_api.md), [news](news.md), and
 [UI and settings](ui.md).

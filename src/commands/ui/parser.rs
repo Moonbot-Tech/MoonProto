@@ -372,6 +372,8 @@ impl UICommand {
                 ))
             }
 
+            CMD_SHUTDOWN => Some(UICommand::Shutdown { uid }),
+
             _ => Some(UICommand::Unknown { cmd_id, uid }),
         }
     }

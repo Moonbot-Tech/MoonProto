@@ -214,6 +214,13 @@ start the market runtime if needed, leave passive mode if needed, and start
 checked strategies. The call returns after the intent is queued; the observable
 result is a later `RuntimeStateUpdated` event and updated retained state.
 
+`client.settings().request_core_shutdown()?` asks the connected core process to
+shut down through its normal close path. The request is ignored while the core
+has an active take/sell order, and there is no protocol acknowledgement. It is
+an administrative one-shot command; retry only after retained order state shows
+that the active take/sell is gone. This is different from
+`client.disconnect()`, which stops only the local Rust client.
+
 ### License And MoonCredits State
 
 The server sends license/module/MoonCredits state after connect and when a

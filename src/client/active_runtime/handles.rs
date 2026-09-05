@@ -977,6 +977,17 @@ impl MoonSettings<'_> {
         self.client.restart_now()
     }
 
+    /// Request a graceful shutdown of the connected MoonBot core.
+    ///
+    /// This is a one-shot request. The core ignores it while an active
+    /// take/sell order exists; otherwise it follows its normal shutdown path.
+    /// No protocol acknowledgement is sent. Unlike
+    /// [`MoonClient::disconnect`](crate::MoonClient::disconnect), this targets
+    /// the core process rather than only the local Rust client.
+    pub fn request_core_shutdown(&self) -> Result<(), MoonClientError> {
+        self.client.request_core_shutdown()
+    }
+
     /// Request the latest license/module/MoonCredits state from the core.
     ///
     /// The server also sends this state after connect. Use this method for a

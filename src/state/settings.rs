@@ -256,7 +256,8 @@ impl SettingsState {
             | UICommand::KernelLicenseStateRequest { .. }
             | UICommand::AutoDetect(_)
             | UICommand::NewsRelay(_)
-            | UICommand::NewsHistory(_) => None,
+            | UICommand::NewsHistory(_)
+            | UICommand::Shutdown { .. } => None,
 
             UICommand::UpdateVersion(u) => Some(SettingsEvent::VersionUpdate {
                 #[cfg(any(test, feature = "diagnostics"))]

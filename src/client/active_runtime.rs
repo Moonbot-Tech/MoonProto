@@ -894,6 +894,11 @@ impl MoonClient {
         self.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::RestartNow))
     }
 
+    /// Request a graceful shutdown of the connected MoonBot core.
+    pub(crate) fn request_core_shutdown(&self) -> Result<(), MoonClientError> {
+        self.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::Shutdown))
+    }
+
     /// Request the latest license/module/MoonCredits state.
     pub(crate) fn request_kernel_license_state(&self) -> Result<(), MoonClientError> {
         self.send_no_reply(RuntimeCommand::Ui(
