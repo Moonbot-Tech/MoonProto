@@ -1,0 +1,24 @@
+name: Feature request
+description: Describe a missing capability or an improvement.
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Use case and context
+      description: What are you trying to do? Describe the workflow and relevant setup.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Current behavior
+      description: What happens today, or what is currently missing?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Desired behavior
+      description: What should happen in that workflow? Implementation details are optional.
+    validations:
+      required: true
