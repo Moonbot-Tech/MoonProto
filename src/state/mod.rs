@@ -29,6 +29,7 @@ mod memory_warmup;
 pub(crate) mod news;
 pub(crate) mod order_books;
 pub(crate) mod orders;
+mod problems;
 pub(crate) mod report;
 pub(crate) mod seq_ring;
 pub(crate) mod settings;
@@ -80,6 +81,7 @@ pub use orders::{
     PositionProtectionSide, SellReason,
 };
 pub(crate) use orders::{OrderRepair, OrderState};
+pub use problems::{KernelProblem, ProblemCategory, ProblemsState};
 pub use report::{
     ReportAliveMapComplete, ReportAliveMapOutcome, ReportAliveMapTicket, ReportEvent,
     ReportFieldKind, ReportFieldValue, ReportHistoryDepth, ReportRecIdRange, ReportRow,

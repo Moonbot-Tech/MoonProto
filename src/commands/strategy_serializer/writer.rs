@@ -56,6 +56,10 @@ impl<'a> StrategyBatchBuilder<'a> {
         finalize_strategy_batch(Vec::new(), Vec::new(), Vec::new(), 0)
     }
 
+    pub(crate) fn folder_payload(paths: Vec<String>) -> Vec<u8> {
+        finalize_strategy_batch(Vec::new(), paths, Vec::new(), 0)
+    }
+
     fn name_index(&mut self, name: &str) -> u16 {
         if let Some(&i) = self.name_idx.get(name) {
             return i;
@@ -66,7 +70,7 @@ impl<'a> StrategyBatchBuilder<'a> {
         i
     }
 
-    fn path_index(&mut self, path: &str) -> u16 {
+    pub(crate) fn path_index(&mut self, path: &str) -> u16 {
         if let Some(&i) = self.path_idx.get(path) {
             return i;
         }

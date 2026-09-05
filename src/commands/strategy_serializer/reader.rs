@@ -50,7 +50,7 @@ pub(crate) fn parse_strategy_batch_for_each_with_schema_field_types_skip_old<F, 
     schema_field_types: Option<&HashMap<String, u8>>,
     mut should_skip_old: S,
     mut on_strategy: F,
-) -> Option<usize>
+) -> Option<(usize, Vec<Arc<str>>)>
 where
     F: FnMut(StrategySnapshot),
     S: FnMut(u64, i32, u64) -> bool,
@@ -131,7 +131,7 @@ fn parse_strategy_batch_plain_for_each_with_schema_field_types<F>(
     schema_field_types: Option<&HashMap<String, u8>>,
     should_skip_old: &mut impl FnMut(u64, i32, u64) -> bool,
     on_strategy: &mut F,
-) -> Option<usize>
+) -> Option<(usize, Vec<Arc<str>>)>
 where
     F: FnMut(StrategySnapshot),
 {
@@ -158,7 +158,7 @@ where
         )?;
         on_strategy(strategy);
     }
-    Some(strat_count)
+    Some((strat_count, paths))
 }
 
 fn read_dict(data: &[u8], pos: &mut usize) -> Option<Vec<String>> {

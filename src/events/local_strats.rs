@@ -1,7 +1,7 @@
 //! Local strategy list API and `TStratSnapshotRequest` reply provider.
 
 use super::{EventDispatcher, StrategySnapshotReply};
-use crate::commands::strategy_serializer::StrategySnapshot;
+use crate::commands::strategy_serializer::{StrategyBatchBuilder, StrategySnapshot};
 use std::time::Instant;
 
 impl EventDispatcher {
@@ -154,11 +154,36 @@ impl EventDispatcher {
 
     pub(crate) fn local_strategy_snapshot_reply(&mut self) -> Option<StrategySnapshotReply> {
         let cache = self.strats.snapshot_payload_cache()?;
-        Some(StrategySnapshotReply::from_payload(
+        let mut reply = StrategySnapshotReply::from_payload(
             self.local_strategy_epoch,
             cache.client_max_last_date,
             true,
             cache.data.clone(),
+        );
+        reply.folders_last_modified = self.strats.local_folders_last_modified();
+        Some(reply)
+    }
+
+    /// Delphi `TStratSnapshot.CreateFromList`: serialize only the submitted edits.
+    pub(crate) fn local_strategy_diff_reply(
+        &self,
+        strategy_ids: &[u64],
+    ) -> Option<StrategySnapshotReply> {
+        if strategy_ids.is_empty() {
+            return None;
+        }
+        let mut builder = StrategyBatchBuilder::new(self.strats.strategy_schema()?);
+        let mut client_max_last_date = 0;
+        for &id in strategy_ids {
+            let strategy = self.strats.strategy_edit(id)?.desired();
+            client_max_last_date = client_max_last_date.max(strategy.last_date);
+            builder.write_strategy(strategy);
+        }
+        Some(StrategySnapshotReply::from_payload(
+            0,
+            client_max_last_date,
+            false,
+            builder.finalize(),
         ))
     }
 }

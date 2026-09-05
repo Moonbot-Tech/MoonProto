@@ -108,6 +108,10 @@ order, including any parameter edits made in the same action. No separate
 order command or application-assigned timestamp is needed. Keep the core's
 folder grouping: strategies in one folder form a contiguous group.
 
+When order is unchanged, only changed strategies are serialized and sent as a
+Partial snapshot. An unchanged, already-confirmed list sends nothing. Initial
+sync and automatic Full replies still carry the complete list.
+
 The core and library accept a newer Full order independently of per-strategy
 edit dates. An older Full cannot roll back order, but can still supply newer
 parameters. A Full never implicitly deletes missing strategies; use `delete`.
@@ -117,9 +121,62 @@ edit from the still-unconfirmed core snapshot.
 
 Known limits: after all delivery retries fail, the next reorder, Full sync or
 reconnect repairs order; there is no periodic order repair. Concurrent reorders
-with equal dates are not separately arbitrated. Empty folders and recovery of
-lost delete commands are not part of order synchronization. Folder-path edits
-still require the strategy's normal edit-date update.
+with equal dates are not separately arbitrated. Recovery of lost strategy-delete
+commands is not part of order synchronization. Folder-path edits still require
+the strategy's normal edit-date update.
+
+## Folders, Including Empty Folders
+
+Read `state.strats().folder_paths()` after `StratEvent::SnapshotFull`. The list
+contains every confirmed folder and parent, including folders with no strategies.
+Its iteration order is unspecified; it is not the strategy order.
+
+Wait until `state.strats().folders_last_modified() > 0` before editing folders.
+Zero means the first versioned folder tree has not arrived, or the core does not
+support folder synchronization. The new folder APIs return `StateUnavailable`
+until then. Do not submit an old cached folder list automatically on connect:
+the runtime receives the current core tree and handles subsequent replies itself.
+
+```rust
+let state = client.snapshot().expect("state is ready");
+let mut paths: Vec<String> = state.strats().folder_paths().map(str::to_owned).collect();
+paths.push("Research/Empty".into());
+client.strategies().sync_local_folders(paths)?;
+```
+
+This submits the **complete desired tree**, not additions. To delete an empty
+folder, omit its path and all descendants. Parents are created automatically;
+a folder containing a retained strategy cannot be removed by omission. The
+library assigns the folder timestamp. Confirmation is a `SnapshotFull` with
+the updated `folder_paths()`, not a per-folder `Deleted` event.
+
+For a rename or move containing strategies, update their paths and edit dates,
+replace the old folder paths in the complete tree, then submit both together:
+
+```rust
+client.strategies().sync_local_strategies_with_folders(edited_strategies, paths)?;
+```
+
+`edited_strategies` is the complete editor list in its desired order, just as
+for `sync_local_strategies`. The core applies strategy changes first, then the
+newer folder tree, removing the now-empty old paths. No separate folder-delete
+command is needed. Real strategy deletion still uses `delete(strategy_id, "")`.
+
+Parameter-only edits still use a Partial snapshot. Folder changes use one Full;
+their timestamp is independent of strategy order and individual edit dates.
+A late older Full cannot restore deleted empty folders. Full replies and
+reconnect preserve the complete folder tree, including an empty tree.
+
+Paths use `/`, are case-insensitive, and must fit 255 UTF-8 bytes. New folder
+intents reject empty path segments, surrounding whitespace, quotes, line breaks,
+NUL, or a tree exceeding the snapshot dictionary's capacity.
+
+Known limits: concurrent complete folder edits use the newer timestamp; a lost
+empty folder can be recreated. Equal timestamps are not separately arbitrated.
+Exact sibling order of empty folders is not synchronized. A conflicting newer
+strategy can keep its old folder occupied, so that folder is retained for safety.
+After exhausted delivery retries, a later Full or reconnect repairs the tree;
+there is no extra periodic folder-sync loop.
 
 ## Global Strategy Runtime State
 
@@ -505,8 +562,11 @@ Active Lib, replace the edited strategy, then send the whole current list:
 
 ```rust
 let mut strategies = state.strategy_snapshot_vec();
-strategies.retain(|s| s.strategy_id != edited.strategy_id);
-strategies.push(edited);
+if let Some(existing) = strategies.iter_mut().find(|s| s.strategy_id == edited.strategy_id) {
+    *existing = edited;
+} else {
+    strategies.push(edited);
+}
 
 client.strategies().sync_local_strategies(strategies)?;
 ```

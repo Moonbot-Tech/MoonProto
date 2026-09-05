@@ -138,10 +138,11 @@ impl StratCheckedItem {
 pub struct StratSnapshot {
     pub server_epoch: u64,
     pub client_max_last_date: u64,
-    /// True if this is a full snapshot (Markets and Strats are replaced). False means partial.
+    /// Full carries canonical order and, when versioned, the complete folder tree.
     pub full: bool,
     /// Raw `TStrategySerializer` bin payload. Decoder/writer are in `commands::strategy_serializer`.
     pub data: Vec<u8>,
+    pub folders_last_modified: i64,
 }
 
 /// `TStratDelete` (CmdId=3).
@@ -309,11 +310,18 @@ impl StratCommand {
                 } else {
                     payload[pos..pos + size].to_vec()
                 };
+                let tail = payload.get(pos + size..).unwrap_or_default();
+                let folders_last_modified = if full && !tail.is_empty() {
+                    i64::from_le_bytes(tail.get(..8)?.try_into().ok()?)
+                } else {
+                    0
+                };
                 Some(StratCommand::Snapshot(StratSnapshot {
                     server_epoch,
                     client_max_last_date,
                     full,
                     data,
+                    folders_last_modified,
                 }))
             }
             CMD_DELETE => {
@@ -519,6 +527,7 @@ pub(crate) fn build_snapshot(
     client_max_last_date: u64,
     full: bool,
     data: &[u8],
+    folders_last_modified: i64,
 ) -> Vec<u8> {
     let empty_payload;
     let data = if data.is_empty() {
@@ -528,13 +537,16 @@ pub(crate) fn build_snapshot(
         data
     };
 
-    let mut out = Vec::with_capacity(11 + 8 + 8 + 4 + 1 + data.len());
+    let mut out = Vec::with_capacity(11 + 8 + 8 + 4 + 1 + data.len() + if full { 8 } else { 0 });
     write_header(&mut out, CMD_SNAPSHOT, uid);
     out.extend_from_slice(&server_epoch.to_le_bytes());
     out.extend_from_slice(&client_max_last_date.to_le_bytes());
     out.extend_from_slice(&(data.len() as u32).to_le_bytes());
     out.push(full as u8);
     out.extend_from_slice(data);
+    if full {
+        out.extend_from_slice(&folders_last_modified.to_le_bytes());
+    }
     out
 }
 
@@ -560,7 +572,7 @@ pub(crate) fn build_snapshot_from_strategies(
         builder.write_strategy(strategy);
     }
     let data = builder.finalize();
-    build_snapshot(uid, server_epoch, client_max_last_date, full, &data)
+    build_snapshot(uid, server_epoch, client_max_last_date, full, &data, 0)
 }
 
 /// `TStratDelete` (CmdId=3).

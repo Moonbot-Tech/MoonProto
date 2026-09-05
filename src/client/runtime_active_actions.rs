@@ -38,12 +38,14 @@ impl Client {
                     client_max_last_date,
                     full,
                     data,
+                    folders_last_modified,
                 } => {
                     self.strat_send_snapshot_payload(
                         server_epoch,
                         client_max_last_date,
                         full,
                         &data,
+                        folders_last_modified,
                     );
                 }
                 crate::events::ActiveAction::RequestOrderStatus {

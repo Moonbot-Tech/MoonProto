@@ -41,6 +41,10 @@ pub(super) enum RuntimeCommand {
     Ui(UiRuntimeCommand),
     Strat(StratRuntimeCommand),
     StrategySnapshotBatch(Vec<crate::commands::strategy_serializer::StrategySnapshot>),
+    StrategyFolders {
+        strategies: Option<Vec<crate::commands::strategy_serializer::StrategySnapshot>>,
+        paths: Vec<String>,
+    },
     StrategySetChecked {
         strategy_id: u64,
         checked: bool,
@@ -111,6 +115,8 @@ pub(super) enum UiRuntimeCommand {
     OrdersHistoryRequest(String),
     RestartNow,
     Shutdown,
+    ProblemsClear,
+    ProblemsTest(String),
     KernelLicenseStateRequest,
     AutoDetect(bool),
 }
@@ -229,6 +235,7 @@ impl RuntimeCommand {
             Self::Ui(cmd) => cmd.profile_source(),
             Self::Strat(cmd) => cmd.profile_source(),
             Self::StrategySnapshotBatch(strategies) => (50, strategies.len()),
+            Self::StrategyFolders { paths, .. } => (50, paths.len()),
             Self::StrategySetChecked { .. } => (51, 1),
             Self::StrategySendCheckedDelta => (52, 0),
             Self::StrategyStartStop { .. } => (53, 0),
@@ -271,6 +278,8 @@ impl UiRuntimeCommand {
             Self::OrdersHistoryRequest(_) => (34, 1),
             Self::RestartNow => (35, 0),
             Self::Shutdown => (42, 0),
+            Self::ProblemsClear => (43, 0),
+            Self::ProblemsTest(_) => (44, 1),
             Self::KernelLicenseStateRequest => (36, 0),
             Self::AutoDetect(_) => (37, 0),
             Self::SharedConfigRequest => (38, 0),

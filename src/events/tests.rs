@@ -1,5 +1,6 @@
 use super::*;
 mod balance_digest;
+mod problems;
 use crate::commands::arb::build_arb_prices;
 use crate::commands::balance::build_request_balance_refresh;
 use crate::commands::engine_api::EngineMethod;
@@ -3952,13 +3953,13 @@ fn snapshot_requested_with_provider_triggers_fresh_reply() {
     for item in drain_client_send_items(&client) {
         if item.cmd == Command::Strat.to_byte() {
             let data = &item.data;
-            if data.len() == 11 + 8 + 8 + 4 + 1 + fresh_snapshot.len() {
+            if data.len() == 11 + 8 + 8 + 4 + 1 + fresh_snapshot.len() + 8 {
                 let cmd_subcode = data[0];
                 let server_epoch = u64::from_le_bytes(data[11..19].try_into().unwrap());
                 let client_max_last_date = u64::from_le_bytes(data[19..27].try_into().unwrap());
                 let size = u32::from_le_bytes(data[27..31].try_into().unwrap());
                 let full = data[31] != 0;
-                let tail = &data[32..];
+                let tail = &data[32..32 + size as usize];
                 if cmd_subcode == 2
                     && server_epoch == 7
                     && client_max_last_date == 99
@@ -4201,7 +4202,7 @@ fn valid_strategy_snapshot_advances_server_epoch_after_decode() {
     client.testing_set_domain_ready(true);
     let mut out = Vec::new();
     let mut actions = Vec::new();
-    let payload = crate::commands::strat::build_snapshot(42, 99, 0, true, &[]);
+    let payload = crate::commands::strat::build_snapshot(42, 99, 0, true, &[], 0);
 
     dispatch_active_packet_for_test(
         &mut d,
@@ -4305,7 +4306,8 @@ fn matching_strategy_snapshot_emits_edit_confirmation_without_optimistic_state()
 
     let mut builder = StrategyBatchBuilder::new(d.strats.strategy_schema().unwrap());
     builder.write_strategy(&desired);
-    let payload = crate::commands::strat::build_snapshot(42, 99, 200, false, &builder.finalize());
+    let payload =
+        crate::commands::strat::build_snapshot(42, 99, 200, false, &builder.finalize(), 0);
     let mut client = crate::client::Client::new(dummy_client_cfg());
     client.testing_set_domain_ready(true);
     let mut out = Vec::new();

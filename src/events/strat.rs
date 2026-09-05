@@ -1,4 +1,4 @@
-﻿//! Active `MPC_Strat` dispatch.
+//! Active `MPC_Strat` dispatch.
 //!
 //! Keeps strategy protocol effects together: parse `TStratCommand`, apply
 //! snapshot/update state, and auto-decode serializer payloads into `StratsState`.
@@ -61,6 +61,8 @@ impl EventDispatcher {
                 };
                 self.strats.last_server_epoch = snap.server_epoch;
                 if snap.full {
+                    self.strats
+                        .apply_server_folders(&apply_outcome.paths, snap.folders_last_modified);
                     self.strats.apply_server_order(
                         &apply_outcome.order,
                         snap.server_epoch,

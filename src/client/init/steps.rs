@@ -499,6 +499,7 @@ pub(crate) fn send_post_init_resync(
             snapshot.client_max_last_date,
             snapshot.full,
             &snapshot.data,
+            snapshot.folders_last_modified,
         );
     } else {
         client.strat_schema_request();

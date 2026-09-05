@@ -473,6 +473,8 @@ impl From<moonproto::KernelLicenseStateCommand> for KernelLicenseProbe {
 
 #[derive(Default)]
 struct SessionStats {
+    problems_snapshots: u64,
+    problem_notifications: u64,
     label: String,
     market: String,
     market_index: Option<u16>,
@@ -562,6 +564,8 @@ struct SessionStats {
 impl Clone for SessionStats {
     fn clone(&self) -> Self {
         Self {
+            problems_snapshots: self.problems_snapshots,
+            problem_notifications: self.problem_notifications,
             label: self.label.clone(),
             market: self.market.clone(),
             market_index: self.market_index,
@@ -3281,6 +3285,26 @@ fn record_event(
                     st.hyperliquid_requests_left
                 ),
             );
+        }
+        Event::Settings(SettingsEvent::ProblemsUpdated) => {
+            st.problems_snapshots += 1;
+            let items = dispatcher.map(|d| d.settings().problems.items());
+            log_server_event(
+                &st,
+                event_no,
+                format!(
+                    "UI ProblemsState count={:?}",
+                    items.map(|items| items.len())
+                ),
+            );
+        }
+        Event::Settings(SettingsEvent::ProblemConfirmed { problem }) => {
+            st.problem_notifications += 1;
+            log_server_event(&st, event_no, format!(
+                "UI ProblemConfirmed kind={} key={} category={:?} count={} first={:?} confirmed={:?} title={:?} message={:?} tech={:?}",
+                problem.kind, problem.kind_name, problem.category, problem.confirmations,
+                problem.first_seen, problem.confirmed, problem.title, problem.message, problem.technical_details
+            ));
         }
         Event::Settings(other) => {
             log_server_event(&st, event_no, format!("UI {other:?}"));
@@ -7770,6 +7794,202 @@ fn fire_test_strategy_order_sync() {
     run_strategy_order_sync_gate(&cfg, keys, &mut a, &mut b);
 }
 
+#[test]
+#[ignore = "live updated MoonBot core required; creates and removes folder fixtures"]
+fn fire_test_strategy_folder_sync() {
+    let _lock = firetest_live_test_lock();
+    let cfg = FireConfig::load_required();
+    assert!(cfg.allow_mutation);
+    let keys = parse_key_info(&cfg.key_b64)
+        .expect("invalid FireTest key")
+        .keys;
+    let _loss = ErrEmuGuard::set(0);
+    let mut a = Session::connect("Folders-A", &cfg, keys, None);
+    let mut b = Session::connect("Folders-B", &cfg, keys, None);
+    run_strategy_folder_sync_gate(&cfg, keys, &mut a, &mut b);
+}
+
+fn strategy_folder_paths(session: &Session) -> Vec<String> {
+    session
+        .state_snapshot()
+        .strats()
+        .folder_paths()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn run_strategy_folder_sync_gate(
+    cfg: &FireConfig,
+    keys: ImportedKeys,
+    a: &mut Session,
+    b: &mut Session,
+) {
+    assert!(
+        pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "versioned folder tree",
+            |a, b| {
+                [a, b]
+                    .iter()
+                    .all(|s| s.state_snapshot().strats().folders_last_modified() > 0)
+            }
+        ),
+        "core has not sent a versioned folder tree; update the server first"
+    );
+    let id = rand::random::<u64>();
+    let prefix = format!("FireTestFolders-{id}");
+    let old = format!("{prefix}/Old");
+    let new = format!("{prefix}/New");
+    let empty = format!("{prefix}/Empty/Child");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let order_before = a.state_snapshot().strats().last_modified();
+        let mut paths = strategy_folder_paths(a);
+        paths.extend([old.clone(), empty.clone()]);
+        a.client.strategies().sync_local_folders(paths).unwrap();
+        assert!(pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "empty nested folders A to B",
+            |a, b| {
+                [a, b].iter().all(|s| {
+                    let paths = strategy_folder_paths(s);
+                    paths.contains(&old) && paths.contains(&empty)
+                })
+            }
+        ));
+        assert_eq!(a.state_snapshot().strats().last_modified(), order_before);
+
+        let mut rows = b.state_snapshot().strategy_snapshot_vec();
+        let mut fixture = firetest_strategy(cfg);
+        fixture.strategy_id = id;
+        fixture.checked = false;
+        fixture.path = old.clone().into();
+        rows.push(fixture);
+        b.sync_local_strategies(&rows);
+        assert!(pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "folder fixture",
+            |a, b| { a.strategy_snapshot(id).is_some() && b.strategy_snapshot(id).is_some() }
+        ));
+
+        let mut rows = b.state_snapshot().strategy_snapshot_vec();
+        let fixture = rows.iter_mut().find(|s| s.strategy_id == id).unwrap();
+        fixture.path = new.clone().into();
+        fixture.last_date = fixture.last_date.max(now_epoch_ms()).saturating_add(1);
+        let mut paths = strategy_folder_paths(b);
+        paths.retain(|p| p != &old);
+        paths.push(new.clone());
+        b.client
+            .strategies()
+            .sync_local_strategies_with_folders(rows, paths)
+            .unwrap();
+        assert!(pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "atomic folder rename B to A",
+            |a, b| {
+                [a, b].iter().all(|s| {
+                    let paths = strategy_folder_paths(s);
+                    !paths.contains(&old)
+                        && paths.contains(&new)
+                        && paths.contains(&empty)
+                        && s.strategy_snapshot(id)
+                            .is_some_and(|row| row.path.as_ref() == new)
+                })
+            }
+        ));
+
+        let mut c = Session::connect("Folders-cold", cfg, keys, None);
+        assert!(pump_pair_until_sessions(
+            a,
+            &mut c,
+            cfg.connect_timeout,
+            "cold folder recovery",
+            |_, c| {
+                let paths = strategy_folder_paths(c);
+                paths.contains(&new) && paths.contains(&empty) && !paths.contains(&old)
+            }
+        ));
+        c.client.disconnect().unwrap();
+        c.client.wait_finished().unwrap();
+
+        let mut paths = strategy_folder_paths(a);
+        paths.retain(|p| p != &empty && p != &format!("{prefix}/Empty"));
+        a.client.strategies().sync_local_folders(paths).unwrap();
+        assert!(pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "empty subtree deletion",
+            |a, b| {
+                [a, b].iter().all(|s| {
+                    !strategy_folder_paths(s)
+                        .iter()
+                        .any(|p| p.starts_with(&format!("{prefix}/Empty")))
+                })
+            }
+        ));
+        let mut c = Session::connect("Folders-after-delete", cfg, keys, None);
+        assert!(pump_pair_until_sessions(
+            a,
+            &mut c,
+            cfg.connect_timeout,
+            "deleted folder stays absent on reconnect",
+            |a, c| {
+                let state = c.state_snapshot();
+                state.strats().folders_last_modified()
+                    == a.state_snapshot().strats().folders_last_modified()
+                    && state.strats().folder_paths().any(|p| p == new)
+                    && !state
+                        .strats()
+                        .folder_paths()
+                        .any(|p| p == old || p == empty)
+            }
+        ));
+        c.client.disconnect().unwrap();
+        c.client.wait_finished().unwrap();
+    }));
+    a.client
+        .strategies()
+        .delete(id, "")
+        .expect("delete folder fixture");
+    let rows_cleaned = pump_pair_until_sessions(
+        a,
+        b,
+        cfg.connect_timeout,
+        "folder fixture cleanup",
+        |a, b| a.strategy_snapshot(id).is_none() && b.strategy_snapshot(id).is_none(),
+    );
+    let mut paths = strategy_folder_paths(a);
+    paths.retain(|p| p != &prefix && !p.starts_with(&format!("{prefix}/")));
+    a.client
+        .strategies()
+        .sync_local_folders(paths)
+        .expect("remove only test folders");
+    let folders_cleaned =
+        pump_pair_until_sessions(a, b, cfg.connect_timeout, "folder tree cleanup", |a, b| {
+            [a, b].iter().all(|s| {
+                !strategy_folder_paths(s)
+                    .iter()
+                    .any(|p| p == &prefix || p.starts_with(&format!("{prefix}/")))
+            })
+        });
+    assert!(
+        rows_cleaned && folders_cleaned,
+        "folder fixtures were not fully removed"
+    );
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+    println!("OK: empty/nested folders, bidirectional rename with rows, cold/reconnected clients, deletion and cleanup");
+}
+
 fn strategy_order(session: &Session) -> Vec<u64> {
     session
         .state_snapshot()
@@ -9181,6 +9401,159 @@ fn fire_test_report_database_replication() {
     err_emu.reset("report database replication gate");
 }
 
+fn problems_state(session: &Session) -> &moonproto::state::ProblemsState {
+    &session
+        .latest_snapshot
+        .as_ref()
+        .expect("connected snapshot")
+        .settings()
+        .problems
+}
+
+fn clear_problems_from_b(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
+    let before_a = a.stats.lock().unwrap().problems_snapshots;
+    let before_b = b.stats.lock().unwrap().problems_snapshots;
+    b.client
+        .settings()
+        .clear_problems()
+        .expect("clear core problems");
+    assert!(
+        pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "problems clear broadcast",
+            |a, b| {
+                a.stats.lock().unwrap().problems_snapshots > before_a
+                    && b.stats.lock().unwrap().problems_snapshots > before_b
+                    && problems_state(a).items().is_empty()
+                    && problems_state(b).items().is_empty()
+            }
+        ),
+        "clear reply must reach both clients; a detector may have reported a new real problem"
+    );
+}
+
+fn run_problems_gate(cfg: &FireConfig, keys: ImportedKeys, a: &mut Session, b: &mut Session) {
+    assert!(
+        cfg.allow_mutation,
+        "problem test adds a diagnostic fact on the core"
+    );
+    assert!(
+        pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "initial core problem lists",
+            |a, b| {
+                problems_state(a).snapshot_received() && problems_state(b).snapshot_received()
+            }
+        ),
+        "core problem snapshots missing; this test requires the detector relay extension"
+    );
+    for (label, session) in [("A", &*a), ("B", &*b)] {
+        println!(
+            "FIRETEST Problems {label}: initial confirmed={}",
+            problems_state(session).items().len()
+        );
+        for problem in problems_state(session).items() {
+            println!("FIRETEST Problems {label}: {problem:?}");
+        }
+    }
+
+    let allow_clear = std::env::var("MOONPROTO_FIRETEST_CLEAR_PROBLEMS").as_deref() == Ok("1");
+    if allow_clear {
+        println!("FIRETEST: explicit diagnostic clear enabled; existing core facts/hypotheses will be removed");
+        clear_problems_from_b(cfg, a, b);
+    } else if problems_state(a)
+        .items()
+        .iter()
+        .chain(problems_state(b).items())
+        .any(|p| p.kind_name == "test")
+    {
+        println!("FIRETEST SKIPPED problems mutation: test fact already exists; repeated confirmation is intentionally not broadcast. Set MOONPROTO_FIRETEST_CLEAR_PROBLEMS=1 on an isolated test core to clear it.");
+        return;
+    }
+
+    let marker = format!("FireTest-{:016X}", rand::random::<u64>());
+    let before_a = a.stats.lock().unwrap().problem_notifications;
+    let before_b = b.stats.lock().unwrap().problem_notifications;
+    a.client
+        .settings()
+        .test_problem(&marker)
+        .expect("publish core test signal");
+    let has_marker = |session: &Session| {
+        problems_state(session).items().iter().any(|p| {
+            p.kind_name == "test"
+                && p.message.contains(&marker)
+                && p.technical_details.contains(&marker)
+                && p.confirmations >= 1
+                && p.confirmed >= p.first_seen
+                && p.first_seen > MoonTime::ZERO
+                && p.category == moonproto::state::ProblemCategory::Other
+        })
+    };
+    assert!(
+        pump_pair_until_sessions(
+            a,
+            b,
+            cfg.connect_timeout,
+            "new core problem to two clients",
+            |a, b| {
+                has_marker(a)
+                    && has_marker(b)
+                    && a.stats.lock().unwrap().problem_notifications > before_a
+                    && b.stats.lock().unwrap().problem_notifications > before_b
+            }
+        ),
+        "test signal must pass through the detector worker and notify both clients"
+    );
+
+    let mut c = Session::connect("Problems-late", cfg, keys, None);
+    assert!(
+        pump_session_until(
+            &mut c,
+            cfg.connect_timeout,
+            "problem in late-client snapshot",
+            |c| { problems_state(c).snapshot_received() && has_marker(c) }
+        ),
+        "a late client must receive the existing test fact without another test request"
+    );
+    if allow_clear {
+        clear_problems_from_b(cfg, a, b);
+        assert!(pump_session_until(
+            &mut c,
+            cfg.connect_timeout,
+            "late-client clear",
+            |c| { problems_state(c).items().is_empty() }
+        ));
+    } else {
+        println!("FIRETEST SKIPPED problems clear: test fact left on core; clearing it would also remove real diagnostics. Explicit opt-in is required.");
+    }
+    for session in [&*a, &*b, &c] {
+        assert_eq!(
+            session.snapshot().parse_failed,
+            0,
+            "problem packets must parse"
+        );
+    }
+}
+
+#[test]
+#[ignore = "live MoonBot with detector relay required; adds a test diagnostic"]
+fn fire_test_core_problems() {
+    let _live_test_lock = firetest_live_test_lock();
+    let cfg = FireConfig::load_required();
+    assert!(cfg.allow_mutation, "problem test mutates core diagnostics");
+    let keys = parse_key_info(&cfg.key_b64)
+        .expect("invalid FireTest key")
+        .keys;
+    let _err_emu = ErrEmuGuard::set(0);
+    let mut a = Session::connect("Problems-A", &cfg, keys, None);
+    let mut b = Session::connect("Problems-B", &cfg, keys, None);
+    run_problems_gate(&cfg, keys, &mut a, &mut b);
+}
+
 #[test]
 #[ignore = "live MoonBot server required; create ../moonproto.firetest.conf"]
 fn fire_test_active_library_health() {
@@ -9369,6 +9742,7 @@ fn fire_test_active_library_health() {
     run_high_loss_simple_ops_gate(&mut a, &mut b, &mut err_emu, cfg.high_loss_timeout);
     log_protocol_cpu_pair("after high-loss simple ops gate", &a, &b);
     err_emu.reset("high-loss simple ops gate");
+    run_problems_gate(&cfg, keys, &mut a, &mut b);
     a.client
         .debug_reset_err_emu_diagnostics()
         .expect("reset A err_emu diagnostics");
@@ -9382,6 +9756,8 @@ fn fire_test_active_library_health() {
     run_order_lifecycle_gate(&cfg, &mut a, &mut b);
     run_real_order_cancel_gate(&cfg, &mut a, &mut b);
     run_strategy_order_sync_gate(&cfg, keys, &mut a, &mut b);
+
+    run_strategy_folder_sync_gate(&cfg, keys, &mut a, &mut b);
     run_moonshot_strategy_gate(&cfg, &mut a, &mut b);
     run_runtime_restart_now_gate(&cfg, &mut a, &mut b);
 

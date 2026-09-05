@@ -207,7 +207,10 @@ pub(super) fn handle_command(
             false
         }
         RuntimeCommand::StrategySnapshotBatch(strategies) => {
-            handle_strategy_snapshot_batch(client, dispatcher, strategies)
+            handle_strategy_snapshot_batch(client, dispatcher, Some(strategies), None)
+        }
+        RuntimeCommand::StrategyFolders { strategies, paths } => {
+            handle_strategy_snapshot_batch(client, dispatcher, strategies, Some(paths))
         }
         RuntimeCommand::StrategySetChecked {
             strategy_id,
@@ -616,6 +619,14 @@ fn handle_ui_command(
             client.ui_shutdown();
             false
         }
+        UiRuntimeCommand::ProblemsClear => {
+            client.ui_problems_clear();
+            false
+        }
+        UiRuntimeCommand::ProblemsTest(text) => {
+            client.ui_problems_test(&text);
+            false
+        }
         UiRuntimeCommand::KernelLicenseStateRequest => {
             client.ui_kernel_license_state_request(0);
             false
@@ -643,29 +654,58 @@ fn handle_strat_command(client: &mut Client, cmd: StratRuntimeCommand) {
 fn handle_strategy_snapshot_batch(
     client: &mut Client,
     dispatcher: &mut crate::events::EventDispatcher,
-    strategies: Vec<crate::commands::strategy_serializer::StrategySnapshot>,
+    strategies: Option<Vec<crate::commands::strategy_serializer::StrategySnapshot>>,
+    folder_paths: Option<Vec<String>>,
 ) -> bool {
     #[cfg(any(test, feature = "diagnostics"))]
-    let strategy_count = strategies.len();
-    if dispatcher.strats().strategy_schema().is_none() {
+    let strategy_count = strategies.as_ref().map_or(0, Vec::len);
+    if strategies.as_ref().is_some_and(|rows| !rows.is_empty())
+        && dispatcher.strats().strategy_schema().is_none()
+    {
         log::warn!(
             target: "moonproto::active_runtime",
             "strategy snapshot batch ignored: live strategy schema is not available"
         );
         return false;
     }
-    let order_changed = !dispatcher.strats().local_order_matches(&strategies);
+    let order_changed = strategies
+        .as_ref()
+        .is_some_and(|rows| !dispatcher.strats().local_order_matches(rows));
+    let submitted_at = crate::MoonTime::now();
     if order_changed {
-        dispatcher.mark_local_strategies_changed(crate::MoonTime::now().unix_millis());
+        dispatcher.mark_local_strategies_changed(submitted_at.unix_millis());
     }
     #[cfg(any(test, feature = "diagnostics"))]
     let state_started = Instant::now();
     let now = Instant::now();
-    let edit_outcome = dispatcher.stage_local_strategies_owned(
-        strategies,
-        crate::MoonTime::from_unix_millis(client.now_ms()),
-        now + STRATEGY_EDIT_CONFIRMATION_TIMEOUT,
-    );
+    let edit_outcome = strategies.map_or_else(Default::default, |strategies| {
+        dispatcher.stage_local_strategies_owned(
+            strategies,
+            submitted_at,
+            now + STRATEGY_EDIT_CONFIRMATION_TIMEOUT,
+        )
+    });
+    let folders_changed = dispatcher
+        .strats
+        .stage_local_folders(folder_paths.as_deref(), submitted_at.unix_millis());
+    #[cfg(any(test, feature = "diagnostics"))]
+    client
+        .metrics
+        .protocol_metrics
+        .record_profile_phase_labeled(
+            ProfilePhase::StrategySnapshotState,
+            state_started.elapsed(),
+            crate::client::metrics::RUNTIME_PROFILE_CMD,
+            50,
+            strategy_count,
+        );
+    #[cfg(any(test, feature = "diagnostics"))]
+    let serialize_started = Instant::now();
+    let reply = if order_changed || folders_changed {
+        dispatcher.local_strategy_snapshot_reply()
+    } else {
+        dispatcher.local_strategy_diff_reply(&edit_outcome.submitted)
+    };
     if !edit_outcome.submitted.is_empty() {
         dispatcher.queue_events([crate::events::Event::Strat(
             crate::state::StratEvent::EditSubmitted {
@@ -680,24 +720,7 @@ fn handle_strategy_snapshot_batch(
             },
         )]);
     }
-    #[cfg(any(test, feature = "diagnostics"))]
-    client
-        .metrics
-        .protocol_metrics
-        .record_profile_phase_labeled(
-            ProfilePhase::StrategySnapshotState,
-            state_started.elapsed(),
-            crate::client::metrics::RUNTIME_PROFILE_CMD,
-            50,
-            strategy_count,
-        );
-    #[cfg(any(test, feature = "diagnostics"))]
-    let serialize_started = Instant::now();
-    let Some(reply) = dispatcher.local_strategy_snapshot_reply() else {
-        log::warn!(
-            target: "moonproto::active_runtime",
-            "strategy snapshot batch ignored: local strategy payload could not be serialized"
-        );
+    let Some(reply) = reply else {
         return true;
     };
     #[cfg(any(test, feature = "diagnostics"))]
@@ -716,8 +739,9 @@ fn handle_strategy_snapshot_batch(
     client.strat_send_snapshot_payload(
         reply.server_epoch,
         reply.client_max_last_date,
-        order_changed,
+        reply.full,
         &reply.data,
+        reply.folders_last_modified,
     );
     #[cfg(any(test, feature = "diagnostics"))]
     client

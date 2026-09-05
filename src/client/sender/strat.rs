@@ -23,6 +23,7 @@ impl ClientSender {
         client_max_last_date: u64,
         full: bool,
         data: &[u8],
+        folders_last_modified: i64,
     ) {
         let uid: u64 = rand::random();
         let raw = crate::commands::strat::build_snapshot(
@@ -31,6 +32,7 @@ impl ClientSender {
             client_max_last_date,
             full,
             data,
+            folders_last_modified,
         );
         self.send_strat_snapshot_command(raw);
     }

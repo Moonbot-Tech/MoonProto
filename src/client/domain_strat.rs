@@ -29,7 +29,7 @@ impl Client {
     /// Delphi fields: `ServerEpoch`, `ClientMaxLastDate`, `Size`, and `Full`.
     /// Regular applications use
     /// `MoonClient::strategies().sync_local_strategies(...)`; the active runtime
-    /// owns the decoded list and reuses its cached serializer payload.
+    /// owns the decoded list, sends edited rows, and caches the Full reply payload.
     #[doc(hidden)]
     pub(crate) fn strat_send_snapshot_payload(
         &self,
@@ -37,6 +37,7 @@ impl Client {
         client_max_last_date: u64,
         full: bool,
         data: &[u8],
+        folders_last_modified: i64,
     ) {
         let uid: u64 = rand::random();
         let raw = crate::commands::strat::build_snapshot(
@@ -45,6 +46,7 @@ impl Client {
             client_max_last_date,
             full,
             data,
+            folders_last_modified,
         );
         self.send_strat_snapshot_command(raw);
     }

@@ -374,9 +374,39 @@ impl UICommand {
 
             CMD_SHUTDOWN => Some(UICommand::Shutdown { uid }),
 
+            CMD_PROBLEMS_STATE => {
+                let count = read_u16_zero_tail(payload, &mut pos) as usize;
+                let mut items = Vec::new();
+                items.try_reserve(count).ok()?;
+                for _ in 0..count {
+                    items.push(std::sync::Arc::new(read_problem(payload, &mut pos)?));
+                }
+                Some(UICommand::ProblemsState(items))
+            }
+            CMD_PROBLEM_NOTIFY => Some(UICommand::ProblemNotify(std::sync::Arc::new(
+                read_problem(payload, &mut pos)?,
+            ))),
+            CMD_PROBLEMS_CLEAR => Some(UICommand::ProblemsClear),
+            CMD_PROBLEMS_TEST => Some(UICommand::ProblemsTest(read_string(payload, &mut pos)?)),
+
             _ => Some(UICommand::Unknown { cmd_id, uid }),
         }
     }
+}
+
+fn read_problem(data: &[u8], pos: &mut usize) -> Option<crate::state::KernelProblem> {
+    use crate::state::{KernelProblem, ProblemCategory};
+    Some(KernelProblem {
+        kind: read_u8_zero_tail(data, pos),
+        kind_name: read_string(data, pos)?,
+        category: ProblemCategory::from_byte(read_u8_zero_tail(data, pos)),
+        title: read_string(data, pos)?,
+        message: read_string(data, pos)?,
+        technical_details: read_string(data, pos)?,
+        first_seen: MoonTime::from_unix_millis(read_u64_zero_tail(data, pos) as i64),
+        confirmed: MoonTime::from_unix_millis(read_u64_zero_tail(data, pos) as i64),
+        confirmations: read_i32_zero_tail(data, pos),
+    })
 }
 
 impl EmuTradePoint {

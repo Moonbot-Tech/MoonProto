@@ -63,6 +63,7 @@ pub(crate) const UK_NEWS_HISTORY: u8 = 27;
 pub(crate) const UK_SHARED_CONFIG: u8 = 28;
 /// `UK_MarketSessionProfit`: singleton per-market session-profit snapshot key.
 pub(crate) const UK_MARKET_SESSION_PROFIT: u8 = 29;
+pub(crate) const UK_PROBLEMS_STATE: u8 = 30;
 
 /// Send priority as protocol metadata, independent from the concrete client
 /// queue implementation. Conversion to `SendPriority` happens at the send edge.
@@ -725,6 +726,41 @@ pub(crate) const UI_COMMANDS: &[CommandDescriptor] = &[
         priority = High,
         direction = Outbound
     ),
+    cmd_desc!(
+        Command::UI,
+        32,
+        "TProblemsStateCommand",
+        base = Base,
+        priority = Sliced,
+        retries = None,
+        unique = UK_PROBLEMS_STATE,
+        ukey = UKeyRule::Singleton(1),
+        direction = Inbound
+    ),
+    cmd_desc!(
+        Command::UI,
+        33,
+        "TProblemNotifyCommand",
+        base = Base,
+        priority = High,
+        direction = Inbound
+    ),
+    cmd_desc!(
+        Command::UI,
+        34,
+        "TProblemsClearCommand",
+        base = Base,
+        priority = High,
+        direction = Outbound
+    ),
+    cmd_desc!(
+        Command::UI,
+        35,
+        "TProblemsTestCommand",
+        base = Base,
+        priority = High,
+        direction = Outbound
+    ),
 ];
 
 pub(crate) const STRAT_COMMANDS: &[CommandDescriptor] = &[
@@ -1052,7 +1088,7 @@ mod tests {
     #[test]
     fn descriptor_map_covers_known_typed_domains() {
         assert_eq!(ORDER_COMMANDS.len(), 24);
-        assert_eq!(UI_COMMANDS.len(), 32);
+        assert_eq!(UI_COMMANDS.len(), 36);
         assert_eq!(STRAT_COMMANDS.len(), 11);
         assert_eq!(BALANCE_COMMANDS.len(), 9);
         assert_eq!(API_COMMANDS.len(), 5);

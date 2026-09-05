@@ -392,3 +392,16 @@ pub(crate) fn build_shutdown(uid: u64) -> Vec<u8> {
     write_header(&mut out, CMD_SHUTDOWN, uid);
     out
 }
+
+pub(crate) fn build_problems_clear(uid: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(11);
+    write_header(&mut out, CMD_PROBLEMS_CLEAR, uid);
+    out
+}
+
+pub(crate) fn build_problems_test(uid: u64, text: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    write_header(&mut out, CMD_PROBLEMS_TEST, uid);
+    write_string(&mut out, text);
+    out
+}

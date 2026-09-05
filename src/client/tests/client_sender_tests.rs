@@ -524,7 +524,7 @@ fn sender_ui_switches_mark_server_update_sent_and_keep_delphi_u_key_uid() {
 fn sender_strat_snapshot_payload_uses_sliced_snapshot_u_key() {
     let (sender, _, send_q, _, _, _) = make_sender();
 
-    sender.strat_send_snapshot_payload(1, 2, true, &[1, 2, 3]);
+    sender.strat_send_snapshot_payload(1, 2, true, &[1, 2, 3], 0);
 
     let sent = take_send_items(&send_q);
     assert_eq!(sent.len(), 1);
@@ -540,16 +540,23 @@ fn sender_strat_snapshot_payload_uses_sliced_snapshot_u_key() {
 fn sender_strat_deltas_survive_full_snapshot_replacement() {
     let (sender, _, send_q, _, _, _) = make_sender();
 
-    sender.strat_send_snapshot_payload(1, 0, false, &[10]);
-    sender.strat_send_snapshot_payload(2, 0, true, &[20]);
-    sender.strat_send_snapshot_payload(3, 0, false, &[30]);
-    sender.strat_send_snapshot_payload(4, 0, true, &[40]);
+    sender.strat_send_snapshot_payload(1, 0, false, &[10], 0);
+    sender.strat_send_snapshot_payload(2, 0, true, &[20], 0);
+    sender.strat_send_snapshot_payload(3, 0, false, &[30], 0);
+    sender.strat_send_snapshot_payload(4, 0, true, &[40], 0);
 
     let sent = take_send_items(&send_q);
     assert_eq!(sent.len(), 3);
     assert_eq!(
         sent.iter()
-            .map(|item| *item.data.last().unwrap())
+            .map(|item| {
+                let crate::commands::strat::StratCommand::Snapshot(snapshot) =
+                    crate::commands::strat::StratCommand::parse(&item.data).unwrap()
+                else {
+                    panic!("snapshot");
+                };
+                snapshot.data[0]
+            })
             .collect::<Vec<_>>(),
         [10, 30, 40]
     );

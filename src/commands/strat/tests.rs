@@ -391,7 +391,7 @@ fn parse_snapshot_with_data() {
 #[test]
 fn build_snapshot_wraps_serializer_payload() {
     let payload = [1, 2, 3, 4];
-    let raw = build_snapshot(77, 10, 20, true, &payload);
+    let raw = build_snapshot(77, 10, 20, true, &payload, 1234567890123);
     let cmd = StratCommand::parse(&raw).unwrap();
     match cmd {
         StratCommand::Snapshot(s) => {
@@ -399,9 +399,29 @@ fn build_snapshot_wraps_serializer_payload() {
             assert_eq!(s.client_max_last_date, 20);
             assert!(s.full);
             assert_eq!(s.data, payload);
+            assert_eq!(s.folders_last_modified, 1234567890123);
         }
         _ => panic!("wrong variant"),
     }
+}
+
+#[test]
+fn snapshot_folder_tail_is_optional_but_never_partially_read() {
+    let full = build_snapshot(1, 2, 0, true, &[], 123);
+    let legacy = &full[..full.len() - 8];
+    let StratCommand::Snapshot(snapshot) = StratCommand::parse(legacy).unwrap() else {
+        panic!("snapshot");
+    };
+    assert_eq!(snapshot.folders_last_modified, 0);
+    for len in 1..8 {
+        assert!(StratCommand::parse(&full[..legacy.len() + len]).is_none());
+    }
+    let partial = build_snapshot(1, 2, 0, false, &[], 123);
+    assert_eq!(
+        partial.len(),
+        legacy.len(),
+        "partial wire layout remains unchanged"
+    );
 }
 
 #[test]
@@ -502,7 +522,7 @@ fn build_empty_snapshot_from_strategies_keeps_nonzero_serializer_payload() {
 
 #[test]
 fn build_snapshot_normalizes_empty_raw_payload_to_empty_serializer() {
-    let raw = build_snapshot(79, 3, 0, true, &[]);
+    let raw = build_snapshot(79, 3, 0, true, &[], 0);
     let cmd = StratCommand::parse(&raw).unwrap();
     match cmd {
         StratCommand::Snapshot(s) => {

@@ -229,6 +229,11 @@ ping and not a recommended polling interval.
 catalog updates. The retained JSON is available through `snapshot.news()`; see
 [`news.md`](news.md) for payload semantics and integration examples.
 
+Core diagnostic findings arrive as `Event::Settings` with
+`SettingsEvent::ProblemsUpdated` (full list) or `ProblemConfirmed { problem }`
+(new fact). Read `snapshot.settings().problems`; see [problems](problems.md)
+for display fields, clear/test actions, and the accepted delivery-order limitation.
+
 Low-level diagnostic builds may also receive hidden raw/parse-failure/raw Engine
 API response events. They are for FireTest/protocol dumps only; they are not a
 recovery mechanism or normal application control flow.

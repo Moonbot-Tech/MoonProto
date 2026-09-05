@@ -446,6 +446,11 @@ for the same active trades scope instead of leaving the scope stuck forever.
 
 ## UI Settings Request
 
+Confirmed core diagnostics are separate from settings refresh:
+`snapshot.settings().problems` receives its initial list automatically without
+blocking `Ready`. Use `client.settings().clear_problems()` and `test_problem(...)`
+for explicit actions; see [core diagnostic problems](problems.md).
+
 The UI settings channel is not an Engine API request, so it has no Engine API
 pending `Receiver`. Regular UI code queues a refresh request and reacts to the
 settings event:

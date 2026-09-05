@@ -32,6 +32,10 @@
 //! - 29 — `TSharedConfigRequest`    (empty, request the kernel's safe-share config)
 //! - 30 — `THLRequestLimitStateCommand` (High, HyperLiquid action requests left)
 //! - 31 — `TShutdownCommand`        (High, request graceful core shutdown)
+//! - 32 - `TProblemsStateCommand`   (Sliced, complete confirmed-problem list)
+//! - 33 - `TProblemNotifyCommand`   (High, newly confirmed problem)
+//! - 34 - `TProblemsClearCommand`  (High, clear all core problems)
+//! - 35 - `TProblemsTestCommand`   (High, publish a test problem)
 //!
 //! ## ASCfg / ASCfg2 blobs
 //! `TAutoStartConfig` (104 bytes) and `TAutoStartConfig2` (168 bytes) are
@@ -67,10 +71,10 @@ pub(crate) use builders::{
     build_alert_object, build_alert_snapshot_request, build_arb_activate_notify, build_auto_detect,
     build_chart_text_state, build_client_settings, build_emu_trades,
     build_kernel_license_state_request, build_lev_manage, build_mm_orders_subscribe,
-    build_orders_history_request, build_reset_profit, build_restart_now, build_settings_request,
-    build_shared_config_blob, build_shared_config_request, build_shutdown, build_strat_start_stop,
-    build_strat_start_stop_v2, build_switch_dex, build_switch_spot, build_trigger_manage,
-    build_update_version,
+    build_orders_history_request, build_problems_clear, build_problems_test, build_reset_profit,
+    build_restart_now, build_settings_request, build_shared_config_blob,
+    build_shared_config_request, build_shutdown, build_strat_start_stop, build_strat_start_stop_v2,
+    build_switch_dex, build_switch_spot, build_trigger_manage, build_update_version,
 };
 
 // --- CmdId constants ---
@@ -105,6 +109,18 @@ const CMD_SHARED_CONFIG: u8 = 28;
 const CMD_SHARED_CONFIG_REQUEST: u8 = 29;
 const CMD_HL_REQUEST_LIMIT_STATE: u8 = 30;
 const CMD_SHUTDOWN: u8 = 31;
+const CMD_PROBLEMS_STATE: u8 = 32;
+const CMD_PROBLEM_NOTIFY: u8 = 33;
+const CMD_PROBLEMS_CLEAR: u8 = 34;
+const CMD_PROBLEMS_TEST: u8 = 35;
+
+#[inline]
+pub(crate) fn is_problems_payload(payload: &[u8]) -> bool {
+    matches!(
+        payload.first(),
+        Some(&CMD_PROBLEMS_STATE | &CMD_PROBLEM_NOTIFY)
+    )
+}
 
 pub(crate) const NEWS_RELAY_KIND_NEWS: u8 = 0;
 pub(crate) const NEWS_RELAY_KIND_TAGS: u8 = 1;
@@ -1677,6 +1693,10 @@ pub enum UICommand {
     NewsHistory(NewsHistoryCommand),
     SharedConfig(SharedConfigCommand),
     HyperliquidRequestLimitState(HyperliquidRequestLimitStateCommand),
+    ProblemsState(Vec<std::sync::Arc<crate::state::KernelProblem>>),
+    ProblemNotify(std::sync::Arc<crate::state::KernelProblem>),
+    ProblemsClear,
+    ProblemsTest(String),
     Shutdown {
         uid: u64,
     },

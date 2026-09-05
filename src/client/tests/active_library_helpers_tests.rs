@@ -106,6 +106,9 @@ fn only_required_startup_payloads_are_allowed_before_domain_ready() {
         incoming_allowed_before_domain_ready(Command::UI, &[30]),
         "THLRequestLimitStateCommand is sent from SrvConnect and must not be dropped before domain_ready"
     );
+    assert!(incoming_allowed_before_domain_ready(Command::UI, &[32]));
+    assert!(incoming_allowed_before_domain_ready(Command::UI, &[33]));
+    assert!(!incoming_allowed_before_domain_ready(Command::UI, &[34]));
     assert!(
         incoming_allowed_before_domain_ready(Command::UI, &[26]),
         "live news may arrive while the one-shot SrvConnect history is still in flight"
@@ -131,7 +134,7 @@ fn only_required_startup_payloads_are_allowed_before_domain_ready() {
         &high[0].data
     ));
 
-    client.strat_send_snapshot_payload(1, 0, true, &[]);
+    client.strat_send_snapshot_payload(1, 0, true, &[], 0);
     let (sliced, _, _) = client.take_send_queues_for_test();
     assert!(
         sliced.is_empty(),

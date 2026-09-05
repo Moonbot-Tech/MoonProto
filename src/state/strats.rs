@@ -41,6 +41,9 @@ pub struct StratsState {
     /// Folder tree keyed case-insensitively.
     /// Values keep the first observed spelling of the full folder path.
     folders_by_key: HashMap<String, String>,
+    folders_last_modified: i64,
+    /// Desired complete folder tree until a matching/newer Full confirms it.
+    local_folders: Option<(i64, HashMap<String, String>)>,
     /// Full decoded strategy snapshots owned by the Active Lib.
     ///
     /// They are used both for answering core snapshot requests and for
@@ -96,6 +99,8 @@ impl StratsState {
         self.by_id.clear();
         self.order.clear();
         self.folders_by_key.clear();
+        self.folders_last_modified = 0;
+        self.local_folders = None;
         self.snapshots_by_id.clear();
         self.local_snapshots = None;
         self.local_snapshot_index.clear();

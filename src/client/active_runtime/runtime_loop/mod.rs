@@ -1273,6 +1273,510 @@ mod tests {
         assert!(client.pending_api.pending_candles.contains_key(&new_uid));
     }
 
+    fn strategy_test_list(count: u64) -> Vec<StrategySnapshot> {
+        (1..=count)
+            .map(|strategy_id| {
+                let mut fields = StrategyFields::new();
+                fields.insert(
+                    "Comment",
+                    FieldValue::String(format!("Strategy {strategy_id}")),
+                );
+                StrategySnapshot {
+                    strategy_id,
+                    strategy_ver: 1,
+                    last_date: 1234,
+                    checked: false,
+                    kind: 1,
+                    path: "Local".into(),
+                    fields,
+                }
+            })
+            .collect()
+    }
+
+    fn apply_strategy_test_list(
+        dispatcher: &mut crate::events::EventDispatcher,
+        strategies: &[StrategySnapshot],
+    ) {
+        apply_comment_strategy_schema(dispatcher);
+        let payload = crate::commands::strat::build_snapshot_from_strategies(
+            1,
+            42,
+            true,
+            dispatcher.strats().strategy_schema().unwrap(),
+            strategies,
+        );
+        dispatcher.dispatch_into(Command::Strat, &payload, 0, &mut Vec::new());
+    }
+
+    #[test]
+    fn strategy_folders_full_is_replaceable_and_old_snapshots_cannot_restore_deleted_paths() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut receiver = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let mut saved = Vec::new();
+        for paths in [
+            vec!["Empty/Nested".into()],
+            vec!["Renamed/Child".into()],
+            vec![],
+        ] {
+            handle_command(
+                &mut client,
+                &mut dispatcher,
+                RuntimeCommand::StrategyFolders {
+                    strategies: None,
+                    paths,
+                },
+                &mut pending,
+            );
+            let (sliced, high, low) = client.take_send_queues_for_test();
+            assert!(high.is_empty() && low.is_empty());
+            assert_eq!(sliced.len(), 1);
+            assert!(
+                !sliced[0].u_key.is_none(),
+                "Full still uses the existing replacement key"
+            );
+            saved.push(sliced[0].data.clone());
+        }
+        for payload in saved.iter().rev() {
+            receiver.dispatch_into(Command::Strat, payload, 0, &mut Vec::new());
+        }
+        assert_eq!(receiver.strats().folder_paths().count(), 0);
+        assert!(receiver.strats().folders_last_modified() > 0);
+        let latest = saved.last().unwrap();
+        dispatcher.dispatch_into(Command::Strat, latest, 0, &mut Vec::new());
+        assert_eq!(dispatcher.strats().folder_paths().count(), 0);
+
+        // Reconnect/request replies retain the newest complete empty tree, not a deletion event.
+        let reply = dispatcher.local_strategy_snapshot_reply().unwrap();
+        assert!(reply.full);
+        assert_eq!(
+            reply.folders_last_modified,
+            receiver.strats().folders_last_modified()
+        );
+        assert!(
+            crate::commands::strategy_serializer::parse_strategy_batch(&reply.data)
+                .unwrap()
+                .paths
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn strategy_folder_rename_applies_paths_after_rows_and_parameter_edits_remain_diffs() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut receiver = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let mut rows = strategy_test_list(3);
+        apply_strategy_test_list(&mut dispatcher, &rows);
+        apply_strategy_test_list(&mut receiver, &rows);
+        for row in &mut rows {
+            row.path = "Renamed".into();
+            row.last_date += 1;
+        }
+        handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::StrategyFolders {
+                strategies: Some(rows.clone()),
+                paths: vec!["Renamed".into(), "Empty/Child".into()],
+            },
+            &mut pending,
+        );
+        let (sliced, _, _) = client.take_send_queues_for_test();
+        assert_eq!(sliced.len(), 1);
+        let crate::commands::strat::StratCommand::Snapshot(full) =
+            crate::commands::strat::StratCommand::parse(&sliced[0].data).unwrap()
+        else {
+            panic!("Full");
+        };
+        assert!(full.full);
+        assert_eq!(
+            full.server_epoch, 42,
+            "a rename does not change linear strategy order"
+        );
+        receiver.dispatch_into(Command::Strat, &sliced[0].data, 0, &mut Vec::new());
+        dispatcher.dispatch_into(Command::Strat, &sliced[0].data, 0, &mut Vec::new());
+        let mut paths: Vec<_> = receiver.strats().folder_paths().collect();
+        paths.sort_unstable();
+        assert_eq!(paths, ["Empty", "Empty/Child", "Renamed"]);
+        assert!(receiver
+            .strats()
+            .snapshots()
+            .all(|s| s.path.as_ref() == "Renamed"));
+        let date = dispatcher.strats().folders_last_modified();
+
+        rows[0].last_date += 1;
+        rows[0]
+            .fields
+            .insert("Comment", FieldValue::String("parameters only".into()));
+        handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::StrategySnapshotBatch(rows),
+            &mut pending,
+        );
+        let (sliced, _, _) = client.take_send_queues_for_test();
+        assert_eq!(sliced.len(), 1);
+        let crate::commands::strat::StratCommand::Snapshot(diff) =
+            crate::commands::strat::StratCommand::parse(&sliced[0].data).unwrap()
+        else {
+            panic!("diff");
+        };
+        assert!(!diff.full);
+        assert_eq!(diff.folders_last_modified, 0);
+        assert_eq!(
+            crate::commands::strategy_serializer::parse_strategy_batch(&diff.data)
+                .unwrap()
+                .strategies
+                .len(),
+            1
+        );
+        receiver.dispatch_into(Command::Strat, &sliced[0].data, 0, &mut Vec::new());
+        let reply = receiver.local_strategy_snapshot_reply().unwrap();
+        let batch =
+            crate::commands::strategy_serializer::parse_strategy_batch(&reply.data).unwrap();
+        assert!(
+            batch.paths.iter().any(|p| p.as_ref() == "Empty/Child"),
+            "diff must not poison the Full cache"
+        );
+        assert_eq!(reply.folders_last_modified, date);
+
+        // Missing occupied folders survive even if a newer tree omits them.
+        let empty = crate::commands::strat::build_snapshot(123, 42, 0, true, &[], date + 1);
+        receiver.dispatch_into(Command::Strat, &empty, 0, &mut Vec::new());
+        assert_eq!(
+            receiver.strats().folder_paths().collect::<Vec<_>>(),
+            ["Renamed"]
+        );
+    }
+
+    #[test]
+    fn queued_folder_full_keeps_all_paths_and_pending_edits_when_replaced() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let mut rows = strategy_test_list(2);
+        apply_strategy_test_list(&mut dispatcher, &rows);
+        for paths in [
+            vec!["Local".into(), "A".into()],
+            vec!["Local".into(), "A".into(), "B".into()],
+        ] {
+            handle_command(
+                &mut client,
+                &mut dispatcher,
+                RuntimeCommand::StrategyFolders {
+                    strategies: None,
+                    paths,
+                },
+                &mut pending,
+            );
+        }
+        rows[0].last_date += 1;
+        rows[0]
+            .fields
+            .insert("Comment", FieldValue::String("pending edit".into()));
+        handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::StrategySnapshotBatch(rows.clone()),
+            &mut pending,
+        );
+        rows.swap(0, 1);
+        handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::StrategySnapshotBatch(rows),
+            &mut pending,
+        );
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(
+            sliced.len(),
+            2,
+            "one independent diff plus the latest replaceable Full"
+        );
+        let crate::commands::strat::StratCommand::Snapshot(full) =
+            crate::commands::strat::StratCommand::parse(&sliced[1].data).unwrap()
+        else {
+            panic!("Full");
+        };
+        assert!(full.full);
+        assert!(full.folders_last_modified > 0);
+        let batch = crate::commands::strategy_serializer::parse_strategy_batch(&full.data).unwrap();
+        assert!(batch.paths.iter().any(|p| p.as_ref() == "A"));
+        assert!(batch.paths.iter().any(|p| p.as_ref() == "B"));
+        assert_eq!(
+            batch
+                .strategies
+                .iter()
+                .map(|s| s.strategy_id)
+                .collect::<Vec<_>>(),
+            [2, 1]
+        );
+        assert_eq!(
+            batch.strategies[1].fields.get("Comment"),
+            Some(&FieldValue::String("pending edit".into()))
+        );
+    }
+
+    #[test]
+    fn legacy_and_malformed_full_cannot_change_versioned_empty_folders() {
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let data =
+            crate::commands::strategy_serializer::StrategyBatchBuilder::folder_payload(vec![
+                "Keep/Nested".into(),
+            ]);
+        let payload = crate::commands::strat::build_snapshot(1, 1, 0, true, &data, 100);
+        dispatcher.dispatch_into(Command::Strat, &payload, 0, &mut Vec::new());
+        let mut legacy = crate::commands::strat::build_snapshot(2, 200, 0, true, &[], 0);
+        legacy.truncate(legacy.len() - 8);
+        dispatcher.dispatch_into(Command::Strat, &legacy, 0, &mut Vec::new());
+        let malformed = crate::commands::strat::build_snapshot(3, 300, 0, true, &[0xff], 200);
+        dispatcher.dispatch_into(Command::Strat, &malformed, 0, &mut Vec::new());
+        assert_eq!(dispatcher.strats().folders_last_modified(), 100);
+        assert_eq!(dispatcher.strats().folder_paths().count(), 2);
+        assert!(dispatcher
+            .strats()
+            .folder_paths()
+            .any(|p| p == "Keep/Nested"));
+    }
+
+    #[test]
+    fn strategy_parameter_edit_sends_one_row_out_of_1000_and_keeps_full_reply() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let mut strategies = strategy_test_list(1000);
+        strategies[999].last_date = 9000;
+        apply_strategy_test_list(&mut dispatcher, &strategies);
+
+        handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::StrategySnapshotBatch(strategies.clone()),
+            &mut pending,
+        );
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(
+            sliced.is_empty() && high.is_empty() && low.is_empty(),
+            "unchanged list must not send"
+        );
+
+        strategies[777].last_date += 1;
+        strategies[777]
+            .fields
+            .insert("Comment", FieldValue::String("edited".into()));
+        let before = crate::MoonTime::now();
+        handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::StrategySnapshotBatch(strategies.clone()),
+            &mut pending,
+        );
+        let after = crate::MoonTime::now();
+        let submitted = dispatcher
+            .strats()
+            .strategy_edit(778)
+            .unwrap()
+            .submitted_at();
+        assert!(
+            submitted >= before && submitted <= after,
+            "submitted_at must be UTC, not client uptime"
+        );
+
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(sliced.len(), 1);
+        assert!(sliced[0].u_key.is_none());
+        let crate::commands::strat::StratCommand::Snapshot(snapshot) =
+            crate::commands::strat::StratCommand::parse(&sliced[0].data).unwrap()
+        else {
+            panic!("snapshot");
+        };
+        assert!(!snapshot.full);
+        assert_eq!(snapshot.server_epoch, 0);
+        assert_eq!(
+            snapshot.client_max_last_date, 1235,
+            "only transmitted rows contribute to max date"
+        );
+        let batch =
+            crate::commands::strategy_serializer::parse_strategy_batch(&snapshot.data).unwrap();
+        assert_eq!(batch.strategies.len(), 1);
+        assert_eq!(batch.strategies[0].strategy_id, 778);
+        assert_eq!(
+            batch.strategies[0].fields.get("Comment"),
+            strategies[777].fields.get("Comment")
+        );
+
+        let mut events = Vec::new();
+        dispatcher.dispatch_into(Command::Strat, &sliced[0].data, 0, &mut events);
+        assert!(dispatcher.strats().strategy_edit(778).is_none());
+        assert!(events.iter().any(|event| matches!(event,
+            crate::events::Event::Strat(crate::state::StratEvent::EditConfirmed { strategy_ids })
+                if strategy_ids == &[778])));
+        assert_eq!(dispatcher.strats().last_modified(), 42);
+        assert_eq!(dispatcher.local_strategy_epoch(), 42);
+        assert_eq!(
+            dispatcher
+                .strats()
+                .snapshots()
+                .map(|s| s.strategy_id)
+                .collect::<Vec<_>>(),
+            (1..=1000).collect::<Vec<_>>()
+        );
+
+        let reply = dispatcher.local_strategy_snapshot_reply().unwrap();
+        assert!(reply.full);
+        assert_eq!(reply.server_epoch, 42);
+        assert_eq!(reply.client_max_last_date, 9000);
+        let full = crate::commands::strategy_serializer::parse_strategy_batch(&reply.data).unwrap();
+        assert_eq!(
+            full.strategies.len(),
+            1000,
+            "diff must not replace the Full reply cache"
+        );
+        assert_eq!(
+            full.strategies[777].fields.get("Comment"),
+            strategies[777].fields.get("Comment")
+        );
+
+        handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::StrategySnapshotBatch(strategies),
+            &mut pending,
+        );
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(
+            sliced.is_empty() && high.is_empty() && low.is_empty(),
+            "confirmed edit must not be resent"
+        );
+    }
+
+    #[test]
+    fn strategy_diffs_and_pending_reorder_survive_reverse_delivery() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut receiver = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let mut strategies = strategy_test_list(3);
+        apply_strategy_test_list(&mut dispatcher, &strategies);
+        apply_strategy_test_list(&mut receiver, &strategies);
+
+        for index in 0..2 {
+            strategies[index].last_date += 1;
+            strategies[index]
+                .fields
+                .insert("Comment", FieldValue::String(format!("edited {index}")));
+            handle_command(
+                &mut client,
+                &mut dispatcher,
+                RuntimeCommand::StrategySnapshotBatch(strategies.clone()),
+                &mut pending,
+            );
+        }
+        strategies.swap(0, 1);
+        handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::StrategySnapshotBatch(strategies.clone()),
+            &mut pending,
+        );
+
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(
+            sliced.len(),
+            3,
+            "independent partials must survive the Full enqueue"
+        );
+        for (index, item) in sliced.iter().enumerate() {
+            let crate::commands::strat::StratCommand::Snapshot(snapshot) =
+                crate::commands::strat::StratCommand::parse(&item.data).unwrap()
+            else {
+                panic!("snapshot");
+            };
+            let batch =
+                crate::commands::strategy_serializer::parse_strategy_batch(&snapshot.data).unwrap();
+            let expected: &[u64] = match index {
+                0 => &[1],
+                1 => &[1, 2],
+                _ => &[2, 1, 3],
+            };
+            assert_eq!(
+                batch
+                    .strategies
+                    .iter()
+                    .map(|s| s.strategy_id)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(snapshot.full, index == 2);
+            assert_eq!(item.u_key.is_none(), index != 2);
+        }
+        for item in sliced.iter().rev() {
+            receiver.dispatch_into(Command::Strat, &item.data, 0, &mut Vec::new());
+            dispatcher.dispatch_into(Command::Strat, &item.data, 0, &mut Vec::new());
+        }
+        for state in [&receiver, &dispatcher] {
+            assert_eq!(
+                state
+                    .strats()
+                    .snapshots()
+                    .map(|s| s.strategy_id)
+                    .collect::<Vec<_>>(),
+                [2, 1, 3]
+            );
+            assert_eq!(
+                state.strats().last_modified(),
+                dispatcher.local_strategy_epoch()
+            );
+            for strategy in &strategies {
+                let actual = state.strats().snapshot(strategy.strategy_id).unwrap();
+                assert_eq!(actual.last_date, strategy.last_date);
+                assert_eq!(actual.fields.get("Comment"), strategy.fields.get("Comment"));
+                assert!(state.strats().strategy_edit(strategy.strategy_id).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn strategy_obsolete_draft_does_not_send_stale_rows() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let mut strategies = strategy_test_list(2);
+        apply_strategy_test_list(&mut dispatcher, &strategies);
+        strategies[0].last_date -= 1;
+        strategies[0]
+            .fields
+            .insert("Comment", FieldValue::String("stale".into()));
+        handle_command(
+            &mut client,
+            &mut dispatcher,
+            RuntimeCommand::StrategySnapshotBatch(strategies),
+            &mut pending,
+        );
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(sliced.is_empty() && high.is_empty() && low.is_empty());
+        assert!(dispatcher
+            .take_queued_events()
+            .iter()
+            .any(|event| matches!(event,
+            crate::events::Event::Strat(crate::state::StratEvent::EditSuperseded { strategy_ids })
+                if strategy_ids == &[1])));
+        let reply = dispatcher.local_strategy_snapshot_reply().unwrap();
+        let full = crate::commands::strategy_serializer::parse_strategy_batch(&reply.data).unwrap();
+        assert_eq!(full.strategies[0].last_date, 1234);
+        assert_eq!(
+            full.strategies[0].fields.get("Comment"),
+            Some(&FieldValue::String("Strategy 1".into()))
+        );
+    }
+
     #[test]
     fn post_connect_strategy_sync_advances_local_epoch_before_snapshot_send() {
         let mut client = ready_client();
@@ -1440,6 +1944,50 @@ mod tests {
         assert_eq!(
             sliced[0].data.get(11).copied(),
             Some(crate::commands::engine_api::EngineMethod::UnsubscribeAllTrades.to_byte())
+        );
+    }
+
+    #[test]
+    fn problems_intents_defer_until_ready_and_use_encrypted_high_without_local_clear() {
+        let mut client = Client::new(dummy_cfg());
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let (tx, rx) = mpsc::channel();
+        for cmd in [
+            UiRuntimeCommand::ProblemsClear,
+            UiRuntimeCommand::ProblemsTest("firetest".into()),
+        ] {
+            tx.send(RuntimeCommand::Ui(cmd)).unwrap();
+        }
+        let mut deferred = VecDeque::new();
+        drain_commands_during_startup(&rx, &mut deferred);
+        assert_eq!(deferred.len(), 2);
+        let queues = client.take_send_queues_for_test();
+        assert!(queues.0.is_empty() && queues.1.is_empty() && queues.2.is_empty());
+
+        client.testing_set_domain_ready(true);
+        let (_, changed) = drain_deferred_and_live_commands(
+            &mut client,
+            &mut dispatcher,
+            &rx,
+            &mut pending,
+            &mut deferred,
+        );
+        assert!(!changed, "only inbound state may confirm a clear");
+        assert!(!dispatcher.settings.problems.snapshot_received());
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(sliced.is_empty() && low.is_empty());
+        assert_eq!(high.len(), 2);
+        assert!(high
+            .iter()
+            .all(|item| item.encrypted && item.cmd == Command::UI.to_byte()));
+        assert_eq!(high[0].data[0], 34);
+        assert_eq!(high[0].data.len(), 11);
+        assert_eq!(high[1].data[0], 35);
+        assert_eq!(&high[1].data[11..], b"\x08\x00firetest");
+        assert!(
+            matches!(crate::commands::ui::UICommand::parse(&high[1].data),
+            Some(crate::commands::ui::UICommand::ProblemsTest(text)) if text == "firetest")
         );
     }
 

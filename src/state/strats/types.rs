@@ -22,6 +22,7 @@ pub(crate) struct StrategyEditStageOutcome {
 pub(crate) struct StrategySnapshotApplyOutcome {
     pub count: usize,
     pub order: Vec<u64>,
+    pub paths: Vec<Arc<str>>,
     pub confirmed: Vec<u64>,
     pub adjusted: Vec<u64>,
     pub superseded: Vec<u64>,

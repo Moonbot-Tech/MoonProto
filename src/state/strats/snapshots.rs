@@ -68,13 +68,13 @@ impl StratsState {
 
     fn update_snapshot_payload_cache_after_apply(
         &mut self,
-        applied_count: usize,
+        decoded: (usize, &[Arc<str>]),
         client_max_last_date: u64,
         deflate_data: &[u8],
         changed: bool,
         skipped_old: bool,
     ) {
-        if self.local_snapshots.is_some() {
+        if self.local_snapshots.is_some() || self.local_folders.is_some() {
             if changed {
                 self.invalidate_snapshot_payload_cache();
             }
@@ -88,8 +88,21 @@ impl StratsState {
             return;
         }
 
-        if applied_count == self.snapshots_by_id.len() {
-            self.set_snapshot_payload_cache_from_wire(client_max_last_date, deflate_data);
+        if decoded.0 == self.snapshots_by_id.len() {
+            let mut paths = HashMap::new();
+            for path in decoded.1 {
+                Self::add_folder_path(&mut paths, path);
+            }
+            if paths.len() == self.folders_by_key.len()
+                && self
+                    .folders_by_key
+                    .keys()
+                    .all(|key| paths.contains_key(key))
+            {
+                self.set_snapshot_payload_cache_from_wire(client_max_last_date, deflate_data);
+            } else {
+                self.invalidate_snapshot_payload_cache();
+            }
         } else if changed {
             self.invalidate_snapshot_payload_cache();
         }
@@ -446,7 +459,7 @@ impl StratsState {
             changed |= self.apply_server_snapshot(s.clone(), &mut outcome);
         }
         self.update_snapshot_payload_cache_after_apply(
-            count,
+            (count, &batch.paths),
             client_max_last_date,
             deflate_data,
             changed,
@@ -480,7 +493,7 @@ impl StratsState {
         let skipped_old = Cell::new(false);
         let mut order = Vec::new();
         let mut outcome = StrategySnapshotApplyOutcome::default();
-        outcome.count = parse_strategy_batch_for_each_with_schema_field_types_skip_old(
+        let (count, paths) = parse_strategy_batch_for_each_with_schema_field_types_skip_old(
             deflate_data,
             field_types.as_deref(),
             |strategy_id, strategy_ver, last_date| {
@@ -510,9 +523,11 @@ impl StratsState {
                 changed |= self.apply_server_snapshot(s, &mut outcome);
             },
         )?;
+        outcome.count = count;
+        outcome.paths = paths;
         outcome.order = order;
         self.update_snapshot_payload_cache_after_apply(
-            outcome.count,
+            (outcome.count, &outcome.paths),
             client_max_last_date.get(),
             deflate_data,
             changed,
@@ -547,7 +562,9 @@ impl StratsState {
         if local_len == 0 {
             let cache = Arc::new(StrategySnapshotPayloadCache {
                 client_max_last_date: 0,
-                data: crate::commands::strategy_serializer::StrategyBatchBuilder::empty_payload(),
+                data: crate::commands::strategy_serializer::StrategyBatchBuilder::folder_payload(
+                    self.outgoing_folder_paths(),
+                ),
             });
             self.snapshot_payload_cache = Some(Arc::clone(&cache));
             return Some(cache);
@@ -568,6 +585,9 @@ impl StratsState {
             for strategy in self.snapshots() {
                 write_strategy(strategy);
             }
+        }
+        for path in self.outgoing_folder_paths() {
+            builder.path_index(&path);
         }
         let cache = Arc::new(StrategySnapshotPayloadCache {
             client_max_last_date,

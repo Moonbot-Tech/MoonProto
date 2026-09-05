@@ -78,6 +78,7 @@ pub(crate) enum ActiveAction {
         client_max_last_date: u64,
         full: bool,
         data: Vec<u8>,
+        folders_last_modified: i64,
     },
     RequestOrderStatus {
         order_id: u64,
@@ -204,6 +205,7 @@ impl EventDispatcher {
             // ring first; live frames that overtake the sliced history are then
             // merged after that history by NewsState::apply_history.
             self.news.clear_for_hard_session();
+            self.settings.problems = Default::default();
             log::info!(target: "moonproto::events",
                 "ServerToken changed ({:#x} -> {:#x}) - trades/orderbook/news session state reset",
                 self.last_known_server_token, current_token);
@@ -214,6 +216,7 @@ impl EventDispatcher {
             && self.last_known_peer_app_token != ctx.peer_app_token
         {
             self.news.clear_for_new_world();
+            self.settings.problems = Default::default();
             self.markets.clear_session_profits_for_new_world();
         }
         self.last_known_peer_app_token = ctx.peer_app_token;
@@ -399,6 +402,7 @@ impl EventDispatcher {
                         client_max_last_date: snapshot.client_max_last_date,
                         full: snapshot.full,
                         data: snapshot.data,
+                        folders_last_modified: snapshot.folders_last_modified,
                     });
                 } else {
                     self.pending_strategy_snapshot_request_uid = Some(uid);
@@ -416,6 +420,7 @@ impl EventDispatcher {
                         client_max_last_date: snapshot.client_max_last_date,
                         full: snapshot.full,
                         data: snapshot.data,
+                        folders_last_modified: snapshot.folders_last_modified,
                     });
                 } else {
                     self.pending_strategy_snapshot_request_uid = Some(uid);
@@ -460,5 +465,6 @@ fn is_pre_init_state_payload(cmd: Command, payload: &[u8]) -> bool {
             if crate::commands::ui::is_runtime_state_payload(payload)
                 || crate::commands::ui::is_kernel_license_state_payload(payload)
                 || crate::commands::ui::is_news_payload(payload)
+                || crate::commands::ui::is_problems_payload(payload)
     )
 }

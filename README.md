@@ -181,6 +181,7 @@ Public API notes live in [`docs/`](docs). Start here:
 | [markets](docs/markets.md) · [trades](docs/trades.md) · [order_books](docs/order_books.md) | Market data read-models. |
 | [orders](docs/orders.md) · [candles](docs/candles.md) · [reports](docs/reports.md) | Orders, candle history, reports. |
 | [news](docs/news.md) | Retained/live news JSON and the tags catalog. |
+| [problems](docs/problems.md) | Confirmed core diagnostics, notifications, clear and test actions. |
 | [engine_api](docs/engine_api.md) · [strats](docs/strats.md) | Server/exchange mutations and strategies. |
 | [time](docs/time.md) · [multi_server](docs/multi_server.md) | Clock handling and multi-server setups. |
 

@@ -24,6 +24,7 @@ pub(crate) struct StrategySnapshotReply {
     pub client_max_last_date: u64,
     pub full: bool,
     pub data: Vec<u8>,
+    pub folders_last_modified: i64,
 }
 
 impl StrategySnapshotReply {
@@ -48,6 +49,7 @@ impl StrategySnapshotReply {
             client_max_last_date,
             full,
             data,
+            folders_last_modified: 0,
         }
     }
 }

@@ -11,6 +11,7 @@
 //! - `KernelLicenseState`: license/module/MoonCredits state.
 //! - `ProfitState`: report/profit counters shown by MoonBot settings UI.
 //! - HyperLiquid request limit: remaining address-level action requests.
+//! - Core diagnostic problems: confirmed detector findings, full lists and new facts.
 //! - `ArbActivateNotify`: arbitrage-valid-until timestamp.
 //!
 //! Client->server action commands (`SettingsRequest`, `StratStartStop`,
@@ -62,6 +63,8 @@ pub struct SettingsState {
     /// `None` means the core has not published a value yet or the connected
     /// core is not HyperLiquid.
     pub hyperliquid_requests_left: Option<u64>,
+    /// Confirmed diagnostic problems reported by the core.
+    pub problems: super::ProblemsState,
     /// Raw `TDateTime` days for diagnostics/parity tests.
     ///
     /// Normal terminal code should use [`Self::arb_valid_until_time`] and
@@ -90,6 +93,12 @@ pub enum SettingsEvent {
     ProfitStateUpdated,
     /// Remaining HyperLiquid address-level action requests changed.
     HyperliquidRequestLimitUpdated,
+    /// A complete core diagnostic list replaced the retained list, including clears.
+    ProblemsUpdated,
+    /// A newly confirmed core problem was applied to the retained list.
+    ProblemConfirmed {
+        problem: std::sync::Arc<super::KernelProblem>,
+    },
     /// Remote update command: version name + release/test flag.
     ///
     /// Terminal clients treat this as a request to run their local updater. The
@@ -257,6 +266,8 @@ impl SettingsState {
             | UICommand::AutoDetect(_)
             | UICommand::NewsRelay(_)
             | UICommand::NewsHistory(_)
+            | UICommand::ProblemsClear
+            | UICommand::ProblemsTest(_)
             | UICommand::Shutdown { .. } => None,
 
             UICommand::UpdateVersion(u) => Some(SettingsEvent::VersionUpdate {
@@ -292,6 +303,16 @@ impl SettingsState {
             UICommand::HyperliquidRequestLimitState(s) => {
                 self.hyperliquid_requests_left = s.requests_left;
                 Some(SettingsEvent::HyperliquidRequestLimitUpdated)
+            }
+
+            UICommand::ProblemsState(items) => {
+                self.problems.apply_snapshot(items);
+                Some(SettingsEvent::ProblemsUpdated)
+            }
+            UICommand::ProblemNotify(problem) => {
+                self.problems
+                    .apply_notification(std::sync::Arc::clone(&problem));
+                Some(SettingsEvent::ProblemConfirmed { problem })
             }
 
             UICommand::ArbActivateNotify(a) => {

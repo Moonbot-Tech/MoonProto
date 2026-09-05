@@ -91,6 +91,7 @@ See [strategies](strats.md), [UI and settings](ui.md), and [events](events.md).
 | Runtime state | Whether the market runtime is started and whether AutoDetect is active. | Read `snapshot.settings().runtime_state`; `restart_now()` requests the normal start/restart flow. |
 | License and MoonCredits | Current core license/module permissions and MoonCredits balances. | Read `snapshot.settings().kernel_license_state`; refresh with `client.settings().request_kernel_license_state()`. |
 | Core health | Core process CPU/memory, host CPU/free memory, logical CPU count, client/core RTT, and core/exchange order API request latency. | `Event::KernelHealth` and `snapshot.kernel_health()`. |
+| Core diagnostic problems | Confirmed detector findings, including memory, network, and exchange restrictions. | `snapshot.settings().problems`, `SettingsEvent::ProblemConfirmed` / `ProblemsUpdated`, `client.settings().clear_problems()` / `test_problem(...)`; see [problems](problems.md). |
 | News and tags | Retained/live news JSON with same-ID translation updates plus the latest complete tags catalog. | `Event::News` and `snapshot.news()`. |
 | Server logs | Authenticated core log lines for terminal logs. | `Event::ServerLog`. |
 | Remote administration | Ask the core to run its release/named update flow, switch DEX/Spot selection, or shut down when no active take/sell order exists. | Use the typed methods on `client.settings()`; core shutdown is a one-shot request without an acknowledgement. |

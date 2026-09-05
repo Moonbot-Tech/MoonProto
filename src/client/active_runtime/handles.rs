@@ -988,6 +988,28 @@ impl MoonSettings<'_> {
         self.client.request_core_shutdown()
     }
 
+    /// Clear all confirmed problems and pending detector hypotheses on the core.
+    /// All terminals receive a fresh list. Local state changes only on that reply;
+    /// a still-present cause can subsequently produce a new problem.
+    pub fn clear_problems(&self) -> Result<(), MoonClientError> {
+        self.client
+            .send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::ProblemsClear))
+    }
+
+    /// Publish a test problem through the core's normal detector worker.
+    ///
+    /// The worker processes signals about every two seconds. Only the first
+    /// confirmation of the `test` kind sends a notification; further calls
+    /// update the existing core row until problems are cleared. The core's
+    /// signal buffer keeps at most 200 characters in its legacy text encoding;
+    /// short ASCII text is recommended for an exact test marker.
+    pub fn test_problem(&self, text: impl Into<String>) -> Result<(), MoonClientError> {
+        self.client
+            .send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::ProblemsTest(
+                text.into(),
+            )))
+    }
+
     /// Request the latest license/module/MoonCredits state from the core.
     ///
     /// The server also sends this state after connect. Use this method for a
@@ -1464,6 +1486,7 @@ impl MoonStrategies<'_> {
     /// Synchronize the application's current local strategy list.
     /// The vector defines global order. A changed sequence is sent as one Full
     /// snapshot with a library-assigned order date; row edit dates remain separate.
+    /// Without a reorder, only changed strategies are sent; an unchanged confirmed list is a no-op.
     ///
     /// Core-confirmed snapshots remain unchanged until the core echoes an
     /// accepted revision. Use `snapshot.strategy_edit(id)` and `StratEvent`'s
@@ -1474,6 +1497,55 @@ impl MoonStrategies<'_> {
         strategies: Vec<crate::commands::strategy_serializer::StrategySnapshot>,
     ) -> Result<(), MoonClientError> {
         self.client.send_strategy_snapshot_batch(strategies)
+    }
+
+    /// Submit the complete desired folder tree without changing strategy contents/order.
+    /// Omitted empty folders are removed. Parents and occupied folders are preserved.
+    /// Requires a first versioned folder snapshot from the core; confirmation
+    /// arrives through `SnapshotFull` and `snapshot.strats().folder_paths()`.
+    pub fn sync_local_folders(&self, paths: Vec<String>) -> Result<(), MoonClientError> {
+        self.send_folders(None, paths)
+    }
+
+    /// Submit strategy edits and the complete desired folder tree in one Full.
+    /// Use for renames/moves: update each affected strategy's path and edit date,
+    /// and replace the old folder paths in `paths`. Strategy deletion remains explicit.
+    pub fn sync_local_strategies_with_folders(
+        &self,
+        strategies: Vec<crate::commands::strategy_serializer::StrategySnapshot>,
+        paths: Vec<String>,
+    ) -> Result<(), MoonClientError> {
+        self.send_folders(Some(strategies), paths)
+    }
+
+    fn send_folders(
+        &self,
+        strategies: Option<Vec<crate::commands::strategy_serializer::StrategySnapshot>>,
+        paths: Vec<String>,
+    ) -> Result<(), MoonClientError> {
+        let snapshot = self
+            .client
+            .snapshot()
+            .ok_or(MoonClientError::StateUnavailable(
+                "strategy state is not ready",
+            ))?;
+        if snapshot.strats().folders_last_modified() == 0 {
+            return Err(MoonClientError::StateUnavailable(
+                "a versioned strategy folder tree has not arrived",
+            ));
+        }
+        let folder_paths = paths.iter().map(String::as_str);
+        if let Some(rows) = &strategies {
+            validate_strategy_folder_paths(
+                folder_paths.chain(rows.iter().map(|s| s.path.as_ref())),
+            )?;
+        } else {
+            validate_strategy_folder_paths(
+                folder_paths.chain(snapshot.strats().snapshots().map(|s| s.path.as_ref())),
+            )?;
+        }
+        self.client
+            .send_no_reply(RuntimeCommand::StrategyFolders { strategies, paths })
     }
 
     /// Change a local strategy checked flag in the active runtime state.
@@ -1497,9 +1569,67 @@ impl MoonStrategies<'_> {
     }
 }
 
+fn validate_strategy_folder_paths<'a>(
+    paths: impl Iterator<Item = &'a str>,
+) -> Result<(), MoonClientError> {
+    let mut unique = std::collections::HashSet::new();
+    for path in paths {
+        if path.len() > usize::from(u8::MAX) || path.contains(['\r', '\n', '\0', '"']) {
+            return Err(MoonClientError::InvalidStrategyFolders(
+                "paths must fit 255 UTF-8 bytes and contain no quotes/control characters",
+            ));
+        }
+        if path.is_empty() {
+            continue;
+        }
+        let mut prefix = String::new();
+        for part in path.split('/') {
+            if part.is_empty() || part.trim() != part {
+                return Err(MoonClientError::InvalidStrategyFolders(
+                    "folder names must be nonempty and have no surrounding whitespace",
+                ));
+            }
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(part);
+            unique.insert(prefix.to_lowercase());
+        }
+    }
+    // The root path also occupies a dictionary entry when it contains strategies.
+    if unique.len() >= usize::from(u16::MAX) {
+        return Err(MoonClientError::InvalidStrategyFolders(
+            "too many folder paths for the snapshot dictionary",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strategy_folder_paths_validate_wire_bytes_and_delphi_path_syntax() {
+        assert!(validate_strategy_folder_paths(["", "A/B", "a/b"].into_iter()).is_ok());
+        let max = "a".repeat(255);
+        assert!(validate_strategy_folder_paths([max.as_str()].into_iter()).is_ok());
+        for path in [
+            "a".repeat(256),
+            "\u{e9}".repeat(128),
+            "a//b".into(),
+            "a/".into(),
+            " spaced".into(),
+            "a\"b".into(),
+            "a\nb".into(),
+            "a\0b".into(),
+        ] {
+            assert!(
+                validate_strategy_folder_paths([path.as_str()].into_iter()).is_err(),
+                "{path:?}"
+            );
+        }
+    }
 
     fn at_ms(base: crate::MoonTime, delta_ms: i64) -> crate::MoonTime {
         crate::MoonTime::from_unix_millis(base.unix_millis() + delta_ms)
