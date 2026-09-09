@@ -5,6 +5,8 @@ settings snapshots, strategy start/stop, market-maker subscription, version
 update control, leverage management, trigger management, DEX/spot switching, and
 arb activation notifications. It also carries retained runtime, license, and
 profit-counter state and [confirmed core diagnostics](problems.md).
+The core's Telegram account and service have a separate typed handle,
+`client.telegram()`; see [Telegram login and controls](telegram.md).
 
 Applications normally receive UI updates through `Event::Settings` and send
 user intents through `MoonClient` settings/update/switch helpers.

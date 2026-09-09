@@ -9555,6 +9555,51 @@ fn fire_test_core_problems() {
 }
 
 #[test]
+#[ignore = "live MoonBot with Telegram control required; read-only, no account changes"]
+fn fire_test_telegram_state() {
+    let _live_test_lock = firetest_live_test_lock();
+    let cfg = FireConfig::load_required();
+    let keys = parse_key_info(&cfg.key_b64).expect("invalid FireTest key").keys;
+    let _err_emu = ErrEmuGuard::set(0);
+    for connection in 1..=2 {
+        let client = MoonClient::connect_blocking(
+            ClientConfig::new(&cfg.host, cfg.port, keys.master_key, keys.mac_key)
+                .with_transport_mode(cfg.transport_mode).with_client_id(rand::random()),
+            ConnectConfig::new(InitConfig::default()).with_connect_timeout(cfg.connect_timeout),
+            cfg.connect_timeout + cfg.wait,
+        ).expect("Telegram read-only connection failed");
+        let deadline = Instant::now() + cfg.wait;
+        while client.telegram().state().is_none() && Instant::now() < deadline {
+            std::thread::sleep(PUMP_SLICE);
+        }
+        let initial = client.telegram().state().expect("missing initial Telegram snapshot");
+        client.drain_events();
+        client.telegram().refresh().unwrap();
+        let deadline = Instant::now() + cfg.wait;
+        let mut refreshed = false;
+        while Instant::now() < deadline {
+            let updated = client.drain_events().iter().any(|event|
+                matches!(event, Event::Settings(SettingsEvent::TelegramUpdated)));
+            if updated && client.telegram().state().is_some_and(|s| !Arc::ptr_eq(&initial, &s)) {
+                refreshed = true;
+                break;
+            }
+            std::thread::sleep(PUMP_SLICE);
+        }
+        assert!(refreshed, "passive Telegram refresh did not return a new full snapshot");
+        let state = client.telegram().state().unwrap();
+        println!("OK: FIRETEST Telegram connection={connection}: initial + addressed refresh, enabled={} service_online={} state_supported={}",
+            state.enabled, state.service_online, state.state_supported);
+        if !state.enabled || !state.state_supported {
+            println!("FIRETEST Telegram login unavailable: service disabled or full auth state not supported");
+        }
+        println!("FIRETEST Telegram account mutations SKIPPED: phone/QR/codes/password/proxy/logout require explicit user interaction");
+        client.disconnect().unwrap();
+        client.wait_finished().unwrap();
+    }
+}
+
+#[test]
 #[ignore = "live MoonBot server required; create ../moonproto.firetest.conf"]
 fn fire_test_active_library_health() {
     let _live_test_lock = firetest_live_test_lock();

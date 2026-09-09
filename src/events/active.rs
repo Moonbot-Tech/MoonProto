@@ -206,6 +206,7 @@ impl EventDispatcher {
             // merged after that history by NewsState::apply_history.
             self.news.clear_for_hard_session();
             self.settings.problems = Default::default();
+            self.settings.telegram = None;
             log::info!(target: "moonproto::events",
                 "ServerToken changed ({:#x} -> {:#x}) - trades/orderbook/news session state reset",
                 self.last_known_server_token, current_token);
@@ -217,6 +218,7 @@ impl EventDispatcher {
         {
             self.news.clear_for_new_world();
             self.settings.problems = Default::default();
+            self.settings.telegram = None;
             self.markets.clear_session_profits_for_new_world();
         }
         self.last_known_peer_app_token = ctx.peer_app_token;
@@ -466,5 +468,6 @@ fn is_pre_init_state_payload(cmd: Command, payload: &[u8]) -> bool {
                 || crate::commands::ui::is_kernel_license_state_payload(payload)
                 || crate::commands::ui::is_news_payload(payload)
                 || crate::commands::ui::is_problems_payload(payload)
+                || crate::commands::ui::is_telegram_state_payload(payload)
     )
 }

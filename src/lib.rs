@@ -172,7 +172,7 @@ pub use client::{
     InitialStrategies, LifecycleEvent, LiveCandleSubscription, MoonAccount, MoonBalances,
     MoonCandles, MoonChartAlerts, MoonChartText, MoonClient, MoonClientError, MoonClientEvent,
     MoonClientSnapshot, MoonEmulator, MoonEventQueue, MoonEventSink, MoonHistory, MoonOrders,
-    MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade, NewOrderParams,
+    MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTelegram, MoonTrade, NewOrderParams,
     NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams, RefreshConfig, SellOrderParams,
     SplitOrderParams, StartupState, StartupStatus, TradeContextError, TradesStreamMode,
     TradesSubscription, TransportMode, VStopParams,

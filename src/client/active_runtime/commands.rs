@@ -117,6 +117,7 @@ pub(super) enum UiRuntimeCommand {
     Shutdown,
     ProblemsClear,
     ProblemsTest(String),
+    Telegram(crate::commands::ui::TelegramAction),
     KernelLicenseStateRequest,
     AutoDetect(bool),
 }
@@ -280,6 +281,7 @@ impl UiRuntimeCommand {
             Self::Shutdown => (42, 0),
             Self::ProblemsClear => (43, 0),
             Self::ProblemsTest(_) => (44, 1),
+            Self::Telegram(_) => (45, 1),
             Self::KernelLicenseStateRequest => (36, 0),
             Self::AutoDetect(_) => (37, 0),
             Self::SharedConfigRequest => (38, 0),

@@ -446,6 +446,10 @@ for the same active trades scope instead of leaving the scope stuck forever.
 
 ## UI Settings Request
 
+For the core's Telegram login and service controls, use `client.telegram()` and
+`SettingsEvent::TelegramUpdated`. The [Telegram guide](telegram.md) covers phone/QR,
+codes, 2FA, proxy, errors and reconnect. Its snapshots do not block `Ready`.
+
 Confirmed core diagnostics are separate from settings refresh:
 `snapshot.settings().problems` receives its initial list automatically without
 blocking `Ready`. Use `client.settings().clear_problems()` and `test_problem(...)`

@@ -183,6 +183,7 @@ Public API notes live in [`docs/`](docs). Start here:
 | [orders](docs/orders.md) · [candles](docs/candles.md) · [reports](docs/reports.md) | Orders, candle history, reports. |
 | [news](docs/news.md) | Retained/live news JSON and the tags catalog. |
 | [problems](docs/problems.md) | Confirmed core diagnostics, notifications, clear and test actions. |
+| [Telegram](docs/telegram.md) | Core Telegram reader setup: phone/QR login, codes, 2FA, proxy and logout. |
 | [engine_api](docs/engine_api.md) · [strats](docs/strats.md) | Server/exchange mutations and strategies. |
 | [time](docs/time.md) · [multi_server](docs/multi_server.md) | Clock handling and multi-server setups. |
 

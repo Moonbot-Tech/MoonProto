@@ -36,6 +36,8 @@
 //! - 33 - `TProblemNotifyCommand`   (High, newly confirmed problem)
 //! - 34 - `TProblemsClearCommand`  (High, clear all core problems)
 //! - 35 - `TProblemsTestCommand`   (High, publish a test problem)
+//! - 36 - `TTelegramStateCommand`  (Sliced, complete Telegram service/auth state)
+//! - 37..48 - Telegram state request and explicit account/service actions (High)
 //!
 //! ## ASCfg / ASCfg2 blobs
 //! `TAutoStartConfig` (104 bytes) and `TAutoStartConfig2` (168 bytes) are
@@ -61,6 +63,8 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
 mod builders;
 mod parser;
+mod telegram;
+pub(crate) use telegram::TelegramAction;
 
 use crate::time::MoonTime;
 #[cfg(test)]
@@ -113,6 +117,12 @@ const CMD_PROBLEMS_STATE: u8 = 32;
 const CMD_PROBLEM_NOTIFY: u8 = 33;
 const CMD_PROBLEMS_CLEAR: u8 = 34;
 const CMD_PROBLEMS_TEST: u8 = 35;
+const CMD_TELEGRAM_STATE: u8 = 36;
+
+#[inline]
+pub(crate) fn is_telegram_state_payload(payload: &[u8]) -> bool {
+    payload.first().copied() == Some(CMD_TELEGRAM_STATE)
+}
 
 #[inline]
 pub(crate) fn is_problems_payload(payload: &[u8]) -> bool {
@@ -1653,6 +1663,7 @@ pub struct KernelLicenseStateCommand {
 
 #[derive(Debug, Clone)]
 pub enum UICommand {
+    TelegramState(std::sync::Arc<crate::state::TelegramState>),
     /// Full client settings snapshot. Boxed to keep the common `UICommand`
     /// envelope small when it is moved through event queues.
     ClientSettings(Box<ClientSettingsCommand>),

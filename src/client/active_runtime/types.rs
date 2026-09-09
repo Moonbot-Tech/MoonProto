@@ -446,6 +446,8 @@ pub enum MoonClientError {
     InvalidSharedConfig(crate::shared_config::SharedConfigError),
     /// Strategy folder paths cannot be represented by the core's folder tree.
     InvalidStrategyFolders(&'static str),
+    /// Telegram input cannot be represented without truncation.
+    InvalidTelegramInput(&'static str),
     /// A user-facing market name could not be resolved to the active market map.
     UnknownMarket(String),
     /// A UI emulator command cannot fit the wire `Word Count` field.
@@ -470,6 +472,7 @@ impl std::fmt::Display for MoonClientError {
             Self::StateUnavailable(reason) => write!(f, "MoonProto state is unavailable: {reason}"),
             Self::InvalidSharedConfig(err) => write!(f, "invalid MoonProto shared config: {err}"),
             Self::InvalidStrategyFolders(reason) => write!(f, "invalid strategy folders: {reason}"),
+            Self::InvalidTelegramInput(reason) => write!(f, "invalid Telegram input: {reason}"),
             Self::UnknownMarket(market) => write!(f, "MoonProto market is unknown: {market}"),
             Self::TooManyEmuTradePoints(count) => {
                 write!(
@@ -502,6 +505,7 @@ impl std::error::Error for MoonClientError {
             | Self::RequestDisconnected
             | Self::StateUnavailable(_)
             | Self::InvalidStrategyFolders(_)
+            | Self::InvalidTelegramInput(_)
             | Self::UnknownMarket(_)
             | Self::TooManyEmuTradePoints(_)
             | Self::InvalidReportSyncRequest

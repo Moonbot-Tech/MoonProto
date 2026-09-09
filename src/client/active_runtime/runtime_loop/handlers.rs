@@ -623,6 +623,10 @@ fn handle_ui_command(
             client.ui_problems_clear();
             false
         }
+        UiRuntimeCommand::Telegram(action) => {
+            client.ui_telegram(&action);
+            false
+        }
         UiRuntimeCommand::ProblemsTest(text) => {
             client.ui_problems_test(&text);
             false

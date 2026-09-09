@@ -215,6 +215,10 @@ impl Client {
         self.send_typed_domain_cmd(raw, Command::UI);
     }
 
+    pub(crate) fn ui_telegram(&self, action: &crate::commands::ui::TelegramAction) {
+        self.send_typed_domain_cmd(action.build(rand::random()), Command::UI);
+    }
+
     pub(crate) fn ui_problems_test(&self, text: &str) {
         let raw = crate::commands::ui::build_problems_test(rand::random(), text);
         self.send_typed_domain_cmd(raw, Command::UI);

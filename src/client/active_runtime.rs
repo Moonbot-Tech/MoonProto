@@ -10,6 +10,8 @@ use std::collections::VecDeque;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 mod commands;
+mod telegram;
+pub use telegram::MoonTelegram;
 mod handles;
 mod runtime_loop;
 mod types;
@@ -425,6 +427,11 @@ impl MoonClient {
     /// UI/settings command API.
     pub fn settings(&self) -> MoonSettings<'_> {
         MoonSettings { client: self }
+    }
+
+    /// Remote Telegram account setup and service controls on the core.
+    pub fn telegram(&self) -> MoonTelegram<'_> {
+        MoonTelegram { client: self }
     }
 
     /// Chart-trade emulator command API.

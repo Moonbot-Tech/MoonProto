@@ -1992,6 +1992,40 @@ mod tests {
     }
 
     #[test]
+    fn telegram_intents_defer_and_reach_encrypted_high_without_changing_auth_state() {
+        use crate::commands::ui::TelegramAction;
+        use crate::state::TelegramLoginMode;
+        let mut client = Client::new(dummy_cfg());
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let (tx, rx) = mpsc::channel();
+        for action in [
+            TelegramAction::Refresh,
+            TelegramAction::SetLoginMode(TelegramLoginMode::Qr),
+            TelegramAction::SetPassword("test-password".into()),
+            TelegramAction::Logout,
+        ] {
+            tx.send(RuntimeCommand::Ui(UiRuntimeCommand::Telegram(action))).unwrap();
+        }
+        let mut deferred = VecDeque::new();
+        drain_commands_during_startup(&rx, &mut deferred);
+        assert_eq!(deferred.len(), 4);
+        let queues = client.take_send_queues_for_test();
+        assert!(queues.0.is_empty() && queues.1.is_empty() && queues.2.is_empty());
+        client.testing_set_domain_ready(true);
+        let (_, changed) = drain_deferred_and_live_commands(
+            &mut client, &mut dispatcher, &rx, &mut pending, &mut deferred,
+        );
+        assert!(!changed);
+        assert!(dispatcher.settings.telegram.is_none());
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(sliced.is_empty() && low.is_empty());
+        assert_eq!(high.iter().map(|item| item.data[0]).collect::<Vec<_>>(), [37, 40, 43, 48]);
+        assert!(high.iter().all(|item| item.encrypted && item.cmd == Command::UI.to_byte()));
+        assert!(deferred.is_empty());
+    }
+
+    #[test]
     fn transfer_assets_batch_emits_completion_after_all_kinds_finish() {
         let mut pending = RuntimePending::default();
         pending

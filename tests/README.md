@@ -73,6 +73,10 @@ reorders with and without parameter edits.
 `fire_test_core_problems` checks diagnostic-list delivery and test notifications;
 see [its opt-in clear behavior](../docs/problems.md#firetest) before running it.
 
+`fire_test_telegram_state` is read-only: initial Telegram state, passive refresh
+and a second connection. It never starts login, changes proxy or logs out;
+see [Telegram](../docs/telegram.md#firetest).
+
 Live retained-memory warmup check (Windows only):
 
 ```powershell

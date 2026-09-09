@@ -85,7 +85,7 @@ pub use active_runtime::{
     ClosePositionParams, CoinCardCandlesTicket, EngineActionTicket, MoonAccount, MoonBalances,
     MoonCandles, MoonChartAlerts, MoonChartText, MoonClient, MoonClientError, MoonClientEvent,
     MoonClientSnapshot, MoonEmulator, MoonEventQueue, MoonEventSink, MoonHistory, MoonOrders,
-    MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade, NewOrderParams,
+    MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTelegram, MoonTrade, NewOrderParams,
     NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams, SellOrderParams, SplitOrderParams,
     TradesStreamMode, VStopParams,
 };

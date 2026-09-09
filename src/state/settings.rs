@@ -12,6 +12,7 @@
 //! - `ProfitState`: report/profit counters shown by MoonBot settings UI.
 //! - HyperLiquid request limit: remaining address-level action requests.
 //! - Core diagnostic problems: confirmed detector findings, full lists and new facts.
+//! - Telegram: complete service, proxy and authentication-step snapshot.
 //! - `ArbActivateNotify`: arbitrage-valid-until timestamp.
 //!
 //! Client->server action commands (`SettingsRequest`, `StratStartStop`,
@@ -65,6 +66,8 @@ pub struct SettingsState {
     pub hyperliquid_requests_left: Option<u64>,
     /// Confirmed diagnostic problems reported by the core.
     pub problems: super::ProblemsState,
+    /// Last full Telegram snapshot. Treat it as stale while the core is disconnected.
+    pub telegram: Option<std::sync::Arc<super::TelegramState>>,
     /// Raw `TDateTime` days for diagnostics/parity tests.
     ///
     /// Normal terminal code should use [`Self::arb_valid_until_time`] and
@@ -78,6 +81,8 @@ pub struct SettingsState {
 
 #[derive(Debug, Clone)]
 pub enum SettingsEvent {
+    /// Full Telegram snapshot replaced. This is not an acknowledgement of an action.
+    TelegramUpdated,
     /// A fresh full settings snapshot was applied.
     ClientSettingsUpdated,
     /// Leverage-management snapshot changed.
@@ -305,6 +310,10 @@ impl SettingsState {
                 Some(SettingsEvent::HyperliquidRequestLimitUpdated)
             }
 
+            UICommand::TelegramState(state) => {
+                self.telegram = Some(state);
+                Some(SettingsEvent::TelegramUpdated)
+            }
             UICommand::ProblemsState(items) => {
                 self.problems.apply_snapshot(items);
                 Some(SettingsEvent::ProblemsUpdated)

@@ -17,6 +17,8 @@ path = "tests/fire_test.rs"
 required-features = ["diagnostics"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 aes-gcm = "0.10"
 sha3 = "0.10"
 rand = "0.8"
