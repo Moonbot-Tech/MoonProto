@@ -286,6 +286,55 @@ For each page, use one SQLite transaction and reuse one prepared upsert
 statement. Preparing SQL for every row can turn the local writer into the
 bottleneck that page-level flow control is designed to avoid.
 
+## Report Timestamps
+
+The optional integer columns `BuyDateMs`, `SellSetDateMs`, and `CloseDateMs`
+preserve milliseconds from the same source times as `BuyDate`, `SellSetDate`,
+and `CloseDate`. The existing columns remain whole seconds.
+
+For ordinary trade rows:
+
+| Field | Meaning |
+| --- | --- |
+| `BuyDateMs` | Time MoonBot records the entry as completed. |
+| `SellSetDateMs` | Creation time of the exit order, not its execution time. |
+| `CloseDateMs` | Exit order close time; zero means the report row is still open. |
+
+Entry/exit meanings also apply to short positions. Funding and synthetic report
+rows use their report-creation times. These fields retain MoonBot's report
+semantics; they do not describe individual partial fills.
+
+**Clock:** both column families use the core's report clock, with no timezone
+normalization during replication. They encode the core's local date/time
+relative to the Unix epoch, not necessarily UTC. Reuse the same core-timezone
+conversion as for the existing report dates, exactly once. With a UTC-configured
+core, the millisecond values can be used directly as Unix UTC milliseconds.
+Otherwise, convert using the core's timezone before constructing a `MoonTime`
+or placing a marker on a UTC chart; do not use the terminal's timezone instead.
+
+Resolve each optional column when the schema arrives and cache its index:
+
+```rust
+let buy_date_ms_index = schema
+    .field_by_name("BuyDateMs")
+    .filter(|field| field.kind == moonproto::ReportFieldKind::Integer)
+    .map(|field| field.index);
+
+// Per row: the value is still in the core's report clock.
+let buy_date_ms = buy_date_ms_index.and_then(|index| match row.value(index) {
+    Some(moonproto::ReportValue::Integer(value)) => Some(*value),
+    _ => None,
+});
+```
+
+Old cores lack these columns. Existing historical rows are not backfilled:
+their new columns are SQL `NULL`, omitted from the received row, and read as
+`None`. Preserve that absence in the local replica. Prefer a present
+millisecond value; otherwise use the corresponding seconds value as a
+second-resolution fallback, not as a millisecond-accurate execution time.
+Handle each column independently, and never interpret `CloseDateMs=0` as an
+epoch-date marker.
+
 ## Reconnect And Checkpoint
 
 Report subscription belongs to the hard server session. Active Lib tracks the

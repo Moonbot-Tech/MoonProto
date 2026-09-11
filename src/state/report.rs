@@ -1537,6 +1537,72 @@ mod tests {
     }
 
     #[test]
+    fn appended_report_timestamps_preserve_milliseconds_nulls_and_open_sentinel() {
+        let mut state = ready_state();
+        let previous_schema = Arc::clone(state.schema().unwrap());
+        let names = ["BuyDateMs", "SellSetDateMs", "CloseDateMs"];
+        let mut raw_schema = synlz_decompress(&schema_blob()).unwrap();
+        raw_schema[1..3].copy_from_slice(&5u16.to_le_bytes());
+        for name in names {
+            raw_schema.push(name.len() as u8);
+            raw_schema.extend_from_slice(name.as_bytes());
+            raw_schema.push(1);
+            let sql_spec = "sqlite3_int64";
+            raw_schema.push(sql_spec.len() as u8);
+            raw_schema.extend_from_slice(sql_spec.as_bytes());
+        }
+        let mut out = Vec::new();
+        let mut controls = Vec::new();
+        assert!(state.apply_schema(
+            WireSchema {
+                header: header(38),
+                data: synlz_compress(&raw_schema),
+            },
+            &mut out,
+            &mut controls,
+        ));
+        assert!(matches!(out.as_slice(), [ReportEvent::Schema(_)]));
+        let schema = Arc::clone(state.schema().unwrap());
+        assert!(schema.is_append_only_successor_of(&previous_schema));
+        let indexes = names.map(|name| {
+            let field = schema.field_by_name(name).unwrap();
+            assert_eq!(field.kind, ReportFieldKind::Integer);
+            assert_eq!(field.sql_spec, "sqlite3_int64");
+            field.index
+        });
+
+        for (status, dates) in [
+            (
+                1,
+                Some([1_789_128_594_846i64, 1_789_128_595_123, 1_789_128_596_987]),
+            ),
+            (0, Some([1_789_128_594_846, 1_789_128_595_123, 0])),
+            (1, None),
+        ] {
+            let mut raw = row(42, status);
+            if let Some(values) = dates {
+                raw[..2].copy_from_slice(&5u16.to_le_bytes());
+                for (index, value) in indexes.into_iter().zip(values) {
+                    raw.extend_from_slice(&index.to_le_bytes());
+                    raw.push(1);
+                    raw.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+            out.clear();
+            assert!(state.apply_live_upsert(42, &raw, &mut out, &mut controls));
+            let [ReportEvent::RowUpsert(row)] = out.as_slice() else {
+                panic!("expected report upsert");
+            };
+            for (i, index) in indexes.into_iter().enumerate() {
+                assert_eq!(
+                    row.value(index),
+                    dates.map(|values| ReportValue::Integer(values[i])).as_ref()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn sync_request_reserves_zero_and_max_depth_sentinels() {
         assert!(ReportSyncRequest::fresh(ReportHistoryDepth::ServerDefault).is_valid());
         assert!(ReportSyncRequest::fresh(ReportHistoryDepth::Days(1)).is_valid());
