@@ -391,7 +391,7 @@ fn parse_snapshot_with_data() {
 #[test]
 fn build_snapshot_wraps_serializer_payload() {
     let payload = [1, 2, 3, 4];
-    let raw = build_snapshot(77, 10, 20, true, &payload, 1234567890123);
+    let raw = build_snapshot(77, 10, 20, true, &payload, 1234567890123, 0);
     let cmd = StratCommand::parse(&raw).unwrap();
     match cmd {
         StratCommand::Snapshot(s) => {
@@ -407,8 +407,8 @@ fn build_snapshot_wraps_serializer_payload() {
 
 #[test]
 fn snapshot_folder_tail_is_optional_but_never_partially_read() {
-    let full = build_snapshot(1, 2, 0, true, &[], 123);
-    let legacy = &full[..full.len() - 8];
+    let full = build_snapshot(1, 2, 0, true, &[], 123, 0);
+    let legacy = &full[..full.len() - 12];
     let StratCommand::Snapshot(snapshot) = StratCommand::parse(legacy).unwrap() else {
         panic!("snapshot");
     };
@@ -416,12 +416,41 @@ fn snapshot_folder_tail_is_optional_but_never_partially_read() {
     for len in 1..8 {
         assert!(StratCommand::parse(&full[..legacy.len() + len]).is_none());
     }
-    let partial = build_snapshot(1, 2, 0, false, &[], 123);
+    let partial = build_snapshot(1, 2, 0, false, &[], 123, 0);
     assert_eq!(
         partial.len(),
-        legacy.len(),
-        "partial wire layout remains unchanged"
+        legacy.len() + 4,
+        "Partial appends only Flags, without a folder timestamp"
     );
+}
+
+#[test]
+fn snapshot_flags_match_delphi_optional_tail_for_full_and_partial() {
+    for full in [false, true] {
+        for flags in [0, SSF_APPLY_TO_ORDERS, 0x8000_0000] {
+            let raw = build_snapshot(1, 2, 3, full, &[10, 20, 30], 456, flags);
+            let data_end = 32 + 3;
+            let flags_offset = data_end + if full { 8 } else { 0 };
+            assert_eq!(raw.len(), flags_offset + 4);
+            assert_eq!(&raw[flags_offset..], &flags.to_le_bytes());
+            let StratCommand::Snapshot(snapshot) = StratCommand::parse(&raw).unwrap() else {
+                panic!("snapshot");
+            };
+            assert_eq!(snapshot.full, full);
+            assert_eq!(snapshot.data, [10, 20, 30]);
+            assert_eq!(snapshot.folders_last_modified, if full { 456 } else { 0 });
+            assert_eq!(snapshot.flags, flags);
+
+            // Delphi reads Flags only when all four bytes are present.
+            for len in 0..4 {
+                let StratCommand::Snapshot(legacy) = StratCommand::parse(&raw[..flags_offset + len]).unwrap() else {
+                    panic!("snapshot");
+                };
+                assert_eq!(legacy.flags, 0);
+                assert_eq!(legacy.folders_last_modified, snapshot.folders_last_modified);
+            }
+        }
+    }
 }
 
 #[test]
@@ -522,7 +551,7 @@ fn build_empty_snapshot_from_strategies_keeps_nonzero_serializer_payload() {
 
 #[test]
 fn build_snapshot_normalizes_empty_raw_payload_to_empty_serializer() {
-    let raw = build_snapshot(79, 3, 0, true, &[], 0);
+    let raw = build_snapshot(79, 3, 0, true, &[], 0, 0);
     let cmd = StratCommand::parse(&raw).unwrap();
     match cmd {
         StratCommand::Snapshot(s) => {

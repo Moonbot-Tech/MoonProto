@@ -180,16 +180,25 @@ fn descriptor_u_key(
             kind: desc.unique_kind,
             uid,
         }),
-        UKeyRule::StrategySnapshot => payload.get(31).map(|full| {
-            if *full != 0 {
+        UKeyRule::StrategySnapshot => {
+            if *payload.get(31)? == 0 {
+                return Some(UniqueKey::none());
+            }
+            let size = u32::from_le_bytes(payload.get(27..31)?.try_into().ok()?) as usize;
+            let flags = payload.get(32..)?.get(size..)
+                .and_then(|tail| tail.get(8..12))
+                .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+                .unwrap_or(0);
+            // A one-shot action must not be replaced by an ordinary Full snapshot.
+            Some(if flags == 0 {
                 UniqueKey {
                     kind: desc.unique_kind,
                     uid: 1,
                 }
             } else {
                 UniqueKey::none()
-            }
-        }),
+            })
+        }
         // Delphi `TBaseMarketCommand.SetUKey` uses the local `TMarket` pointer.
         // No current client-sent unique command depends on that inherited rule;
         // require an explicit key if one appears instead of guessing from

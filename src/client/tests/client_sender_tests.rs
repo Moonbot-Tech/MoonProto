@@ -524,7 +524,7 @@ fn sender_ui_switches_mark_server_update_sent_and_keep_delphi_u_key_uid() {
 fn sender_strat_snapshot_payload_uses_sliced_snapshot_u_key() {
     let (sender, _, send_q, _, _, _) = make_sender();
 
-    sender.strat_send_snapshot_payload(1, 2, true, &[1, 2, 3], 0);
+    sender.strat_send_snapshot_payload(1, 2, true, &[1, 2, 3], 0, 0);
 
     let sent = take_send_items(&send_q);
     assert_eq!(sent.len(), 1);
@@ -540,10 +540,10 @@ fn sender_strat_snapshot_payload_uses_sliced_snapshot_u_key() {
 fn sender_strat_deltas_survive_full_snapshot_replacement() {
     let (sender, _, send_q, _, _, _) = make_sender();
 
-    sender.strat_send_snapshot_payload(1, 0, false, &[10], 0);
-    sender.strat_send_snapshot_payload(2, 0, true, &[20], 0);
-    sender.strat_send_snapshot_payload(3, 0, false, &[30], 0);
-    sender.strat_send_snapshot_payload(4, 0, true, &[40], 0);
+    sender.strat_send_snapshot_payload(1, 0, false, &[10], 0, 0);
+    sender.strat_send_snapshot_payload(2, 0, true, &[20], 0, 0);
+    sender.strat_send_snapshot_payload(3, 0, false, &[30], 0, 0);
+    sender.strat_send_snapshot_payload(4, 0, true, &[40], 0, 0);
 
     let sent = take_send_items(&send_q);
     assert_eq!(sent.len(), 3);
@@ -563,6 +563,33 @@ fn sender_strat_deltas_survive_full_snapshot_replacement() {
     assert!(sent[0].u_key.is_none());
     assert!(sent[1].u_key.is_none());
     assert_eq!(sent[2].u_key, UniqueKey::strat_snapshot());
+}
+
+#[test]
+fn sender_flagged_strategy_full_survives_ordinary_full_replacement() {
+    let (sender, _, send_q, _, _, _) = make_sender();
+    let flag = crate::commands::strat::SSF_APPLY_TO_ORDERS;
+    for (epoch, full, flags) in [
+        (1, true, 0), (2, true, flag), (3, false, flag), (4, true, 0), (5, true, flag), (6, true, 0),
+    ] {
+        sender.strat_send_snapshot_payload(epoch, 0, full, &[], 0, flags);
+    }
+
+    let sent = take_send_items(&send_q);
+    let mut epochs = Vec::new();
+    for item in &sent {
+        let crate::commands::strat::StratCommand::Snapshot(snapshot) =
+            crate::commands::strat::StratCommand::parse(&item.data).unwrap()
+        else {
+            panic!("snapshot");
+        };
+        epochs.push(snapshot.server_epoch);
+        assert_eq!(item.u_key.is_none(), snapshot.flags != 0);
+        assert_eq!(item.priority, SendPriority::Sliced);
+        assert!(item.encrypted);
+        assert_eq!(item.max_retries, 6);
+    }
+    assert_eq!(epochs, [2, 3, 5, 6]);
 }
 
 #[test]

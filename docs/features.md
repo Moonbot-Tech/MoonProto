@@ -57,6 +57,7 @@ See [orders](orders.md), [trade actions](trade_actions.md), and
 | Feature | Meaning | API |
 |---|---|---|
 | Strategy list and editor | Read, create, edit, delete, and synchronize full strategy objects using the live server schema. | `snapshot.strategy_snapshots()`, `MoonShotStrategy` / `StrategyEditor`, and `client.strategies().sync_local_strategies(...)`. |
+| Apply MoonShot edits to standing BUYs | Explicitly request refresh of standing BUYs affected by accepted order-size, direction, emulator-mode or auto-cancel changes. | `sync_local_strategies_and_apply_to_orders(...)`; see [behavior and limits](strats.md#applying-edits-to-standing-moonshot-buys). |
 | Strategy order | The complete editor list defines the global linear order; parameter-only edits still send only changed rows. | `sync_local_strategies(...)`; read confirmed `snapshot.strategy_snapshots()` after `SnapshotFull`. |
 | Empty folders and folder rename | Synchronize a complete folder tree, including empty parents; rename a populated subtree together with its strategy paths. | `snapshot.strats().folder_paths()`, `sync_local_folders(...)`, `sync_local_strategies_with_folders(...)`; see [folders](strats.md#folders-including-empty-folders). |
 | Checked strategies | Change which strategies are selected without guessing the core's state. | `set_checked(...)` and `send_checked_delta()`; server confirmation updates retained state. |

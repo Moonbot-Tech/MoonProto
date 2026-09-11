@@ -134,7 +134,7 @@ fn only_required_startup_payloads_are_allowed_before_domain_ready() {
         &high[0].data
     ));
 
-    client.strat_send_snapshot_payload(1, 0, true, &[], 0);
+    client.strat_send_snapshot_payload(1, 0, true, &[], 0, 0);
     let (sliced, _, _) = client.take_send_queues_for_test();
     assert!(
         sliced.is_empty(),

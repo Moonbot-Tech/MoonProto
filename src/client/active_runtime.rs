@@ -1009,8 +1009,9 @@ impl MoonClient {
     pub(crate) fn send_strategy_snapshot_batch(
         &self,
         strategies: Vec<crate::commands::strategy_serializer::StrategySnapshot>,
+        apply_to_orders: bool,
     ) -> Result<(), MoonClientError> {
-        self.send_no_reply(RuntimeCommand::StrategySnapshotBatch(strategies))
+        self.send_no_reply(RuntimeCommand::StrategySnapshotBatch(strategies, apply_to_orders))
     }
 
     /// Change a local strategy checked flag in the active runtime state.
@@ -1170,6 +1171,34 @@ impl Drop for MoonClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strategy_public_api_applies_to_orders_only_when_explicitly_requested() {
+        let (tx, rx) = mpsc::channel();
+        let client = MoonClient {
+            tx,
+            shutdown: Default::default(),
+            event_queue: None,
+            snapshot: Default::default(),
+            startup_status: Default::default(),
+            err_emu_diagnostics: Default::default(),
+            protocol_metrics: Default::default(),
+            subscription_registry: Default::default(),
+            join: Default::default(),
+            lifecycle_join: Default::default(),
+        };
+        client.strategies().sync_local_strategies(Vec::new()).unwrap();
+        client.strategies().sync_local_strategies_and_apply_to_orders(Vec::new()).unwrap();
+        client.strategies().sync_local_strategies(Vec::new()).unwrap();
+        for expected in [false, true, false] {
+            let RuntimeCommand::StrategySnapshotBatch(rows, apply_to_orders) = rx.try_recv().unwrap() else {
+                panic!("strategy submission");
+            };
+            assert!(rows.is_empty());
+            assert_eq!(apply_to_orders, expected);
+        }
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn disconnect_wait_finished_interrupts_startup_wait() {

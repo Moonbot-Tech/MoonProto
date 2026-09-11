@@ -46,6 +46,7 @@ impl Client {
                         full,
                         &data,
                         folders_last_modified,
+                        0,
                     );
                 }
                 crate::events::ActiveAction::RequestOrderStatus {

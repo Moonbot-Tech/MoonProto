@@ -40,7 +40,7 @@ pub(super) enum RuntimeCommand {
     MarketHistory(crate::state::MarketHistoryTicket),
     Ui(UiRuntimeCommand),
     Strat(StratRuntimeCommand),
-    StrategySnapshotBatch(Vec<crate::commands::strategy_serializer::StrategySnapshot>),
+    StrategySnapshotBatch(Vec<crate::commands::strategy_serializer::StrategySnapshot>, bool),
     StrategyFolders {
         strategies: Option<Vec<crate::commands::strategy_serializer::StrategySnapshot>>,
         paths: Vec<String>,
@@ -235,7 +235,7 @@ impl RuntimeCommand {
             Self::MarketHistory(_) => (21, 1),
             Self::Ui(cmd) => cmd.profile_source(),
             Self::Strat(cmd) => cmd.profile_source(),
-            Self::StrategySnapshotBatch(strategies) => (50, strategies.len()),
+            Self::StrategySnapshotBatch(strategies, _) => (50, strategies.len()),
             Self::StrategyFolders { paths, .. } => (50, paths.len()),
             Self::StrategySetChecked { .. } => (51, 1),
             Self::StrategySendCheckedDelta => (52, 0),

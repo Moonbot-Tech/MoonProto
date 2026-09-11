@@ -1496,7 +1496,26 @@ impl MoonStrategies<'_> {
         &self,
         strategies: Vec<crate::commands::strategy_serializer::StrategySnapshot>,
     ) -> Result<(), MoonClientError> {
-        self.client.send_strategy_snapshot_batch(strategies)
+        self.client.send_strategy_snapshot_batch(strategies, false)
+    }
+
+    /// Synchronize edits and request that the core refresh affected standing MoonShot BUYs.
+    ///
+    /// Use this instead of `sync_local_strategies` for the same edit, not after it.
+    /// The core reacts to accepted changes to `OrderSize`, `Short`, `EmulatorMode`,
+    /// or `AutoCancelBuy`. It cancels affected standing BUYs through its normal
+    /// workflow; replacement orders remain subject to normal MoonShot conditions.
+    /// Positions already in the sell phase are not selected for this refresh.
+    ///
+    /// The request belongs only to this submission and is not replayed during
+    /// automatic synchronization. `EditConfirmed` confirms settings, not BUY
+    /// replacement. If an unflagged snapshot applies the same edit first, the
+    /// core can skip this late request as an already-known revision.
+    pub fn sync_local_strategies_and_apply_to_orders(
+        &self,
+        strategies: Vec<crate::commands::strategy_serializer::StrategySnapshot>,
+    ) -> Result<(), MoonClientError> {
+        self.client.send_strategy_snapshot_batch(strategies, true)
     }
 
     /// Submit the complete desired folder tree without changing strategy contents/order.

@@ -42,6 +42,8 @@ const CMD_SCHEMA: u8 = 8;
 const CMD_DETECT_SIGNAL: u8 = 9;
 const CMD_RUNTIME_STATE: u8 = 10;
 
+pub(crate) const SSF_APPLY_TO_ORDERS: u32 = 1;
+
 pub const DETECT_KIND_ROW: u8 = 0x01;
 pub const DETECT_KIND_CHART_ONLY: u8 = 0x02;
 pub const DETECT_KIND_ALERT: u8 = 0x04;
@@ -132,7 +134,7 @@ impl StratCheckedItem {
     }
 }
 
-/// `TStratSnapshot` (CmdId=2). Priority=Sliced. UKey=UK_StratSnapshot (UID is always = 1, overlap).
+/// `TStratSnapshot` (CmdId=2). Only unflagged Full snapshots share a replacement key.
 #[cfg_attr(feature = "diagnostics", allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct StratSnapshot {
@@ -143,6 +145,7 @@ pub struct StratSnapshot {
     /// Raw `TStrategySerializer` bin payload. Decoder/writer are in `commands::strategy_serializer`.
     pub data: Vec<u8>,
     pub folders_last_modified: i64,
+    pub flags: u32,
 }
 
 /// `TStratDelete` (CmdId=3).
@@ -316,12 +319,17 @@ impl StratCommand {
                 } else {
                     0
                 };
+                let flags_offset = if full { 8 } else { 0 };
+                let flags = tail.get(flags_offset..flags_offset + 4)
+                    .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+                    .unwrap_or(0);
                 Some(StratCommand::Snapshot(StratSnapshot {
                     server_epoch,
                     client_max_last_date,
                     full,
                     data,
                     folders_last_modified,
+                    flags,
                 }))
             }
             CMD_DELETE => {
@@ -528,6 +536,7 @@ pub(crate) fn build_snapshot(
     full: bool,
     data: &[u8],
     folders_last_modified: i64,
+    flags: u32,
 ) -> Vec<u8> {
     let empty_payload;
     let data = if data.is_empty() {
@@ -537,7 +546,7 @@ pub(crate) fn build_snapshot(
         data
     };
 
-    let mut out = Vec::with_capacity(11 + 8 + 8 + 4 + 1 + data.len() + if full { 8 } else { 0 });
+    let mut out = Vec::with_capacity(11 + 8 + 8 + 4 + 1 + data.len() + 4 + if full { 8 } else { 0 });
     write_header(&mut out, CMD_SNAPSHOT, uid);
     out.extend_from_slice(&server_epoch.to_le_bytes());
     out.extend_from_slice(&client_max_last_date.to_le_bytes());
@@ -547,6 +556,7 @@ pub(crate) fn build_snapshot(
     if full {
         out.extend_from_slice(&folders_last_modified.to_le_bytes());
     }
+    out.extend_from_slice(&flags.to_le_bytes());
     out
 }
 
@@ -572,7 +582,7 @@ pub(crate) fn build_snapshot_from_strategies(
         builder.write_strategy(strategy);
     }
     let data = builder.finalize();
-    build_snapshot(uid, server_epoch, client_max_last_date, full, &data, 0)
+    build_snapshot(uid, server_epoch, client_max_last_date, full, &data, 0, 0)
 }
 
 /// `TStratDelete` (CmdId=3).

@@ -206,11 +206,11 @@ pub(super) fn handle_command(
             handle_strat_command(client, cmd);
             false
         }
-        RuntimeCommand::StrategySnapshotBatch(strategies) => {
-            handle_strategy_snapshot_batch(client, dispatcher, Some(strategies), None)
+        RuntimeCommand::StrategySnapshotBatch(strategies, apply_to_orders) => {
+            handle_strategy_snapshot_batch(client, dispatcher, Some(strategies), None, apply_to_orders)
         }
         RuntimeCommand::StrategyFolders { strategies, paths } => {
-            handle_strategy_snapshot_batch(client, dispatcher, strategies, Some(paths))
+            handle_strategy_snapshot_batch(client, dispatcher, strategies, Some(paths), false)
         }
         RuntimeCommand::StrategySetChecked {
             strategy_id,
@@ -660,6 +660,7 @@ fn handle_strategy_snapshot_batch(
     dispatcher: &mut crate::events::EventDispatcher,
     strategies: Option<Vec<crate::commands::strategy_serializer::StrategySnapshot>>,
     folder_paths: Option<Vec<String>>,
+    apply_to_orders: bool,
 ) -> bool {
     #[cfg(any(test, feature = "diagnostics"))]
     let strategy_count = strategies.as_ref().map_or(0, Vec::len);
@@ -746,6 +747,11 @@ fn handle_strategy_snapshot_batch(
         reply.full,
         &reply.data,
         reply.folders_last_modified,
+        if apply_to_orders {
+            crate::commands::strat::SSF_APPLY_TO_ORDERS
+        } else {
+            0
+        },
     );
     #[cfg(any(test, feature = "diagnostics"))]
     client

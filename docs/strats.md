@@ -612,6 +612,42 @@ field changes. The core's rollback guard compares `last_date` and
 confirmation. Typed editors such as `MoonShotStrategy::into_snapshot` perform
 this touch automatically.
 
+## Applying Edits to Standing MoonShot BUYs
+
+Ordinary `sync_local_strategies(...)` updates strategy settings. To also ask
+the core to refresh affected standing MoonShot BUY orders, use this **instead**
+for the same edited list:
+
+```rust
+client.strategies().sync_local_strategies_and_apply_to_orders(strategies)?;
+```
+
+Build and touch the edited strategies as shown above, and keep the complete
+editor list in its desired order. Parameter-only edits still send only changed
+rows; a reorder still sends a Full snapshot. The refresh request travels with
+those edits, not in a second command.
+
+The core reacts only to accepted changes to `OrderSize`, `Short`, `EmulatorMode`,
+or `AutoCancelBuy` on MoonShot strategies. It marks their active standing BUYs
+for normal cancellation and processes one cancellation request per MoonShot
+timer tick. New orders follow normal MoonShot conditions; immediate replacement
+is not guaranteed. Orders already in the sell phase are not selected for this
+refresh. Other fields and strategy kinds do not trigger it.
+
+`Ok(())` means queued. `EditConfirmed` confirms the settings, **not** cancellation
+or replacement of orders; observe the normal order state/events for that.
+The request is one-shot: Init, reconnect and automatic snapshot replies do not
+replay it. An ordinary Full cannot replace its queued or in-flight transmission.
+Older cores can accept the settings while ignoring this request.
+
+Known limit: if an unflagged snapshot carrying the same or newer edit reaches
+the core first, the late flagged edit can be skipped and the BUY refresh missed.
+Do not first submit an ordinary edit and then call this method for the same
+revision. Avoid overlapping strategy submissions while awaiting confirmation.
+After exhausted retries or reversed delivery, inspect standing orders and use
+normal order controls if needed. Resubmitting unchanged settings is not a forced
+refresh.
+
 ## Sending Strategy Commands
 
 Regular applications use `client.strategies()`:

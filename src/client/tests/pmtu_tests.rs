@@ -400,6 +400,30 @@ fn sliced_u_key_cleanup_does_not_drop_pending_h() {
 }
 
 #[test]
+// parity: MoonBot TStratSnapshot.SetUKey and TMoonProtoClient.DeleteSendingByKey
+fn flagged_strategy_full_keeps_in_flight_sliced_delivery() {
+    let mut client = Client::new(dummy_cfg());
+    client.testing_set_domain_ready(true);
+    client.encode_cipher = Some(crypto::cipher_from_key(&[0; 16]));
+
+    for (epoch, flags) in [(1, 0), (2, crate::commands::strat::SSF_APPLY_TO_ORDERS), (3, 0)] {
+        client.strat_send_snapshot_payload(epoch, 0, true, &[], 0, flags);
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(sliced.len(), 1);
+        writer(&mut client).apply_sliced_send_u_key_cleanup(&sliced);
+        writer(&mut client).create_sliced_and_send(&sliced[0]);
+        if epoch == 2 {
+            assert_eq!(client.sending.len(), 2, "flagged Full must not replace ordinary Full");
+        }
+    }
+    assert_eq!(client.sending.len(), 2);
+    assert_eq!(client.sending.iter().filter(|s| s.u_key.is_none()).count(), 1);
+    assert_eq!(client.sending.iter().filter(|s| s.u_key == UniqueKey::strat_snapshot()).count(), 1);
+    assert!(client.sending.iter().all(|s| s.max_retry_count == 6));
+}
+
+#[test]
 // parity: MoonBot MoonProtoIntStruct.pas:TMoonProtoClient.ApplyRegularHLAck
 fn high_u_key_cleanup_runs_after_regular_ack() {
     let mut client = Client::new(dummy_cfg());

@@ -500,6 +500,7 @@ pub(crate) fn send_post_init_resync(
             snapshot.full,
             &snapshot.data,
             snapshot.folders_last_modified,
+            0,
         );
     } else {
         client.strat_schema_request();

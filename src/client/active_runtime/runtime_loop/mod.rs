@@ -1415,7 +1415,7 @@ mod tests {
         handle_command(
             &mut client,
             &mut dispatcher,
-            RuntimeCommand::StrategySnapshotBatch(rows),
+            RuntimeCommand::StrategySnapshotBatch(rows, false),
             &mut pending,
         );
         let (sliced, _, _) = client.take_send_queues_for_test();
@@ -1445,7 +1445,7 @@ mod tests {
         assert_eq!(reply.folders_last_modified, date);
 
         // Missing occupied folders survive even if a newer tree omits them.
-        let empty = crate::commands::strat::build_snapshot(123, 42, 0, true, &[], date + 1);
+        let empty = crate::commands::strat::build_snapshot(123, 42, 0, true, &[], date + 1, 0);
         receiver.dispatch_into(Command::Strat, &empty, 0, &mut Vec::new());
         assert_eq!(
             receiver.strats().folder_paths().collect::<Vec<_>>(),
@@ -1481,14 +1481,14 @@ mod tests {
         handle_command(
             &mut client,
             &mut dispatcher,
-            RuntimeCommand::StrategySnapshotBatch(rows.clone()),
+            RuntimeCommand::StrategySnapshotBatch(rows.clone(), false),
             &mut pending,
         );
         rows.swap(0, 1);
         handle_command(
             &mut client,
             &mut dispatcher,
-            RuntimeCommand::StrategySnapshotBatch(rows),
+            RuntimeCommand::StrategySnapshotBatch(rows, false),
             &mut pending,
         );
         let (sliced, high, low) = client.take_send_queues_for_test();
@@ -1529,12 +1529,12 @@ mod tests {
             crate::commands::strategy_serializer::StrategyBatchBuilder::folder_payload(vec![
                 "Keep/Nested".into(),
             ]);
-        let payload = crate::commands::strat::build_snapshot(1, 1, 0, true, &data, 100);
+        let payload = crate::commands::strat::build_snapshot(1, 1, 0, true, &data, 100, 0);
         dispatcher.dispatch_into(Command::Strat, &payload, 0, &mut Vec::new());
-        let mut legacy = crate::commands::strat::build_snapshot(2, 200, 0, true, &[], 0);
-        legacy.truncate(legacy.len() - 8);
+        let mut legacy = crate::commands::strat::build_snapshot(2, 200, 0, true, &[], 0, 0);
+        legacy.truncate(legacy.len() - 12);
         dispatcher.dispatch_into(Command::Strat, &legacy, 0, &mut Vec::new());
-        let malformed = crate::commands::strat::build_snapshot(3, 300, 0, true, &[0xff], 200);
+        let malformed = crate::commands::strat::build_snapshot(3, 300, 0, true, &[0xff], 200, 0);
         dispatcher.dispatch_into(Command::Strat, &malformed, 0, &mut Vec::new());
         assert_eq!(dispatcher.strats().folders_last_modified(), 100);
         assert_eq!(dispatcher.strats().folder_paths().count(), 2);
@@ -1556,7 +1556,7 @@ mod tests {
         handle_command(
             &mut client,
             &mut dispatcher,
-            RuntimeCommand::StrategySnapshotBatch(strategies.clone()),
+            RuntimeCommand::StrategySnapshotBatch(strategies.clone(), false),
             &mut pending,
         );
         let (sliced, high, low) = client.take_send_queues_for_test();
@@ -1573,7 +1573,7 @@ mod tests {
         handle_command(
             &mut client,
             &mut dispatcher,
-            RuntimeCommand::StrategySnapshotBatch(strategies.clone()),
+            RuntimeCommand::StrategySnapshotBatch(strategies.clone(), false),
             &mut pending,
         );
         let after = crate::MoonTime::now();
@@ -1646,7 +1646,7 @@ mod tests {
         handle_command(
             &mut client,
             &mut dispatcher,
-            RuntimeCommand::StrategySnapshotBatch(strategies),
+            RuntimeCommand::StrategySnapshotBatch(strategies, false),
             &mut pending,
         );
         let (sliced, high, low) = client.take_send_queues_for_test();
@@ -1654,6 +1654,68 @@ mod tests {
             sliced.is_empty() && high.is_empty() && low.is_empty(),
             "confirmed edit must not be resent"
         );
+    }
+
+    #[test]
+    fn strategy_apply_to_orders_is_one_shot_and_preserves_partial_sends() {
+        use crate::commands::strat::{StratCommand, SSF_APPLY_TO_ORDERS};
+
+        for reorder in [false, true] {
+            let mut client = ready_client();
+            let mut dispatcher = crate::events::EventDispatcher::new();
+            let mut pending = RuntimePending::default();
+            let mut strategies = strategy_test_list(3);
+            apply_strategy_test_list(&mut dispatcher, &strategies);
+            strategies[0].last_date += 1;
+            strategies[0].fields.insert("Comment", FieldValue::String("edited".into()));
+            if reorder {
+                strategies.swap(0, 1);
+            }
+            handle_command(
+                &mut client,
+                &mut dispatcher,
+                RuntimeCommand::StrategySnapshotBatch(strategies.clone(), true),
+                &mut pending,
+            );
+            let (sliced, high, low) = client.take_send_queues_for_test();
+            assert!(high.is_empty() && low.is_empty());
+            assert_eq!(sliced.len(), 1);
+            assert!(sliced[0].u_key.is_none());
+            let StratCommand::Snapshot(snapshot) = StratCommand::parse(&sliced[0].data).unwrap() else {
+                panic!("snapshot");
+            };
+            assert_eq!(snapshot.flags, SSF_APPLY_TO_ORDERS);
+            assert_eq!(snapshot.full, reorder);
+            let batch = crate::commands::strategy_serializer::parse_strategy_batch(&snapshot.data).unwrap();
+            assert_eq!(batch.strategies.len(), if reorder { 3 } else { 1 });
+
+            // A server-requested Full contains pending edits, but never replays the action.
+            let request = crate::commands::strat::build_snapshot_request(99);
+            let context = crate::events::ActiveDispatchContext::from_client(&client);
+            let mut actions = Vec::new();
+            dispatcher.dispatch_into_active_actions(
+                Command::Strat, &request, 0, &mut Vec::new(), &context, &mut actions,
+            );
+            client.apply_active_actions(actions);
+            let (sliced, _, _) = client.take_send_queues_for_test();
+            assert_eq!(sliced.len(), 1);
+            assert!(!sliced[0].u_key.is_none());
+            let StratCommand::Snapshot(automatic) = StratCommand::parse(&sliced[0].data).unwrap() else {
+                panic!("snapshot");
+            };
+            assert!(automatic.full);
+            assert_eq!(automatic.flags, 0);
+
+            dispatcher.dispatch_into(Command::Strat, &sliced[0].data, 0, &mut Vec::new());
+            assert!(dispatcher.strats().strategy_edit(1).is_none());
+            handle_command(
+                &mut client,
+                &mut dispatcher,
+                RuntimeCommand::StrategySnapshotBatch(strategies, true),
+                &mut pending,
+            );
+            assert!(client.take_send_queues_for_test().0.is_empty(), "unchanged confirmed data remains a no-op");
+        }
     }
 
     #[test]
@@ -1674,7 +1736,7 @@ mod tests {
             handle_command(
                 &mut client,
                 &mut dispatcher,
-                RuntimeCommand::StrategySnapshotBatch(strategies.clone()),
+                RuntimeCommand::StrategySnapshotBatch(strategies.clone(), false),
                 &mut pending,
             );
         }
@@ -1682,7 +1744,7 @@ mod tests {
         handle_command(
             &mut client,
             &mut dispatcher,
-            RuntimeCommand::StrategySnapshotBatch(strategies.clone()),
+            RuntimeCommand::StrategySnapshotBatch(strategies.clone(), false),
             &mut pending,
         );
 
@@ -1757,7 +1819,7 @@ mod tests {
         handle_command(
             &mut client,
             &mut dispatcher,
-            RuntimeCommand::StrategySnapshotBatch(strategies),
+            RuntimeCommand::StrategySnapshotBatch(strategies, false),
             &mut pending,
         );
         let (sliced, high, low) = client.take_send_queues_for_test();
@@ -1800,7 +1862,7 @@ mod tests {
         assert!(handle_command(
             &mut client,
             &mut dispatcher,
-            RuntimeCommand::StrategySnapshotBatch(vec![strategy.clone()]),
+            RuntimeCommand::StrategySnapshotBatch(vec![strategy.clone()], false),
             &mut pending,
         ));
         assert!(dispatcher.local_strategy_epoch() > 1_000_000_000_000);
@@ -1870,6 +1932,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         tx.send(RuntimeCommand::StrategySnapshotBatch(
             vec![strategy.clone()],
+            false,
         ))
         .unwrap();
 
