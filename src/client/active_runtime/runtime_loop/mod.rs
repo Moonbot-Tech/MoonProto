@@ -873,6 +873,9 @@ mod tests {
     fn moon_trade_new_order_builds_v4_start_command() {
         let mut client = ready_client();
         let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut stops = StopSettings::disabled()
+            .with_stop_loss_percent(2.5, 0.1)
+            .with_take_profit_price(15.0);
 
         let changed = handle_trade_action(
             &mut client,
@@ -881,13 +884,15 @@ mod tests {
                 params: NewOrderParams::new("DOGEUSDT", OrderSide::Short, 12.5, 0.25)
                     .with_strategy_id(42)
                     .with_planned_sell_price(15.0)
-                    .with_market_stop(true),
+                    .with_market_stop(true)
+                    .with_stops(stops),
                 request_uid: 0xCAFE_BABE,
             },
         )
         .expect("v4 start command does not need legacy route bytes");
 
         assert!(!changed);
+        stops.take_profit_changed = DelphiBool::TRUE;
         let (_, high, _) = client.take_send_queues_for_test();
         assert_eq!(high.len(), 1);
         match TradeCommand::parse(&high[0].data).expect("valid new order") {
@@ -900,6 +905,7 @@ mod tests {
                     size,
                     price,
                     planned_sell_price,
+                    stops: sent_stops,
                 } => {
                     assert_eq!(cmd.header.uid, 0xCAFE_BABE);
                     assert_eq!(market_name, "DOGEUSDT");
@@ -908,6 +914,7 @@ mod tests {
                     assert_eq!(size, 0.25);
                     assert_eq!(price, 12.5);
                     assert_eq!(planned_sell_price, 15.0);
+                    assert_eq!(sent_stops, Some(stops));
                 }
                 other => panic!("unexpected order payload: {other:?}"),
             },
@@ -919,6 +926,7 @@ mod tests {
     fn moon_trade_new_pending_order_builds_v4_start_pending_command() {
         let mut client = ready_client();
         let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut stops = StopSettings::disabled().with_stop_loss_fixed(2000.0, 0.2);
 
         let changed = handle_trade_action(
             &mut client,
@@ -927,13 +935,15 @@ mod tests {
                 params: PendingOrderParams::new("ETHUSDT", OrderSide::Long, 2100.0, 250.0)
                     .with_strategy_id(42)
                     .with_planned_sell_price(2200.0)
-                    .with_market_stop(true),
+                    .with_market_stop(true)
+                    .with_stops(stops),
                 request_uid: 0xCAFE_BABF,
             },
         )
         .expect("v4 pending command does not need legacy route bytes");
 
         assert!(!changed);
+        stops.take_profit_changed = DelphiBool::TRUE;
         let (_, high, _) = client.take_send_queues_for_test();
         assert_eq!(high.len(), 1);
         match TradeCommand::parse(&high[0].data).expect("valid pending order") {
@@ -946,6 +956,7 @@ mod tests {
                     size,
                     trigger_price,
                     planned_sell_price,
+                    stops: sent_stops,
                 } => {
                     assert_eq!(cmd.header.uid, 0xCAFE_BABF);
                     assert_eq!(market_name, "ETHUSDT");
@@ -954,6 +965,7 @@ mod tests {
                     assert_eq!(size, 250.0);
                     assert_eq!(trigger_price, 2100.0);
                     assert_eq!(planned_sell_price, 2200.0);
+                    assert_eq!(sent_stops, Some(stops));
                 }
                 other => panic!("unexpected order payload: {other:?}"),
             },
@@ -962,30 +974,42 @@ mod tests {
     }
 
     #[test]
-    fn moon_trade_bare_pending_sends_zero_strategy_id() {
-        let mut client = ready_client();
-        let mut dispatcher = crate::events::EventDispatcher::new();
+    fn moon_trade_bare_orders_keep_absent_and_disabled_stops_distinct() {
+        for pending in [false, true] {
+            for stops in [None, Some(StopSettings::disabled())] {
+                let mut client = ready_client();
+                let mut dispatcher = crate::events::EventDispatcher::new();
+                let request_uid = 0xCAFE_BAC0;
+                let kind = if pending {
+                    let mut params = PendingOrderParams::new("ETHUSDT", OrderSide::Long, 2100.0, 250.0);
+                    params.stops = stops;
+                    RuntimeTradeCommandKind::NewPendingOrder { params, request_uid }
+                } else {
+                    let mut params = NewOrderParams::new("ETHUSDT", OrderSide::Long, 2100.0, 250.0);
+                    params.stops = stops;
+                    RuntimeTradeCommandKind::NewOrder { params, request_uid }
+                };
+                handle_trade_action(&mut client, &mut dispatcher, kind).unwrap();
 
-        handle_trade_action(
-            &mut client,
-            &mut dispatcher,
-            RuntimeTradeCommandKind::NewPendingOrder {
-                params: PendingOrderParams::new("ETHUSDT", OrderSide::Long, 2100.0, 250.0),
-                request_uid: 0xCAFE_BAC0,
-            },
-        )
-        .expect("v4 bare pending command does not need legacy route bytes");
-
-        let (_, high, _) = client.take_send_queues_for_test();
-        assert_eq!(high.len(), 1);
-        match TradeCommand::parse(&high[0].data).expect("valid bare pending order") {
-            TradeCommand::OrderCommand(cmd) => match cmd.payload {
-                OrderCommandPayload::StartPending { strategy_id, .. } => {
-                    assert_eq!(strategy_id, 0);
+                let (sliced, high, low) = client.take_send_queues_for_test();
+                assert!(low.is_empty() && sliced.is_empty());
+                assert_eq!(high.len(), 1, "no separate settings or stop commands");
+                let expected = stops.map(|mut stops| {
+                    stops.take_profit_changed = DelphiBool::TRUE;
+                    stops
+                });
+                match TradeCommand::parse(&high[0].data).expect("valid bare order") {
+                    TradeCommand::OrderCommand(cmd) => match cmd.payload {
+                        OrderCommandPayload::Start { strategy_id, stops, .. }
+                        | OrderCommandPayload::StartPending { strategy_id, stops, .. } => {
+                            assert_eq!(strategy_id, 0);
+                            assert_eq!(stops, expected);
+                        }
+                        other => panic!("unexpected order payload: {other:?}"),
+                    },
+                    other => panic!("unexpected trade command: {other:?}"),
                 }
-                other => panic!("unexpected order payload: {other:?}"),
-            },
-            other => panic!("unexpected trade command: {other:?}"),
+            }
         }
     }
 

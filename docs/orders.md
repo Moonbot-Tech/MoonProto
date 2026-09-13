@@ -205,6 +205,11 @@ the typed constants, `name()`, and `is_terminal()`.
 
 ## Actions
 
+To set SL, trailing and TP at creation, use `NewOrderParams::with_stops(...)`
+or `PendingOrderParams::with_stops(...)`. Unlike a later update, the initial
+settings travel together with the order. See
+[initial stops and core compatibility](trade_actions.md#strategy-selection-and-initial-stops).
+
 Order actions go through `client.orders()`:
 
 ```rust

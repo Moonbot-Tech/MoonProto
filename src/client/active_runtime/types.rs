@@ -607,13 +607,17 @@ pub struct NewOrderParams {
     pub size: f64,
     /// Explicit strategy for the new order.
     ///
-    /// `None` sends `StratID=0`, which lets the core apply its configured
-    /// manual-strategy fallback when that mode is enabled.
+    /// `None` creates an order without a strategy, regardless of the core's
+    /// Manual-strategy switch. Older cores may still attach their Manual strategy.
     pub strategy_id: Option<u64>,
-    /// Optional planned sell target stored with the new order.
+    /// Planned sell target; zero keeps the core's normal price calculation.
     pub planned_sell_price: f64,
     /// Ask the core to use market-stop semantics for this order.
     pub use_market_stop: bool,
+    /// Initial SL, trailing and TP settings, sent together with the order.
+    /// `None` keeps core/strategy defaults; `Some(StopSettings::disabled())`
+    /// explicitly disables them. Requires a core with initial-stop support.
+    pub stops: Option<crate::commands::trade::StopSettings>,
 }
 
 impl NewOrderParams {
@@ -626,6 +630,7 @@ impl NewOrderParams {
             strategy_id: None,
             planned_sell_price: 0.0,
             use_market_stop: false,
+            stops: None,
         }
     }
 
@@ -657,6 +662,12 @@ impl NewOrderParams {
         self.use_market_stop = use_market_stop;
         self
     }
+
+    /// Set the complete initial stop settings without changing core-wide settings.
+    pub fn with_stops(mut self, stops: crate::commands::trade::StopSettings) -> Self {
+        self.stops = Some(stops);
+        self
+    }
 }
 
 /// Parameters for placing a pending order in the core.
@@ -673,9 +684,7 @@ pub struct PendingOrderParams {
     pub size: f64,
     /// Strategy candidate to attach only when the pending trigger fires.
     ///
-    /// `None` sends `StratID=0` and creates a bare pending. Unlike a regular
-    /// new order, the core does not apply its configured manual-strategy
-    /// fallback while creating this pending.
+    /// `None` creates a bare pending without inheriting the core's Manual strategy.
     pub strategy_id: Option<u64>,
     /// Optional planned sell target stored with the order after it triggers.
     pub planned_sell_price: f64,
@@ -684,6 +693,11 @@ pub struct PendingOrderParams {
     /// A bare pending ignores this flag. A Manual strategy uses its retained
     /// `UseMarketStop` setting; a UDP strategy uses this command flag.
     pub use_market_stop: bool,
+    /// Initial SL, trailing and TP settings, sent together with the pending.
+    /// `None` keeps core/strategy defaults; `Some(StopSettings::disabled())`
+    /// explicitly disables them. Requires a core with initial-stop support.
+    /// A strategy candidate applies its own stops when the pending triggers.
+    pub stops: Option<crate::commands::trade::StopSettings>,
 }
 
 impl PendingOrderParams {
@@ -696,6 +710,7 @@ impl PendingOrderParams {
             strategy_id: None,
             planned_sell_price: 0.0,
             use_market_stop: false,
+            stops: None,
         }
     }
 
@@ -721,6 +736,12 @@ impl PendingOrderParams {
 
     pub fn with_market_stop(mut self, use_market_stop: bool) -> Self {
         self.use_market_stop = use_market_stop;
+        self
+    }
+
+    /// Set the complete initial stop settings without changing core-wide settings.
+    pub fn with_stops(mut self, stops: crate::commands::trade::StopSettings) -> Self {
+        self.stops = Some(stops);
         self
     }
 }

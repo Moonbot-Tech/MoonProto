@@ -127,15 +127,58 @@ the BaseCheck currency/exchange route. It returns
 `MoonClientError::TradeContext` when those fields are unavailable. Canonical v4
 order actions do not depend on those route bytes.
 
-Manual strategy mode is an application decision, matching MoonBot UI behavior.
-When settings say `use_manual_strategy` and the trader selected
-`manual_strategy_id`, pass that id with `NewOrderParams::with_strategy_id`.
-Leaving the strategy id empty sends zero and delegates to the core: when its
-manual-strategy mode is enabled, the core can attach the configured Manual
-strategy. Pass an explicit id when the terminal needs deterministic strategy
-ownership.
+### Strategy Selection And Initial Stops
+
+Strategy selection belongs to the terminal. Omit `with_strategy_id(...)` to
+create an order without a strategy, or pass the selected strategy's id to attach
+it. The core's **Manual trading** switch does not override that choice. Do not
+toggle the core's `use_manual_strategy` setting before placing an order.
+Terminals that intentionally mirror the core's UI can read `use_manual_strategy`
+and `manual_strategy_id` and send the selected id explicitly.
 If the manual strategy sell-percent control changes, send the retained strategy
 update through `client.strategies().sell_price_update(...)`.
+
+Set per-order SL, trailing and TP with `with_stops(...)`. They travel with the
+order and are applied before execution, without a separate settings update or
+an echo round trip:
+
+```rust
+use moonproto::{NewOrderParams, OrderSide, StopSettings};
+
+let stops = StopSettings::disabled()
+    .with_stop_loss_percent(2.5, 0.1)
+    .with_trailing_percent(1.0, 0.1)
+    .with_take_profit_price(50_500.0);
+
+client.trade().new_order(
+    NewOrderParams::for_market(&market, OrderSide::Long, 50_000.0, 250.0)
+        .with_planned_sell_price(51_000.0)
+        .with_stops(stops),
+)?;
+```
+
+- No `with_stops`: use the core/strategy defaults.
+- `with_stops(StopSettings::disabled())`: explicitly disable SL, trailing and TP
+  for this order. The block replaces all three settings, not just enabled fields.
+- `with_planned_sell_price(price)`: set the planned sell-order price. Zero leaves
+  price calculation to the core. This is distinct from the take-profit trigger.
+- `PendingOrderParams::with_stops(...)` supplies the same initial block for a
+  pending order. These are initial settings, not a permanent override of later
+  strategy rules. A pending's strategy candidate applies its own stop settings
+  when the trigger fires. Update an existing order with
+  `client.orders().update_stops(...)`.
+
+Normal core price adjustments and sell-order joining still apply. A combined
+sell can acquire the core's Manual strategy. `use_market_stop` is a separate,
+strategy-dependent execution flag, not the initial SL switch.
+
+**Core compatibility:** this requires the core update for independent terminal
+orders and initial stops. Older cores can still attach Manual to an ordinary
+order without an explicit strategy and silently ignore initial stops. Updating
+the library alone does not change that server behavior. If these guarantees are
+required, use an updated core; do not emulate them by flipping global settings.
+
+### Pending Orders
 
 `new_pending_order` creates a pending inside the core. Its
 `trigger_price` is the watched condition, not the final exchange-order price;

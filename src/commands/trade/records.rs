@@ -188,10 +188,10 @@ pub struct StopSettings {
     pub(crate) use_take_profit: DelphiBool,
     pub(crate) take_profit: f64,
     /// "Trader explicitly set the take-profit" latch. On the inbound order state
-    /// this is the server's value; on outbound stops the runtime computes it (see
-    /// `Orders::send_stops_if_changed`) so callers never set it by hand. The
-    /// server auto-defaults TP on the SELL transition only while this is false
-    /// on the server-side SELL transition.
+    /// this is the server's value. The runtime sets it for explicit initial stops
+    /// or computes it against a live order on updates, so callers never set it
+    /// by hand. The server auto-defaults TP on the SELL transition only while
+    /// this is false.
     pub(crate) take_profit_changed: DelphiBool,
 }
 
@@ -290,9 +290,8 @@ impl StopSettings {
 
     /// Configure take-profit price.
     ///
-    /// The outbound `take_profit_changed` latch is still computed by the
-    /// runtime against the live order state before send, so callers set the
-    /// desired TP value without hand-maintaining protocol latch bits.
+    /// The runtime preserves this explicit value for initial stops and computes
+    /// the update latch against live order state for later changes.
     pub fn with_take_profit_price(self, take_profit: f64) -> Self {
         self.with_take_profit_fields(true, take_profit)
     }

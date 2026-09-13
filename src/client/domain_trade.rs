@@ -11,6 +11,7 @@ impl Client {
         size: f64,
         planned_sell_price: f64,
         use_market_stop: bool,
+        stops: Option<crate::commands::trade::StopSettings>,
     ) -> bool {
         let payload = crate::commands::trade::OrderCommandPayload::Start {
             market_name: market.to_owned(),
@@ -20,6 +21,7 @@ impl Client {
             size,
             price,
             planned_sell_price,
+            stops,
         };
         self.send_order_command_at(request_uid, payload)
     }
@@ -34,6 +36,7 @@ impl Client {
         size: f64,
         planned_sell_price: f64,
         use_market_stop: bool,
+        stops: Option<crate::commands::trade::StopSettings>,
     ) -> bool {
         let payload = crate::commands::trade::OrderCommandPayload::StartPending {
             market_name: market.to_owned(),
@@ -43,6 +46,7 @@ impl Client {
             size,
             trigger_price,
             planned_sell_price,
+            stops,
         };
         self.send_order_command_at(request_uid, payload)
     }

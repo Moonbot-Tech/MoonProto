@@ -211,6 +211,7 @@ fn one_shot_order_commands_keep_their_delphi_retry_budget() {
             size: 1.0,
             price: 100.0,
             planned_sell_price: 0.0,
+            stops: None,
         },
     );
     let start_pending = build_order_command(
@@ -223,6 +224,7 @@ fn one_shot_order_commands_keep_their_delphi_retry_budget() {
             size: 1.0,
             trigger_price: 110.0,
             planned_sell_price: 0.0,
+            stops: None,
         },
     );
 

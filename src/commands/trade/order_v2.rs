@@ -4,7 +4,7 @@
 //! split into 13 independently revisioned sections. This module owns that
 //! exact wire shape; the public order read model is materialized later.
 
-use super::{BaseCommandHeader, StopSettings};
+use super::{records::STOP_SETTINGS_SIZE, BaseCommandHeader, StopSettings};
 use crate::commands::registry::{decode_utf8_delphi, CURRENT_PROTO_CMD_VER};
 use crc32c::crc32c_append;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -520,6 +520,7 @@ pub(crate) enum OrderCommandPayload {
         size: f64,
         price: f64,
         planned_sell_price: f64,
+        stops: Option<StopSettings>,
     },
     StartPending {
         market_name: String,
@@ -529,6 +530,7 @@ pub(crate) enum OrderCommandPayload {
         size: f64,
         trigger_price: f64,
         planned_sell_price: f64,
+        stops: Option<StopSettings>,
     },
     MoveAllKind {
         market_name: String,
@@ -681,6 +683,7 @@ impl OrderCommandPayload {
                 size,
                 price,
                 planned_sell_price,
+                stops,
             } => {
                 write_short_string(out, market_name);
                 out.push(u8::from(*is_short) | (u8::from(*use_market_stop) << 1));
@@ -688,6 +691,9 @@ impl OrderCommandPayload {
                 out.extend_from_slice(&size.to_le_bytes());
                 out.extend_from_slice(&price.to_le_bytes());
                 out.extend_from_slice(&planned_sell_price.to_le_bytes());
+                if let Some(stops) = stops {
+                    stops.write_to(out);
+                }
             }
             Self::StartPending {
                 market_name,
@@ -697,6 +703,7 @@ impl OrderCommandPayload {
                 size,
                 trigger_price,
                 planned_sell_price,
+                stops,
             } => {
                 write_short_string(out, market_name);
                 out.push(u8::from(*is_short) | (u8::from(*use_market_stop) << 1));
@@ -704,6 +711,9 @@ impl OrderCommandPayload {
                 out.extend_from_slice(&size.to_le_bytes());
                 out.extend_from_slice(&trigger_price.to_le_bytes());
                 out.extend_from_slice(&planned_sell_price.to_le_bytes());
+                if let Some(stops) = stops {
+                    stops.write_to(out);
+                }
             }
             Self::MoveAllKind {
                 market_name,
@@ -825,6 +835,8 @@ impl OrderCommandPayload {
                     size: read_f64_zero_tail(input),
                     price: read_f64_zero_tail(input),
                     planned_sell_price: read_f64_zero_tail(input),
+                    stops: (input.len() >= STOP_SETTINGS_SIZE)
+                        .then(|| StopSettings::read_from_delphi_stream(input)),
                 }
             }
             11 => {
@@ -889,6 +901,8 @@ impl OrderCommandPayload {
                     size: read_f64_zero_tail(input),
                     trigger_price: read_f64_zero_tail(input),
                     planned_sell_price: read_f64_zero_tail(input),
+                    stops: (input.len() >= STOP_SETTINGS_SIZE)
+                        .then(|| StopSettings::read_from_delphi_stream(input)),
                 }
             }
             _ => Self::Unknown(opcode),
@@ -921,7 +935,12 @@ impl OrderCommand {
     }
 
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(96);
+        let extra = match &self.payload {
+            OrderCommandPayload::Start { stops: Some(_), .. }
+            | OrderCommandPayload::StartPending { stops: Some(_), .. } => STOP_SETTINGS_SIZE,
+            _ => 0,
+        };
+        let mut out = Vec::with_capacity(96 + extra);
         self.header.write(&mut out);
         self.payload.write(&mut out);
         out
@@ -1228,6 +1247,7 @@ mod tests {
                 size: 0.0,
                 price: 0.0,
                 planned_sell_price: 0.0,
+                stops: None,
             },
             OrderCommandPayload::StartPending {
                 market_name: "BTCUSDT".to_owned(),
@@ -1237,6 +1257,7 @@ mod tests {
                 size: 1.0,
                 trigger_price: 100.0,
                 planned_sell_price: 0.0,
+                stops: None,
             },
             OrderCommandPayload::MoveAllPercent {
                 market_name: "BTCUSDT".to_owned(),
@@ -1286,6 +1307,82 @@ mod tests {
                 size: 7.25,
             }
         ));
+    }
+
+    #[test]
+    fn start_commands_preserve_optional_stops_wire_layout() {
+        let stops = StopSettings {
+            take_profit_changed: true.into(),
+            ..StopSettings::disabled()
+                .with_stop_loss_percent(2.5, 0.1)
+                .with_trailing_fixed(1800.0, 0.2)
+                .with_take_profit_price(2200.0)
+        };
+        let mut expected_tail = vec![1, 0];
+        expected_tail.extend_from_slice(&2.5f64.to_le_bytes());
+        expected_tail.extend_from_slice(&0.1f64.to_le_bytes());
+        expected_tail.extend_from_slice(&[1, 1]);
+        expected_tail.extend_from_slice(&1800.0f64.to_le_bytes());
+        expected_tail.extend_from_slice(&0.2f64.to_le_bytes());
+        expected_tail.push(1);
+        expected_tail.extend_from_slice(&2200.0f64.to_le_bytes());
+        expected_tail.push(1);
+        assert_eq!(expected_tail.len(), 46);
+
+        for pending in [false, true] {
+            let payload = if pending {
+                OrderCommandPayload::StartPending {
+                    market_name: "ETHUSDT".into(),
+                    is_short: false,
+                    use_market_stop: false,
+                    strategy_id: 0,
+                    size: 250.0,
+                    trigger_price: 2100.0,
+                    planned_sell_price: 2200.0,
+                    stops: Some(stops),
+                }
+            } else {
+                OrderCommandPayload::Start {
+                    market_name: "ETHUSDT".into(),
+                    is_short: false,
+                    use_market_stop: false,
+                    strategy_id: 0,
+                    size: 250.0,
+                    price: 2100.0,
+                    planned_sell_price: 2200.0,
+                    stops: Some(stops),
+                }
+            };
+            let bytes = OrderCommand::new(99, payload).to_bytes();
+            let base_len = 11 + 1 + 8 + 1 + 8 + 3 * 8;
+            assert_eq!(&bytes[base_len..], expected_tail);
+
+            // Delphi reads a complete record only; an absent/short tail is not
+            // an explicit all-disabled block. Extra future bytes remain unread.
+            for tail_len in 0..=STOP_SETTINGS_SIZE {
+                let mut input = &bytes[..base_len + tail_len];
+                let command = OrderCommand::read(&mut input).unwrap();
+                let decoded = match command.payload {
+                    OrderCommandPayload::Start { stops, .. }
+                    | OrderCommandPayload::StartPending { stops, .. } => stops,
+                    other => panic!("unexpected order payload: {other:?}"),
+                };
+                if tail_len == STOP_SETTINGS_SIZE {
+                    assert_eq!(decoded, Some(stops));
+                    assert!(input.is_empty());
+                } else {
+                    assert_eq!(decoded, None);
+                    assert_eq!(input.len(), tail_len);
+                    assert_eq!(command.to_bytes(), bytes[..base_len]);
+                }
+            }
+            let mut extended = bytes.clone();
+            extended.push(0xAA);
+            let mut input = extended.as_slice();
+            let command = OrderCommand::read(&mut input).unwrap();
+            assert_eq!(input, &[0xAA]);
+            assert_eq!(command.to_bytes(), bytes);
+        }
     }
 
     #[test]
@@ -1423,6 +1520,7 @@ mod tests {
                 size: 250.0,
                 price: 1900.0,
                 planned_sell_price: 2000.0,
+                stops: None,
             },
             start,
         );
@@ -1442,6 +1540,7 @@ mod tests {
                 size: 250.0,
                 trigger_price: 2100.0,
                 planned_sell_price: 2000.0,
+                stops: None,
             },
             pending,
         );

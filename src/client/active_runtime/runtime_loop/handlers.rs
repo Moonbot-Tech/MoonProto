@@ -854,6 +854,11 @@ pub(super) fn handle_trade_action(
                 params.size,
                 params.planned_sell_price,
                 params.use_market_stop,
+                params.stops.map(|mut stops| {
+                    // The entire initial block is explicit, including a disabled TP.
+                    stops.take_profit_changed = true.into();
+                    stops
+                }),
             );
             Ok(false)
         }
@@ -870,6 +875,10 @@ pub(super) fn handle_trade_action(
                 params.size,
                 params.planned_sell_price,
                 params.use_market_stop,
+                params.stops.map(|mut stops| {
+                    stops.take_profit_changed = true.into();
+                    stops
+                }),
             );
             Ok(false)
         }
