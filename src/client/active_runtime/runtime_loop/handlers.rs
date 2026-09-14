@@ -306,6 +306,10 @@ pub(super) fn handle_command(
             }
             false
         }
+        RuntimeCommand::ReportTraces(ticket) => {
+            dispatcher.request_report_traces(client, ticket);
+            false
+        }
         RuntimeCommand::ReportCheckOpenRows(rec_ids) => {
             client.set_report_open_rows_intent(Arc::clone(&rec_ids));
             if rec_ids.is_empty() {

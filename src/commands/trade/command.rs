@@ -5,6 +5,7 @@ use crate::commands::registry::CURRENT_PROTO_CMD_VER;
 use crate::commands::report::{
     CMD_ALIVE_MAP, CMD_ALIVE_MAP_REQUEST, CMD_CHECK_ROWS_REQUEST, CMD_ROW_DELETE, CMD_ROW_UPSERT,
     CMD_SCHEMA, CMD_SCHEMA_REQUEST, CMD_SET_ROWS_DELETED, CMD_SYNC_PAGE, CMD_SYNC_REQUEST,
+    CMD_TRACE, CMD_TRACE_REQUEST,
 };
 use std::convert::TryInto;
 
@@ -36,6 +37,9 @@ pub enum TradeCommand {
     #[allow(dead_code)] // Request shape is parsed for registry parity; clients only send it.
     ReportAliveMapRequest(crate::commands::report::RepAliveMapRequest),
     ReportAliveMap(crate::commands::report::RepAliveMap),
+    #[allow(dead_code)] // Request shape is parsed for registry parity; clients only send it.
+    ReportTraceRequest(crate::commands::report::RepTraceRequest),
+    ReportTrace(crate::commands::report::RepTrace),
     OrderImage(OrderImage),
     OrderPatch(OrderPatch),
     OrdersSnapshot(OrdersSnapshot),
@@ -109,6 +113,10 @@ impl TradeCommand {
             CMD_ALIVE_MAP => Some(Self::ReportAliveMap(
                 crate::commands::report::RepAliveMap::read(input)?,
             )),
+            CMD_TRACE_REQUEST => Some(Self::ReportTraceRequest(
+                crate::commands::report::RepTraceRequest::read(input)?,
+            )),
+            CMD_TRACE => Some(Self::ReportTrace(crate::commands::report::RepTrace::read(input)?)),
             41 => Some(Self::OrderImage(OrderImage::read(input)?)),
             42 => Some(Self::OrderPatch(OrderPatch::read(input)?)),
             43 => Some(Self::OrdersSnapshot(OrdersSnapshot::read(input)?)),
@@ -140,6 +148,8 @@ impl TradeCommand {
             Self::ReportSetRowsDeleted(c) => c.header.uid,
             Self::ReportAliveMapRequest(c) => c.header.uid,
             Self::ReportAliveMap(c) => c.header.uid,
+            Self::ReportTraceRequest(c) => c.header.uid,
+            Self::ReportTrace(c) => c.header.uid,
             Self::OrderImage(c) => c.header.uid,
             Self::OrderPatch(c) => c.header.uid,
             Self::OrdersSnapshot(c) => c.header.uid,

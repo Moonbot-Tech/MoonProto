@@ -422,6 +422,22 @@ impl EventDispatcher {
         self.reports.begin_alive_map(ticket, request)
     }
 
+    pub(crate) fn request_report_traces(&mut self, client: &crate::client::Client, ticket: crate::ReportTraceTicket) {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS as u64);
+        if self.reports.traces.begin(ticket, deadline) && !client.send_report_trace_request(ticket) {
+            let mut events = Vec::new();
+            self.reports.traces.complete(ticket.request_id, Err("client is not ready for report traces"), &mut events);
+            self.queued_events.extend(events.into_iter().map(Event::Report));
+        }
+    }
+
+    pub(crate) fn tick_report_trace_timeouts(&mut self, now: std::time::Instant) {
+        let mut events = Vec::new();
+        self.reports.traces.tick(now, &mut events);
+        self.queued_events.extend(events.into_iter().map(Event::Report));
+    }
+
     pub(crate) fn retry_active_report_alive_map(
         &self,
     ) -> Option<(u64, crate::state::ReportAliveMapRequest)> {

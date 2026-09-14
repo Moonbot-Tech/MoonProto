@@ -8,7 +8,8 @@ data.
 
 This domain is separate from `snapshot().orders()`. The snapshot is the live
 trading model used for tables, charts, and order actions. Report replication is
-the durable historical database model.
+the durable historical database model. Archived order traces can also be
+[requested on demand](#archived-order-traces); they are not part of bulk replication.
 
 ## Recommended Flow
 
@@ -285,6 +286,99 @@ The current schema is also available from `snapshot().report_schema()`.
 For each page, use one SQLite transaction and reuse one prepared upsert
 statement. Preparing SQL for every row can turn the local writer into the
 bottleneck that page-level flow control is designed to avoid.
+
+## Archived Order Traces
+
+Use `client.reports().request_traces(report_uid)` to fetch the saved buy/sell
+geometry of a **closed report trade**, including available traces inherited
+through join/split. This works even when the terminal was offline during the
+trade. It does not require the order to remain in `snapshot().orders()`.
+
+**Recommended terminal behavior:** plan local persistent storage for these
+traces, keyed by the report row's `ReportUID`. When the user opens a trade chart,
+show saved traces immediately; request them only if they have not been saved.
+Do not fetch traces for every report row during initialization or catch-up.
+`ReportUID` is an `i64`, including negative values; neither `newRecID` nor a live
+order ID is a substitute. See [Schema And SQLite](#schema-and-sqlite) for reading it.
+
+### When To Request
+
+Wait until the **report replica** contains a closed row (`CloseDate != 0`). The
+core writes the final trace archive before broadcasting that row's `RowUpsert`.
+The live order mirror can show completion several seconds earlier, while the
+report database is still waiting for its normal write drain. An open report row
+already has a `ReportUID`, but its final archive may not exist yet.
+
+If an early request returns empty, do not retry after an arbitrary delay. Wait
+for `ReportEvent::RowUpsert` with the same `ReportUID` and nonzero `CloseDate`,
+discard the early "unavailable" result, and request again if that chart is still
+open and has no saved traces. If the closed row arrived before the early empty
+reply, retry after that reply instead: the required row is already available.
+Track whether the original request used an open or closed row. No polling timer
+is needed.
+
+### Request And Result
+
+```rust
+// Called when the user opens a closed report trade without locally saved traces.
+let ticket = client.reports().request_traces(report_uid)?;
+
+match event {
+    moonproto::Event::Report(moonproto::ReportEvent::TraceReady { ticket, traces }) => {
+        if traces.is_empty() {
+            show_traces_unavailable(ticket.report_uid);
+        } else {
+            // App-owned storage: preserve line order, own/type, stop marker,
+            // and every point's Unix-millisecond time and f64 price.
+            store_report_traces(ticket.report_uid, &traces)?;
+            display_report_traces(ticket.report_uid, &traces);
+        }
+    }
+    moonproto::Event::Report(moonproto::ReportEvent::TraceFailed { ticket, error }) => {
+        show_trace_request_error(ticket.report_uid, &error);
+        // A failed request is not evidence of an empty archive.
+    }
+    _ => {}
+}
+```
+
+The call returns immediately; match completion with `ticket.request_id`.
+Different trades can be requested concurrently and can complete out of order.
+Repeated requests for the same trade share one in-flight network request;
+each ticket gets its own result, sharing the same immutable trace allocation.
+Requests made during initial connection wait for initialization. Once submitted
+to the transport, the normal request timeout is 12 seconds; transport retries
+are automatic, but the library does not poll or retain a persistent trace cache.
+
+An empty `TraceReady` means the core returned an empty archive. After the closed
+report update, no timed retry is needed for normal archive writing: it has
+already happened. Old trades, unavailable chart figures, archive retention,
+or trades recorded without archive support may have no traces. The core also
+uses the same empty answer for archive-storage failures and can backfill older
+charts during startup, so do not interpret it as an irrevocable "never existed"
+fact. Allow a user-requested refresh rather than continuous retries.
+An older core without this feature does not answer; that ends in `TraceFailed`,
+not an empty `TraceReady`.
+
+### Geometry
+
+Each `ReportTrace` contains `own`, `order_type`, `stop_price`, `stop_time`, and
+`points`. `own=false` identifies inherited geometry; there can be multiple
+lines of the same type. A bounded core archive may omit some inherited lines,
+so the result is the saved geometry, not a complete ancestry graph.
+
+Point and stop times are already **Unix UTC milliseconds** (`MoonTime`). Unlike
+the report date columns below, they need no core-timezone or ping-offset
+correction. Prices are `f64`; do not downcast them when saving the archive.
+Zero point times are unset coordinates, not dates to plot at the Unix epoch.
+
+Points are the core's chart geometry, not successive live trace messages. Do
+not feed them through a live-point append/simplification algorithm. For each
+group `p0=points[k]`, `p1=points[k+1]`, `p2=points[k+2]`, `p3=points[k+3]`, draw
+the order path `p0 -> p1 -> p3` and the auxiliary vertical segment from
+`(p2.time, p1.price)` to `p2`; then advance `k` by three. Skip unset coordinates.
+With a positive `stop_price` and nonzero `stop_time`, the dotted stop segment
+runs from the first point's time to `stop_time`, at `stop_price`.
 
 ## Report Timestamps
 

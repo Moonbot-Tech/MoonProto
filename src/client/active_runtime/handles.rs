@@ -28,6 +28,20 @@ pub struct MoonReports {
 }
 
 impl MoonReports {
+    /// Request archived own/inherited order traces for one report row.
+    ///
+    /// Call when opening a trade chart whose traces are not cached locally.
+    /// Wait for a report row with nonzero `CloseDate`, not live-order completion.
+    /// If an earlier request was empty, retry when that closed report row arrives.
+    /// Results arrive as [`crate::ReportEvent::TraceReady`] or
+    /// [`crate::ReportEvent::TraceFailed`]. Concurrent requests for the same
+    /// `ReportUID` share one network request; each ticket receives a result.
+    pub fn request_traces(&self, report_uid: i64) -> Result<crate::ReportTraceTicket, MoonClientError> {
+        let ticket = crate::ReportTraceTicket { request_id: random_nonzero_u64(), report_uid };
+        self.tx.send(RuntimeCommand::ReportTraces(ticket)).map_err(|_| MoonClientError::RuntimeStopped)?;
+        Ok(ticket)
+    }
+
     /// Request the latest append-only report schema.
     pub fn refresh_schema(&self) -> Result<(), MoonClientError> {
         self.tx

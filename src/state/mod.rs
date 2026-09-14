@@ -32,6 +32,7 @@ pub(crate) mod orders;
 mod problems;
 mod telegram;
 pub(crate) mod report;
+mod report_traces;
 pub(crate) mod seq_ring;
 pub(crate) mod settings;
 pub(crate) mod strats;
@@ -96,6 +97,7 @@ pub use report::{
 pub(crate) use report::{
     ReportAliveMapRequest, ReportControl, ReportPageApplyAction, ReportReplicationState,
 };
+pub use report_traces::{ReportTrace, ReportTracePoint, ReportTraceTicket};
 #[cfg(feature = "diagnostics")]
 #[doc(hidden)]
 pub use seq_ring::SeqRingMemoryResidency;

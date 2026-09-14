@@ -384,6 +384,22 @@ pub(crate) const ORDER_COMMANDS: &[CommandDescriptor] = &[
     ),
     cmd_desc!(
         Command::Order,
+        51,
+        "TRepTraceRequest",
+        base = Base,
+        priority = High,
+        direction = Outbound
+    ),
+    cmd_desc!(
+        Command::Order,
+        52,
+        "TRepTrace",
+        base = Base,
+        priority = Sliced,
+        direction = Inbound
+    ),
+    cmd_desc!(
+        Command::Order,
         41,
         "TOrderImage",
         base = Base,
@@ -1111,7 +1127,7 @@ mod tests {
 
     #[test]
     fn descriptor_map_covers_known_typed_domains() {
-        assert_eq!(ORDER_COMMANDS.len(), 24);
+        assert_eq!(ORDER_COMMANDS.len(), 26);
         assert_eq!(UI_COMMANDS.len(), 49);
         assert_eq!(STRAT_COMMANDS.len(), 11);
         assert_eq!(BALANCE_COMMANDS.len(), 9);
@@ -1130,6 +1146,14 @@ mod tests {
 
     #[test]
     fn descriptor_map_keeps_delphi_default_retry_rules() {
+        let trace_request = find_descriptor(Command::Order, 51).unwrap();
+        assert_eq!(trace_request.priority, CommandPriority::High);
+        assert_eq!(trace_request.ukey, UKeyRule::None);
+        let trace_response = find_descriptor(Command::Order, 52).unwrap();
+        assert_eq!(trace_response.priority, CommandPriority::Sliced);
+        assert_eq!(trace_response.max_retries, 6);
+        assert_eq!(trace_response.ukey, UKeyRule::None);
+
         let settings = find_descriptor(Command::UI, 1).unwrap();
         assert_eq!(settings.priority, CommandPriority::Sliced);
         assert_eq!(settings.max_retries, 6);

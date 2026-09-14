@@ -277,6 +277,11 @@ For chart timestamps, use `OrderTraceChartPoint::time()` or `unix_millis()`.
 When a sell trace carries a stop line, `OrderTraceLine::stop_price` and
 `stop_time` give the price and time endpoint for that dotted stop segment.
 
+These are live-order overlays, not a durable historical archive. To display a
+closed report trade, use `client.reports().request_traces(report_uid)` and store
+the result in the terminal. See [archived order traces](reports.md#archived-order-traces)
+for the request timing, inherited lines, rendering, and local-cache contract.
+
 ## Lifecycle Notes
 
 The v4 order channel is a canonical replica. A complete order image and a

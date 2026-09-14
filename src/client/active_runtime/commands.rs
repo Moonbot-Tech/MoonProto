@@ -54,6 +54,7 @@ pub(super) enum RuntimeCommand {
         is_start: bool,
     },
     ReportSchemaRefresh,
+    ReportTraces(crate::state::ReportTraceTicket),
     ReportSync {
         ticket: crate::state::ReportSyncTicket,
         request: crate::state::ReportSyncRequest,
@@ -246,6 +247,7 @@ impl RuntimeCommand {
             Self::ReportCheckOpenRows(rec_ids) => (60, rec_ids.len()),
             Self::ReportSetRowsDeleted(batches) => (61, batches.len()),
             Self::ReportAliveMap { .. } => (62, 1),
+            Self::ReportTraces(_) => (63, 1),
             #[cfg(any(test, feature = "diagnostics"))]
             Self::DebugOutgoingBlackhole(_) => (56, 0),
             #[cfg(any(test, feature = "diagnostics"))]

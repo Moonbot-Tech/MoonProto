@@ -242,7 +242,9 @@ pub(super) fn runtime_loop(
                         + pending.transfer_assets.len()
                         + pending.engine_actions.len(),
                 );
-            let strategy_edits_changed = dispatcher.tick_strategy_edit_timeouts(Instant::now());
+            let now = Instant::now();
+            let strategy_edits_changed = dispatcher.tick_strategy_edit_timeouts(now);
+            dispatcher.tick_report_trace_timeouts(now);
             candles_changed
                 || market_history_changed
                 || coin_card_changed
@@ -1094,6 +1096,58 @@ mod tests {
                 other => panic!("unexpected order payload: {other:?}"),
             },
             other => panic!("unexpected trade command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn report_trace_request_waits_for_init_and_timeout_releases_it() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let (tx, rx) = mpsc::channel();
+        let reports = super::super::handles::MoonReports { tx };
+        let ticket = reports.request_traces(-99).unwrap();
+        let mut deferred = VecDeque::new();
+        assert_eq!(drain_commands_during_startup(&rx, &mut deferred), (false, false));
+        assert_eq!(deferred.len(), 1);
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(sliced.is_empty() && high.is_empty() && low.is_empty());
+        dispatcher.tick_report_trace_timeouts(Instant::now() + Duration::from_secs(60));
+        assert!(dispatcher.take_queued_events().is_empty());
+        drain_deferred_and_live_commands(&mut client, &mut dispatcher, &rx, &mut pending, &mut deferred);
+        assert_eq!(client.take_send_queues_for_test().1.len(), 1);
+        dispatcher.tick_report_trace_timeouts(Instant::now() + Duration::from_secs(60));
+        assert!(matches!(dispatcher.take_queued_events().as_slice(),
+            [crate::Event::Report(crate::ReportEvent::TraceFailed { ticket: actual, .. })] if *actual == ticket));
+        let retry = reports.request_traces(-99).unwrap();
+        assert_ne!(retry, ticket);
+        handle_command(&mut client, &mut dispatcher, rx.recv().unwrap(), &mut pending);
+        assert_eq!(client.take_send_queues_for_test().1.len(), 1);
+    }
+
+    #[test]
+    fn runtime_report_traces_use_high_queue_and_coalesce_only_same_report() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let (tx, rx) = mpsc::channel();
+        let reports = super::super::handles::MoonReports { tx };
+        let first = reports.request_traces(i64::MIN).unwrap();
+        let second = reports.request_traces(99).unwrap();
+        let repeated = reports.request_traces(i64::MIN).unwrap();
+        assert_ne!(first.request_id, repeated.request_id);
+        for command in rx.try_iter() {
+            assert!(!handle_command(&mut client, &mut dispatcher, command, &mut pending));
+        }
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(sliced.is_empty() && low.is_empty());
+        assert_eq!(high.len(), 2);
+        for (wire, expected) in high.iter().zip([first, second]) {
+            let TradeCommand::ReportTraceRequest(request) = TradeCommand::parse(&wire.data).unwrap() else {
+                panic!("not a report trace request");
+            };
+            assert_eq!(request.header.uid, expected.request_id);
+            assert_eq!(request.report_uid, expected.report_uid);
         }
     }
 

@@ -66,6 +66,11 @@ impl EventDispatcher {
                     Self::push_parse_failed(out, Command::Order, payload);
                 }
             }
+            Some(TradeCommand::ReportTrace(report)) => {
+                let mut events = Vec::new();
+                self.reports.traces.complete(report.request_uid, Ok(&report.blob), &mut events);
+                out.extend(events.into_iter().map(Event::Report));
+            }
             Some(TradeCommand::ReportSyncPage(report)) => {
                 let mut events = Vec::new();
                 if self
@@ -154,6 +159,36 @@ mod tests {
         ReportAliveMapOutcome, ReportAliveMapRequest, ReportAliveMapTicket, ReportEvent,
         ReportRecIdRange, ReportRowsDeleted,
     };
+
+    #[test]
+    fn report_trace_packet_becomes_a_typed_event_without_touching_live_orders() {
+        let mut dispatcher = EventDispatcher::new();
+        let ticket = crate::ReportTraceTicket { request_id: 77, report_uid: -88 };
+        dispatcher.reports.traces.begin(ticket, std::time::Instant::now());
+        let mut blob = vec![1, 1, 1]; // Version, own, buy.
+        blob.extend_from_slice(&12.345678901234_f64.to_le_bytes());
+        blob.extend_from_slice(&1_800_000_000_123_i64.to_le_bytes());
+        blob.extend_from_slice(&1u32.to_le_bytes());
+        blob.extend_from_slice(&1_799_999_999_999_i64.to_le_bytes());
+        blob.extend_from_slice(&0.000012345678901234_f64.to_le_bytes());
+        let mut payload = vec![crate::commands::report::CMD_TRACE];
+        payload.extend_from_slice(&crate::commands::registry::CURRENT_PROTO_CMD_VER.to_le_bytes());
+        payload.extend_from_slice(&999u64.to_le_bytes());
+        payload.extend_from_slice(&ticket.request_id.to_le_bytes());
+        payload.extend_from_slice(&(blob.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&blob);
+        let mut out = Vec::new();
+        dispatcher.client_new_data_order(&payload, 0, &mut out);
+        let [Event::Report(ReportEvent::TraceReady { ticket: actual, traces })] = out.as_slice() else {
+            panic!("unexpected events: {out:?}");
+        };
+        assert_eq!(*actual, ticket);
+        assert_eq!(traces.len(), 1);
+        assert!(traces[0].own);
+        assert_eq!(traces[0].order_type, crate::commands::trade::OrderType::Buy);
+        assert_eq!(traces[0].points[0].time.unix_millis(), 1_799_999_999_999);
+        assert_eq!(traces[0].points[0].price, 0.000012345678901234);
+    }
 
     #[test]
     fn set_rows_deleted_packet_becomes_a_typed_report_event() {

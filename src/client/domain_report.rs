@@ -3,6 +3,10 @@ use super::*;
 pub(crate) const REPORT_RESPONSE_TIMEOUT_MS: i64 = 15_000;
 
 impl Client {
+    pub(crate) fn send_report_trace_request(&self, ticket: crate::ReportTraceTicket) -> bool {
+        self.send_trade(crate::commands::report::build_trace_request(ticket.request_id, ticket.report_uid))
+    }
+
     pub(crate) fn request_report_schema_at(&self, now_ms: i64) -> bool {
         let uid = Self::next_report_request_uid();
         let payload = crate::commands::report::build_schema_request(uid);

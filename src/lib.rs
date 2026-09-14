@@ -242,6 +242,7 @@ pub use state::{
     ReportFieldKind, ReportFieldValue, ReportHistoryDepth, ReportRecIdRange, ReportRow,
     ReportRowsDeleted, ReportSchema, ReportSchemaField, ReportSyncCheckpoint, ReportSyncComplete,
     ReportSyncPage, ReportSyncRequest, ReportSyncTicket, ReportValue,
+    ReportTrace, ReportTracePoint, ReportTraceTicket,
 };
 #[cfg(any(test, feature = "diagnostics"))]
 #[doc(hidden)]

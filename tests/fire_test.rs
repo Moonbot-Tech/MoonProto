@@ -3580,6 +3580,15 @@ fn record_event(
                 ReportEvent::OpenRowsCheckStarted { rec_ids } => {
                     format!("Report OpenRowsCheckStarted count={}", rec_ids.len())
                 }
+                ReportEvent::TraceReady { ticket, traces } => format!(
+                    "Report TraceReady request={} report_uid={} lines={} points={}",
+                    ticket.request_id, ticket.report_uid, traces.len(),
+                    traces.iter().map(|trace| trace.points.len()).sum::<usize>()
+                ),
+                ReportEvent::TraceFailed { ticket, error } => format!(
+                    "Report TraceFailed request={} report_uid={} error={error}",
+                    ticket.request_id, ticket.report_uid
+                ),
                 ReportEvent::OpenRowsCheckComplete { rec_ids } => {
                     format!("Report OpenRowsCheckComplete count={}", rec_ids.len())
                 }

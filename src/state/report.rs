@@ -627,6 +627,16 @@ pub enum ReportEvent {
     SyncPage(Arc<ReportSyncPage>),
     SyncComplete(ReportSyncComplete),
     AliveMapComplete(ReportAliveMapComplete),
+    /// Complete archived geometry, including inherited traces. Empty means unavailable on the core.
+    TraceReady {
+        ticket: super::ReportTraceTicket,
+        traces: Arc<[super::ReportTrace]>,
+    },
+    /// No usable answer; do not cache this as an empty archive.
+    TraceFailed {
+        ticket: super::ReportTraceTicket,
+        error: String,
+    },
     OpenRowsCheckStarted {
         rec_ids: Arc<[i64]>,
     },
@@ -835,6 +845,7 @@ pub(crate) enum ReportControl {
 
 #[derive(Default)]
 pub(crate) struct ReportReplicationState {
+    pub(crate) traces: super::report_traces::ReportTraceRequests,
     schema: Option<Arc<ReportSchema>>,
     pending_after_schema: Option<(ReportSyncTicket, ReportSyncRequest, Option<i32>)>,
     pending_check_after_schema: Option<Arc<[i64]>>,

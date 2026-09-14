@@ -14,6 +14,8 @@ pub(crate) const CMD_CHECK_ROWS_REQUEST: u8 = 40;
 pub(crate) const CMD_SET_ROWS_DELETED: u8 = 48;
 pub(crate) const CMD_ALIVE_MAP_REQUEST: u8 = 49;
 pub(crate) const CMD_ALIVE_MAP: u8 = 50;
+pub(crate) const CMD_TRACE_REQUEST: u8 = 51;
+pub(crate) const CMD_TRACE: u8 = 52;
 pub(crate) const MAX_CHECK_ROW_IDS: usize = 100;
 pub(crate) const MAX_SET_ROWS_DELETED_WIRE_BYTES: usize = 1000;
 
@@ -317,6 +319,48 @@ pub(crate) fn build_alive_map_request(
     out
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Parsed for command-registry parity; clients only send this command.
+pub struct RepTraceRequest {
+    pub(crate) header: BaseCommandHeader,
+    pub(crate) report_uid: i64,
+}
+
+impl RepTraceRequest {
+    pub(crate) fn read(r: &mut &[u8]) -> Option<Self> {
+        let header = BaseCommandHeader::read(r)?;
+        let mut pos = 0;
+        let report_uid = read_i64(r, &mut pos)?;
+        *r = &r[pos..];
+        Some(Self { header, report_uid })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RepTrace {
+    pub(crate) header: BaseCommandHeader,
+    pub(crate) request_uid: u64,
+    pub(crate) blob: Vec<u8>,
+}
+
+impl RepTrace {
+    pub(crate) fn read(r: &mut &[u8]) -> Option<Self> {
+        let header = BaseCommandHeader::read(r)?;
+        let mut pos = 0;
+        let request_uid = read_u64(r, &mut pos)?;
+        let blob = read_len_bytes(r, &mut pos)?;
+        *r = &r[pos..];
+        Some(Self { header, request_uid, blob })
+    }
+}
+
+pub(crate) fn build_trace_request(uid: u64, report_uid: i64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(19);
+    write_base_command_header(&mut out, CMD_TRACE_REQUEST, uid);
+    out.extend_from_slice(&report_uid.to_le_bytes());
+    out
+}
+
 fn read_len_bytes(data: &[u8], pos: &mut usize) -> Option<Vec<u8>> {
     let len = usize::try_from(read_u32(data, pos)?).ok()?;
     let end = pos.checked_add(len)?;
@@ -347,6 +391,37 @@ mod tests {
         out.extend_from_slice(&(value.len() as u32).to_le_bytes());
         out.extend_from_slice(value);
         out
+    }
+
+    #[test]
+    fn trace_commands_match_delphi_layout_and_reject_truncated_envelopes() {
+        let uid = 0x0102_0304_0506_0708;
+        for report_uid in [i64::MIN, -1, 0, i64::MAX] {
+            let raw = build_trace_request(uid, report_uid);
+            let mut expected = header(CMD_TRACE_REQUEST, uid);
+            expected.extend_from_slice(&report_uid.to_le_bytes());
+            assert_eq!(raw, expected);
+            let mut input = raw.as_slice();
+            let request = RepTraceRequest::read(&mut input).unwrap();
+            assert_eq!(request.report_uid, report_uid);
+            assert!(input.is_empty());
+            for end in 0..raw.len() {
+                assert!(RepTraceRequest::read(&mut &raw[..end]).is_none());
+            }
+        }
+        for blob in [&[][..], &[1, 0, 1][..]] {
+            let mut raw = header(CMD_TRACE, 99);
+            raw.extend_from_slice(&uid.to_le_bytes());
+            raw.extend_from_slice(&len_bytes(blob));
+            let mut input = raw.as_slice();
+            let response = RepTrace::read(&mut input).unwrap();
+            assert_eq!(response.request_uid, uid);
+            assert_eq!(response.blob, blob);
+            assert!(input.is_empty());
+            for end in 0..raw.len() {
+                assert!(RepTrace::read(&mut &raw[..end]).is_none());
+            }
+        }
     }
 
     #[test]
