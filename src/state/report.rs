@@ -1614,6 +1614,103 @@ mod tests {
     }
 
     #[test]
+    fn appended_report_chart_fields_survive_live_sync_and_sqlite_migration() {
+        let mut state = ready_state();
+        let previous_schema = Arc::clone(state.schema().unwrap());
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(&previous_schema.sqlite_create_table_sql("Orders")).unwrap();
+        db.execute("INSERT INTO Orders (newRecID, Status) VALUES (1, 1)", []).unwrap();
+
+        let fields = [
+            ("BuySetDateMs", 1u8, "sqlite3_int64 default 0"),
+            ("BuyCorridorDown", 2, "REAL default 0"),
+            ("BuyCorridorUp", 2, "REAL default 0"),
+        ];
+        let mut raw_schema = synlz_decompress(&schema_blob()).unwrap();
+        raw_schema[1..3].copy_from_slice(&5u16.to_le_bytes());
+        for (name, kind, sql_spec) in fields {
+            raw_schema.push(name.len() as u8);
+            raw_schema.extend_from_slice(name.as_bytes());
+            raw_schema.push(kind);
+            raw_schema.push(sql_spec.len() as u8);
+            raw_schema.extend_from_slice(sql_spec.as_bytes());
+            assert!(previous_schema.field_by_name(name).is_none());
+        }
+        let mut out = Vec::new();
+        let mut controls = Vec::new();
+        assert!(state.apply_schema(
+            WireSchema { header: header(38), data: synlz_compress(&raw_schema) },
+            &mut out, &mut controls,
+        ));
+        assert!(matches!(out.as_slice(), [ReportEvent::Schema(_)]));
+        let schema = Arc::clone(state.schema().unwrap());
+        assert!(schema.is_append_only_successor_of(&previous_schema));
+        let indexes = fields.map(|(name, kind, sql_spec)| {
+            let field = schema.field_by_name(name).unwrap();
+            assert_eq!(field.kind, ReportFieldKind::from_wire(kind).unwrap());
+            assert_eq!(field.sql_spec, sql_spec);
+            db.execute_batch(&schema.sqlite_add_column_sql("Orders", field)).unwrap();
+            field.index
+        });
+        let defaults: (i64, f64, f64) = db.query_row(
+            "SELECT BuySetDateMs, BuyCorridorDown, BuyCorridorUp FROM Orders WHERE newRecID=1",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(defaults, (0, 0.0, 0.0));
+
+        // Prices retain full f64 precision and their names, even when Down > Up.
+        for (time, down, up) in [
+            (1_789_128_594_846i64, 0.0000123456789f64, 0.0000112345678f64),
+            (1_789_128_595_123, 123456.7890123, 123789.0123456),
+            (0, 0.0, 0.0),
+        ] {
+            let expected = [ReportValue::Integer(time), ReportValue::Float(down), ReportValue::Float(up)];
+            let mut raw = row(42, 1);
+            raw[..2].copy_from_slice(&5u16.to_le_bytes());
+            for ((index, (_, kind, _)), bytes) in indexes.iter().zip(fields).zip([
+                time.to_le_bytes(), down.to_le_bytes(), up.to_le_bytes(),
+            ]) {
+                raw.extend_from_slice(&index.to_le_bytes());
+                raw.push(kind);
+                raw.extend_from_slice(&bytes);
+            }
+
+            out.clear();
+            let request_uid = state.begin_sync(
+                ReportSyncTicket { sync_id: 71 }, ReportSyncRequest::resume(42), None, &mut out,
+            );
+            out.clear();
+            assert!(state.apply_sync_page(WireSyncPage {
+                header: header(39), request_uid, epoch: 123, last_rec_id: 42, max_rec_id: 42,
+                row_count: 1, blob: synlz_compress(&raw),
+            }, &mut out, &mut controls));
+            let ReportEvent::SyncPage(page) = out.pop().unwrap() else { panic!("expected page") };
+            assert_eq!(page.rows.len(), 1);
+            assert!(matches!(state.page_applied(&page, &mut out), ReportPageApplyAction::Complete { .. }));
+
+            out.clear();
+            assert!(state.apply_live_upsert(42, &raw, &mut out, &mut controls));
+            let [ReportEvent::RowUpsert(live)] = out.as_slice() else { panic!("expected live row") };
+            assert_eq!(live, &page.rows[0]);
+            for (index, value) in indexes.iter().zip(&expected) {
+                assert_eq!(live.value(*index), Some(value));
+            }
+            db.execute(
+                "INSERT OR REPLACE INTO Orders (newRecID, BuySetDateMs, BuyCorridorDown, BuyCorridorUp) VALUES (?, ?, ?, ?)",
+                rusqlite::params![live.rec_id, live.integer_by_name(&schema, "BuySetDateMs"),
+                    live.float_by_name(&schema, "BuyCorridorDown"), live.float_by_name(&schema, "BuyCorridorUp")],
+            ).unwrap();
+            let stored: (i64, f64, f64) = db.query_row(
+                "SELECT BuySetDateMs, BuyCorridorDown, BuyCorridorUp FROM Orders WHERE newRecID=42",
+                [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).unwrap();
+            assert_eq!(stored, (time, down, up));
+        }
+        let omitted = ReportRow::parse(&row(7, 1), schema.rec_id_field_index(), None).unwrap();
+        assert!(indexes.iter().all(|index| omitted.value(*index).is_none()));
+    }
+
+    #[test]
     fn sync_request_reserves_zero_and_max_depth_sentinels() {
         assert!(ReportSyncRequest::fresh(ReportHistoryDepth::ServerDefault).is_valid());
         assert!(ReportSyncRequest::fresh(ReportHistoryDepth::Days(1)).is_valid());

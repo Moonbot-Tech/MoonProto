@@ -279,7 +279,9 @@ When a sell trace carries a stop line, `OrderTraceLine::stop_price` and
 
 These are live-order overlays, not a durable historical archive. To display a
 closed report trade, use `client.reports().request_traces(report_uid)` and store
-the result in the terminal. See [archived order traces](reports.md#archived-order-traces)
+the result in the terminal. Report rows also carry optional
+[entry placement time and saved corridor prices](reports.md#report-chart-fields).
+See [archived order traces](reports.md#archived-order-traces)
 for the request timing, inherited lines, rendering, and local-cache contract.
 
 ## Lifecycle Notes

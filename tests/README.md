@@ -77,6 +77,26 @@ see [its opt-in clear behavior](../docs/problems.md#firetest) before running it.
 and a second connection. It never starts login, changes proxy or logs out;
 see [Telegram](../docs/telegram.md#firetest).
 
+Focused report replication and archived-trace check (`allow_mutation = true`):
+
+```powershell
+cargo test --release --features diagnostics --test fire_test fire_test_report_database_replication -- --exact --ignored --nocapture
+```
+
+This creates an emulator trade, moves its BUY and SELL, closes it, and waits for
+the closed report row before requesting traces. It checks line types, point
+counts, UTC times, prices and segment geometry; repeated requests and an absent
+archive must complete with the correct tickets. A client connected after the
+trade closed must fetch exactly the same archive using its persisted ReportUID.
+It also requires the core's report chart fields: entry creation time must precede
+entry completion, corridor prices must be finite and nonnegative, and the offline
+SQLite replica must preserve all three values exactly. A plain order may have
+zero corridor prices; nonzero prices and reversed DOWN/UP values are covered by
+the deterministic report tests.
+The gate also checks offline report catch-up and delete/restore, restores the
+emulator setting and deleted flag, and leaves the test trade in the report.
+It is included in the full FireTest profile as well.
+
 Live retained-memory warmup check (Windows only):
 
 ```powershell

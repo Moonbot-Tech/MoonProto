@@ -90,10 +90,10 @@ use moonproto::{
     parse_key_info, ClientConfig, ClientSettingsCommand, ConnectConfig, DeepHistoryKind,
     EngineMethod, EngineResponse, ExchangeCode, ExchangeKind, ExchangeOrder, FieldValue,
     ImportedKeys, InitConfig, InitialStrategies, KernelHealth, LifecycleEvent, MoonClient,
-    MoonShotStrategy, MoonStateSnapshot, MoonTime, NewsEvent, OrderWorkerStatus,
+    MoonShotStrategy, MoonStateSnapshot, MoonTime, NewsEvent, OrderType, OrderWorkerStatus,
     ProfitStateCommand, ProtocolMetricsSnapshot, ReportAliveMapComplete, ReportAliveMapOutcome,
     ReportEvent, ReportHistoryDepth, ReportRow, ReportSchema, ReportSyncCheckpoint,
-    ReportSyncComplete, ReportSyncRequest, ReportValue, StrategyDynamicPicklist,
+    ReportSyncComplete, ReportSyncRequest, ReportTrace, ReportTraceTicket, ReportValue, StrategyDynamicPicklist,
     StrategyFieldLayout, StrategyFieldUiKind, StrategyFields, StrategyKind, StrategySchema,
     StrategySnapshot, TradesStreamMode, TransportMode,
 };
@@ -853,6 +853,9 @@ impl FireTestOrderStateEvent {
 struct FireTestClosedOrderProbe {
     server_uid: u64,
     market: String,
+    started_at: MoonTime,
+    initial_buy_price: f64,
+    moved_sell_price: f64,
     buy_price: f64,
     bought_q: f64,
 }
@@ -7047,7 +7050,10 @@ fn run_report_database_gate(cfg: &FireConfig, keys: ImportedKeys, pump_peer: &mu
     let seeded_strategy = firetest_strategy(cfg);
     let mut report_a = Session::connect("ReportDB-A", cfg, keys, Some(seeded_strategy.clone()));
     let schema = wait_report_schema(&mut report_a, cfg.connect_timeout);
-    for required in ["newRecID", "TaskID", "Status", "Emulator", "deleted"] {
+    for required in [
+        "newRecID", "ReportUID", "CloseDate", "TaskID", "Status", "Emulator", "deleted",
+        "BuyDateMs", "BuySetDateMs", "BuyCorridorDown", "BuyCorridorUp",
+    ] {
         assert!(
             schema.field_by_name(required).is_some(),
             "report schema must contain {required} for FireTest DB verification"
@@ -7108,6 +7114,7 @@ fn run_report_database_gate(cfg: &FireConfig, keys: ImportedKeys, pump_peer: &mu
                 });
                 if row.rec_id >= offline_from_rec_id
                     && status == Some(1)
+                    && row.integer_by_name(&schema, "CloseDate").is_some_and(|date| date != 0)
                     && row.integer_by_name(&schema, "Emulator") == Some(1)
                     && coin == Some(expected_coin)
                     && price_matches
@@ -7144,6 +7151,19 @@ fn run_report_database_gate(cfg: &FireConfig, keys: ImportedKeys, pump_peer: &mu
         order_probe.buy_price,
         order_probe.bought_q
     );
+
+    let report_uid = closed_row.integer_by_name(&schema, "ReportUID").expect("closed row must have ReportUID");
+    assert_ne!(report_uid, 0, "fresh report row must have an archive identity");
+    let buy_set_date_ms = closed_row.integer_by_name(&schema, "BuySetDateMs").expect("entry creation time");
+    let buy_date_ms = closed_row.integer_by_name(&schema, "BuyDateMs").expect("entry completion time");
+    assert!(buy_set_date_ms > 0 && buy_set_date_ms <= buy_date_ms,
+        "entry creation must precede completion in the same report clock: {buy_set_date_ms} vs {buy_date_ms}");
+    let corridor_down = closed_row.float_by_name(&schema, "BuyCorridorDown").expect("DOWN corridor price");
+    let corridor_up = closed_row.float_by_name(&schema, "BuyCorridorUp").expect("UP corridor price");
+    assert!(corridor_down.is_finite() && corridor_down >= 0.0);
+    assert!(corridor_up.is_finite() && corridor_up >= 0.0);
+    println!("OK: report chart fields rec_id={} BuySetDateMs={buy_set_date_ms} BuyDateMs={buy_date_ms} BuyCorridorDown={corridor_down} BuyCorridorUp={corridor_up}", closed_row.rec_id);
+    let saved_traces = check_report_traces(&mut report_a, report_uid, &order_probe);
 
     let mut report_b = Session::connect("ReportDB-B", cfg, keys, Some(seeded_strategy));
     let b_schema = Arc::new(
@@ -7401,6 +7421,102 @@ fn run_report_database_gate(cfg: &FireConfig, keys: ImportedKeys, pump_peer: &mu
         "OK: offline soft-delete escaped normal catch-up, AliveMap repaired it, and restore returned the report row for rec_id={}",
         closed_row.rec_id
     );
+
+    let (stored_uid, stored_close_date, stored_buy_set, stored_down, stored_up): (i64, i64, i64, f64, f64) = connection
+        .query_row("SELECT ReportUID, CloseDate, BuySetDateMs, BuyCorridorDown, BuyCorridorUp FROM Orders WHERE newRecID=?", [closed_row.rec_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+        })
+        .expect("offline client must persist the closed report identity");
+    assert_eq!(stored_uid, report_uid);
+    assert_ne!(stored_close_date, 0);
+    assert_eq!((stored_buy_set, stored_down, stored_up), (buy_set_date_ms, corridor_down, corridor_up),
+        "offline replica must preserve every report chart field from the live row");
+    // B connected after the order closed: it cannot answer from a live order mirror.
+    let ticket = report_b.client.reports().request_traces(stored_uid).expect("offline trace request must queue");
+    let offline = wait_report_traces(&mut report_b, &[ticket]);
+    assert_eq!(offline[0], saved_traces, "offline client must receive identical metadata and every archived point");
+    assert_eq!(report_a.snapshot().parse_failed, 0);
+    assert_eq!(report_b.snapshot().parse_failed, 0);
+    println!("OK: report traces verified from live and offline clients, repeated tickets and empty archive; report_uid={report_uid}");
+}
+
+fn wait_report_traces(session: &mut Session, tickets: &[ReportTraceTicket]) -> Vec<Arc<[ReportTrace]>> {
+    let started = Instant::now();
+    let mut replies = vec![None; tickets.len()];
+    while started.elapsed() < FIRETEST_REPORT_MUTATION_TIMEOUT {
+        session.pump(PUMP_SLICE);
+        for event in session.take_report_events() {
+            match event {
+                ReportEvent::TraceReady { ticket, traces } => {
+                    let index = tickets.iter().position(|expected| *expected == ticket)
+                        .unwrap_or_else(|| panic!("unexpected trace reply: {ticket:?}"));
+                    assert!(replies[index].is_none(), "duplicate trace completion: {ticket:?}");
+                    replies[index] = Some(traces);
+                }
+                ReportEvent::TraceFailed { ticket, error } => panic!("trace request {ticket:?} failed: {error}"),
+                _ => {}
+            }
+        }
+        if replies.iter().all(Option::is_some) {
+            println!("OK: {} trace requests completed in {:.3}s", tickets.len(), started.elapsed().as_secs_f64());
+            return replies.into_iter().map(Option::unwrap).collect();
+        }
+    }
+    panic!("trace replies missing for tickets {tickets:?}; completed={:?}",
+        replies.iter().map(Option::is_some).collect::<Vec<_>>());
+}
+
+fn check_report_traces(a: &mut Session, report_uid: i64, order: &FireTestClosedOrderProbe) -> Arc<[ReportTrace]> {
+    // Only request after the closed report row. Live SellDone can precede archive persistence.
+    let reports = a.client.reports();
+    let tickets = [
+        reports.request_traces(report_uid).expect("trace request must queue"),
+        reports.request_traces(0).expect("absent archive request must queue"),
+        reports.request_traces(report_uid).expect("repeated trace request must queue"),
+    ];
+    assert_ne!(tickets[0].request_id, tickets[2].request_id);
+    let replies = wait_report_traces(a, &tickets);
+    assert!(replies[1].is_empty(), "ReportUID=0 must produce an empty answer, not another trade's traces");
+    assert_eq!(replies[0], replies[2], "repeated requests must receive the same archive");
+    let traces = &replies[0];
+    assert_eq!(traces.len(), 2, "fresh unjoined emulator trade must archive its own BUY and SELL");
+    let now = MoonTime::now();
+    // Limit prices can be far from the market; bound geometry by the actual test order's price range.
+    let price_range = (order.initial_buy_price.min(order.buy_price) * 0.95)
+        ..=(order.moved_sell_price.max(order.buy_price) * 1.05);
+    for (trace, (order_type, moved_price)) in traces.iter().zip([
+        (OrderType::Buy, order.initial_buy_price), (OrderType::Sell, order.moved_sell_price),
+    ]) {
+        assert!(trace.own, "unjoined trade unexpectedly has inherited geometry");
+        assert_eq!(trace.order_type, order_type);
+        assert!(trace.points.len() >= 4, "moved order trace has no complete segment");
+        assert_eq!((trace.points.len() - 1) % 3, 0, "trace must contain an anchor and groups of three points");
+        assert!(trace.points.iter().any(|point| point.time != MoonTime::ZERO
+            && price_is_close_enough(point.price, moved_price)), "trace lost the known order price {moved_price}");
+        for point in trace.points.iter() {
+            if point.time == MoonTime::ZERO {
+                continue; // Unset auxiliary coordinates are part of the core geometry.
+            }
+            assert!(point.time.unix_millis() >= order.started_at.unix_millis() - 30_000
+                && point.time.unix_millis() <= now.unix_millis() + 30_000,
+                "trace time must be recent Unix UTC milliseconds: {point:?}");
+            assert!(price_range.contains(&point.price),
+                "trace price is outside the test order's price range {price_range:?}: {point:?}");
+        }
+        for segment in trace.points.windows(4).step_by(3) {
+            assert!(segment[0].time <= segment[1].time, "main trace path goes backwards");
+            assert_eq!(segment[1].time, segment[3].time, "price change must keep its vertical segment");
+        }
+        assert!(trace.stop_price.is_finite() && trace.stop_price >= 0.0);
+        if trace.stop_time != MoonTime::ZERO {
+            assert!(trace.stop_price > 0.0);
+            assert!(trace.stop_time.unix_millis() >= order.started_at.unix_millis() - 30_000
+                && trace.stop_time.unix_millis() <= now.unix_millis() + 30_000);
+        }
+        println!("OK: archived trace report_uid={report_uid} own={} type={:?} points={} stop=({}, {}) geometry={:?}",
+            trace.own, trace.order_type, trace.points.len(), trace.stop_price, trace.stop_time.unix_millis(), trace.points);
+    }
+    Arc::clone(traces)
 }
 
 fn wait_report_rows_deleted_echo(
@@ -8826,6 +8942,7 @@ fn run_order_lifecycle_gate_body(
     a: &mut Session,
     b: &mut Session,
 ) -> FireTestClosedOrderProbe {
+    let started_at = MoonTime::now();
     a.begin_order_state_capture();
     b.begin_order_state_capture();
     let before_uids = a
@@ -9020,9 +9137,14 @@ fn run_order_lifecycle_gate_body(
         .get(server_uid)
         .cloned()
         .expect("SellSet order must still be retained before PanicSell");
+    let sell_price_before = filled_order.sell_order.actual_price;
+    let moved_sell_price = sell_price_before.max(ask) * 1.05;
     let closed_probe = FireTestClosedOrderProbe {
         server_uid,
         market: cfg.market.clone(),
+        started_at,
+        initial_buy_price: initial_price,
+        moved_sell_price,
         buy_price: filled_order.buy_order.mean_price,
         bought_q: filled_order.buy_order.actual_q,
     };
@@ -9031,8 +9153,6 @@ fn run_order_lifecycle_gate_body(
         "filled order probe must contain canonical buy price and quantity: {closed_probe:?}"
     );
 
-    let sell_price_before = filled_order.sell_order.actual_price;
-    let moved_sell_price = sell_price_before.max(ask) * 1.05;
     let a_sell_event_from = a.order_state_event_count();
     let b_sell_event_from = b.order_state_event_count();
     assert!(

@@ -44,6 +44,7 @@ See [markets](markets.md), [trades](trades.md), [order books](order_books.md),
 | Move all buys/sells | Reprice matching orders for one market with replace-kind, price-zone, or percent semantics. | `move_all_buys_for_market(...)` / `move_all_sells_for_market(...)`. |
 | Order traces and corridors | Chart-ready order path, stop-line endpoint, and MoonShot corridor state. | Read `buy_trace_line`, `sell_trace_line`, `stop_time`, and corridor fields from `Order`. |
 | Historical reports | Durable typed replica of the core's Orders report database, including offline catch-up and soft delete/restore. | `client.reports()` and `Event::Report`; this is separate from live `snapshot.orders()`. |
+| Report chart fields | Entry placement time and saved absolute MoonShot/MoonHook corridor prices, when available. | Read `BuySetDateMs`, `BuyCorridorDown`, `BuyCorridorUp` through cached report-schema indices. See [meanings, clocks and zero values](reports.md#report-chart-fields). |
 | Archived order traces | Saved own/inherited order paths for closed report trades, including trades completed while the terminal was offline. | `client.reports().request_traces(report_uid)`; cache `ReportEvent::TraceReady` locally. See [request timing and geometry](reports.md#archived-order-traces). |
 
 `NewOrderTicket::client_order_id` is only an outbound local label. The server's

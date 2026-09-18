@@ -10,6 +10,7 @@ This domain is separate from `snapshot().orders()`. The snapshot is the live
 trading model used for tables, charts, and order actions. Report replication is
 the durable historical database model. Archived order traces can also be
 [requested on demand](#archived-order-traces); they are not part of bulk replication.
+Report rows also expose [entry placement time and saved corridor prices](#report-chart-fields).
 
 ## Recommended Flow
 
@@ -287,6 +288,49 @@ For each page, use one SQLite transaction and reuse one prepared upsert
 statement. Preparing SQL for every row can turn the local writer into the
 bottleneck that page-level flow control is designed to avoid.
 
+## Report Chart Fields
+
+Newer cores append three optional columns to `ReportSchema`. They arrive through
+the existing `RowUpsert` and `SyncPage` events; no extra subscription or request
+is needed. Migrate the application's table on `ReportEvent::Schema` before
+writing rows.
+
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `BuySetDateMs` | `Integer(i64)` | Entry order creation time in milliseconds, not the entry fill time (`BuyDateMs`). Uses the [core's report clock](#report-timestamps), not necessarily UTC. |
+| `BuyCorridorDown` | `Float(f64)` | Saved absolute price for the entry corridor's DOWN replacement condition. |
+| `BuyCorridorUp` | `Float(f64)` | Saved absolute price for the entry corridor's UP replacement condition. |
+
+The corridor is the last saved entry-side state, not a time series and not
+percent offsets from `BuyPrice`. It covers MoonShot and managed MoonHook
+corridors when available; joined sells have no single corridor and carry zeros.
+Do not assume `Down <= Up`: the names describe replacement conditions, not
+numeric sorting. To shade a band, use the minimum and maximum of two positive
+prices while preserving their original names in storage.
+
+Resolve and cache the indices once per schema revision, then read typed values:
+
+```rust
+// On Schema; None means the core does not expose this field.
+let corridor_down_index = schema
+    .field_by_name("BuyCorridorDown")
+    .filter(|field| field.kind == moonproto::ReportFieldKind::Float)
+    .map(|field| field.index);
+
+// On RowUpsert or for each SyncPage row.
+let corridor_down = corridor_down_index.and_then(|index| match row.value(index) {
+    Some(moonproto::ReportValue::Float(price)) if *price > 0.0 => Some(*price),
+    _ => None,
+});
+```
+
+Use the same pattern for `BuyCorridorUp` and `Integer` for `BuySetDateMs`.
+Zero or an absent value means unavailable, not a zero-price line or an epoch
+date. These three columns default to zero, including pre-upgrade history and
+synthetic rows; old cores lack the columns entirely. History is not backfilled.
+The creation time does not reconstruct earlier limit prices or moves: use
+[archived traces](#archived-order-traces) for the actual saved order path.
+
 ## Archived Order Traces
 
 Use `client.reports().request_traces(report_uid)` to fetch the saved buy/sell
@@ -390,15 +434,17 @@ For ordinary trade rows:
 
 | Field | Meaning |
 | --- | --- |
+| `BuySetDateMs` | Creation time of the entry order; zero means unavailable. No seconds counterpart. |
 | `BuyDateMs` | Time MoonBot records the entry as completed. |
 | `SellSetDateMs` | Creation time of the exit order, not its execution time. |
 | `CloseDateMs` | Exit order close time; zero means the report row is still open. |
 
 Entry/exit meanings also apply to short positions. Funding and synthetic report
-rows use their report-creation times. These fields retain MoonBot's report
+rows use their report-creation times for `BuyDateMs`, `SellSetDateMs`, and
+`CloseDateMs`; `BuySetDateMs` remains zero. These fields retain MoonBot's report
 semantics; they do not describe individual partial fills.
 
-**Clock:** both column families use the core's report clock, with no timezone
+**Clock:** all report date columns, including `BuySetDateMs`, use the core's report clock, with no timezone
 normalization during replication. They encode the core's local date/time
 relative to the Unix epoch, not necessarily UTC. Reuse the same core-timezone
 conversion as for the existing report dates, exactly once. With a UTC-configured
@@ -421,7 +467,8 @@ let buy_date_ms = buy_date_ms_index.and_then(|index| match row.value(index) {
 });
 ```
 
-Old cores lack these columns. Existing historical rows are not backfilled:
+Old cores lack these columns. For `BuyDateMs`, `SellSetDateMs`, and
+`CloseDateMs`, existing historical rows are not backfilled:
 their new columns are SQL `NULL`, omitted from the received row, and read as
 `None`. Preserve that absence in the local replica. Prefer a present
 millisecond value; otherwise use the corresponding seconds value as a
