@@ -96,7 +96,15 @@ impl ProtocolCore<'_> {
                 "domain command {:?} skipped before InitDone/domain_ready", command);
             return;
         }
+        if command == Command::TradesStream && self.client.authorized {
+            self.client.reconnect.last_trades_stream_ms = cur_tm;
+            #[cfg(any(test, feature = "diagnostics"))]
+            self.client.metrics.protocol_metrics.record_trades_stream_packet();
+        }
         if is_trades_stream_command(command) && !self.client.has_trades_subscription_intent() {
+            if command == Command::TradesStream {
+                self.client.repair_unwanted_trades_stream(cur_tm);
+            }
             if trace_io_enabled() {
                 eprintln!(
                     "[mp-dispatch-drop] t={} cmd={:?} raw={} payload_len={} payload_hash={:016X} reason=trades_without_subscription",
@@ -107,7 +115,7 @@ impl ProtocolCore<'_> {
                     fnv1a64(&payload)
                 );
             }
-            log::warn!(target: "moonproto::client",
+            log::debug!(target: "moonproto::client",
                 "unexpected {:?} received without all-trades subscription; packet dropped", command);
             return;
         }

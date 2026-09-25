@@ -41,5 +41,6 @@ pub(super) const BIND_FAILED_FIRST_EVENT_MS: i64 = 15_000;
 pub(super) const BIND_FAILED_REPEAT_EVENT_MS: i64 = 50_000;
 pub(super) const TRADES_RECONNECT_THROTTLE_MS: i64 = 5_000; // MoonProtoEngine.NeedReconnectAllTrades
 pub(super) const TRADES_RECONNECT_RESUBSCRIBE_DELAY_MS: i64 = 100; // BWorks.pas Sleep(100)
+pub(super) const TRADES_STREAM_SILENCE_MS: i64 = 15_000; // Active Lib asynchronous subscription repair
 pub(super) const ORDERBOOK_RECONNECT_THROTTLE_MS: i64 = 5_000; // MoonProtoEngine.NeedResubscribeOrderBooks
 pub(super) const CANDLE_RECONNECT_THROTTLE_MS: i64 = 5_000; // MoonProtoEngine.CheckCandleTopics

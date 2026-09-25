@@ -14,6 +14,7 @@ const GIB: usize = 1024 * 1024 * 1024;
 const DEFAULT_HISTORY_BUDGET_PERCENT: u16 = 100;
 const MIN_HISTORY_BUDGET_PERCENT: u16 = 75;
 const MAX_HISTORY_BUDGET_PERCENT: u16 = 800;
+const MAX_COMPACT_BUDGET_PERCENT: u16 = 200;
 const DEFAULT_MM_ORDERS_CAPACITY: usize = 25_000;
 const DEEP_5M_CAPACITY: usize = 500;
 const TRADE_SLOT_BYTES: usize = size_of::<TradeHistoryRow>();
@@ -87,7 +88,8 @@ pub struct MarketHistoryConfig {
 ///
 /// `Auto` derives per-market depth from system memory and the connected
 /// exchange, then allocates each dense ring only when that market/category
-/// receives data. Normal applications choose `Auto` or one percentage.
+/// receives data. `Compact` uses small fixed baselines for capture stations,
+/// independent of host RAM, and disables automatic full-candles downloads.
 ///
 /// This enum is non-exhaustive because retained-history sizing can gain new
 /// policies as UI memory controls become more precise. Match with a wildcard
@@ -103,6 +105,12 @@ pub enum MarketHistorySizing {
     /// histories for memory-constrained terminals; values above `100` extend
     /// detailed trade history up to the same production caps.
     AutoBudgetPercent(u16),
+    /// Small capture-station histories: 5,000 rows per trade tape and 1,000
+    /// rows per price line, liquidation tape, and mini-candle ring.
+    /// No retained MM/5m rings or automatic full-candles requests.
+    Compact,
+    /// Compact sizing scaled by `75..=200` percent; `100` equals `Compact`.
+    CompactBudgetPercent(u16),
     #[doc(hidden)]
     Fixed(MarketHistoryConfig),
 }
@@ -111,6 +119,7 @@ impl MarketHistorySizing {
     pub const DEFAULT_BUDGET_PERCENT: u16 = DEFAULT_HISTORY_BUDGET_PERCENT;
     pub const MIN_BUDGET_PERCENT: u16 = MIN_HISTORY_BUDGET_PERCENT;
     pub const MAX_BUDGET_PERCENT: u16 = MAX_HISTORY_BUDGET_PERCENT;
+    pub const MAX_COMPACT_BUDGET_PERCENT: u16 = MAX_COMPACT_BUDGET_PERCENT;
 
     #[doc(hidden)]
     pub fn fixed(config: MarketHistoryConfig) -> Self {
@@ -129,6 +138,15 @@ impl MarketHistorySizing {
         percent.clamp(MIN_HISTORY_BUDGET_PERCENT, MAX_HISTORY_BUDGET_PERCENT)
     }
 
+    /// Scale the compact baselines, clamping to `75..=200` percent.
+    pub fn compact_with_budget_percent(percent: u16) -> Self {
+        Self::CompactBudgetPercent(percent.clamp(MIN_HISTORY_BUDGET_PERCENT, MAX_COMPACT_BUDGET_PERCENT))
+    }
+
+    pub(crate) fn is_compact(self) -> bool {
+        matches!(self, Self::Compact | Self::CompactBudgetPercent(_))
+    }
+
     pub(crate) fn resolve(self, exchange_code: Option<ExchangeCode>) -> MarketHistoryConfig {
         match self {
             Self::Auto => MarketHistoryConfig::from_system_memory_for_exchange(exchange_code),
@@ -138,6 +156,8 @@ impl MarketHistorySizing {
                     percent,
                 )
             }
+            Self::Compact => MarketHistoryConfig::compact(DEFAULT_HISTORY_BUDGET_PERCENT),
+            Self::CompactBudgetPercent(percent) => MarketHistoryConfig::compact(percent),
             Self::Fixed(config) => config,
         }
     }
@@ -156,6 +176,21 @@ impl Default for MarketHistoryConfig {
 }
 
 impl MarketHistoryConfig {
+    fn compact(percent: u16) -> Self {
+        let percent = usize::from(percent.clamp(MIN_HISTORY_BUDGET_PERCENT, MAX_COMPACT_BUDGET_PERCENT));
+        let trades = 5_000 * percent / 100;
+        let points = 1_000 * percent / 100;
+        Self {
+            futures_trades_capacity: trades,
+            spot_trades_capacity: trades,
+            liquidation_capacity: points,
+            mm_orders_capacity: 0,
+            last_price_capacity: points,
+            mini_candles_capacity: points,
+            candles_5m_capacity: 0,
+        }
+    }
+
     /// Build production-shaped capacities for the current machine.
     ///
     /// `market_count` is retained for source compatibility. Auto histories are

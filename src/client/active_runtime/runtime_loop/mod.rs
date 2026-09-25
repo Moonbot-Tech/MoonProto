@@ -1243,6 +1243,73 @@ mod tests {
     }
 
     #[test]
+    fn compact_capture_queues_charts_without_readers_and_cancels_forgotten_markets() {
+        use crate::state::{MarketHistoryEvent, MarketHistorySizing, MarketHistoryTicket};
+        let mut client = ready_client();
+        client.cfg.market_history = MarketHistorySizing::Compact;
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        dispatcher.set_market_history_sizing(MarketHistorySizing::Compact);
+        let mut pending = RuntimePending::default();
+        handle_command(
+            &mut client, &mut dispatcher,
+            RuntimeCommand::SubscribeTradesFor {
+                want_mm: false,
+                markets: vec!["BTCUSDT".into(), "ETHUSDT".into()],
+            },
+            &mut pending,
+        );
+        assert!(dispatcher.market_history_readers("BTCUSDT").is_none());
+        for (market, id) in [("BTCUSDT", 1), ("ETHUSDT", 2)] {
+            handle_command(
+                &mut client, &mut dispatcher,
+                RuntimeCommand::MarketHistory(MarketHistoryTicket::new(market.into(), id)),
+                &mut pending,
+            );
+        }
+        assert_eq!(pending.market_history.len(), 2);
+        assert_eq!(client.pending_api.pending_market_history.len(), 2);
+        assert!(!pending.auto_candles_requested && pending.auto_candles.is_empty());
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(sliced.len(), 3, "one subscription and two archives, no full candles");
+
+        handle_command(
+            &mut client, &mut dispatcher,
+            RuntimeCommand::SubscribeTradesFor { want_mm: false, markets: vec!["ETHUSDT".into()] },
+            &mut pending,
+        );
+        assert_eq!(pending.market_history.len(), 1);
+        assert_eq!(pending.market_history[0].ticket.id(), 2);
+        assert_eq!(client.pending_api.pending_market_history.len(), 1);
+        assert!(matches!(
+            dispatcher.take_queued_events().as_slice(),
+            [crate::Event::MarketHistory(MarketHistoryEvent::Failed { ticket, .. })] if ticket.id() == 1
+        ));
+
+        let (tx, rx) = mpsc::sync_channel(1);
+        pending.market_history_apply.push(PendingMarketHistoryApply {
+            ticket: MarketHistoryTicket::new("ETHUSDT".into(), 3),
+            deadline: Instant::now(),
+            rx,
+        });
+        handle_command(&mut client, &mut dispatcher, RuntimeCommand::UnsubscribeAllTrades, &mut pending);
+        assert!(pending.market_history.is_empty() && pending.market_history_apply.is_empty());
+        assert!(client.pending_api.pending_market_history.is_empty());
+        assert!(tx.send(Ok(Default::default())).is_err());
+        assert_eq!(dispatcher.take_queued_events().len(), 2);
+        handle_command(
+            &mut client, &mut dispatcher,
+            RuntimeCommand::MarketHistory(MarketHistoryTicket::new("ETHUSDT".into(), 4)),
+            &mut pending,
+        );
+        assert!(pending.market_history.is_empty());
+        assert!(matches!(
+            dispatcher.take_queued_events().as_slice(),
+            [crate::Event::MarketHistory(MarketHistoryEvent::Failed { ticket, .. })] if ticket.id() == 4
+        ));
+    }
+
+    #[test]
     fn runtime_unsubscribe_without_local_subscription_reaches_wire_queue() {
         let mut client = ready_client();
         let mut dispatcher = crate::events::EventDispatcher::new();
@@ -1263,6 +1330,48 @@ mod tests {
             sliced[0].data.get(11).copied(),
             Some(crate::commands::engine_api::EngineMethod::UnsubscribeAllTrades.to_byte())
         );
+    }
+
+    #[test]
+    fn compact_reselection_ignores_previous_chart_chunks() {
+        use crate::commands::engine_api::{EngineMethod, EngineResponse};
+        use crate::state::{MarketHistorySizing, MarketHistoryTicket};
+        let mut client = ready_client();
+        client.cfg.market_history = MarketHistorySizing::Compact;
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        dispatcher.set_market_history_sizing(MarketHistorySizing::Compact);
+        let mut pending = RuntimePending::default();
+        let subscribe = || RuntimeCommand::SubscribeTradesFor {
+            want_mm: false,
+            markets: vec!["BTCUSDT".into()],
+        };
+        let chart = |id| RuntimeCommand::MarketHistory(MarketHistoryTicket::new("BTCUSDT".into(), id));
+        handle_command(&mut client, &mut dispatcher, subscribe(), &mut pending);
+        handle_command(&mut client, &mut dispatcher, chart(1), &mut pending);
+        let old_uid = pending.market_history[0].uid;
+        handle_command(&mut client, &mut dispatcher, RuntimeCommand::UnsubscribeAllTrades, &mut pending);
+        dispatcher.take_queued_events();
+        handle_command(&mut client, &mut dispatcher, subscribe(), &mut pending);
+        handle_command(&mut client, &mut dispatcher, chart(2), &mut pending);
+        let current = &pending.market_history[0];
+        assert_ne!(current.uid, old_uid);
+        assert_eq!(current.progress.generation(), 0);
+        let old_response = EngineResponse {
+            ver: 1,
+            request_uid: old_uid,
+            method: EngineMethod::RequestMarketHistory,
+            success: true,
+            error_code: 0,
+            error_msg: String::new(),
+            data: vec![0, 0, 1, 0, 0],
+        };
+        assert!(!Client::handle_market_history_chunk_in_pending(&mut client.pending_api, &old_response));
+        assert!(!poll_market_history(&mut client, &mut pending, &mut dispatcher));
+        assert_eq!(pending.market_history.len(), 1);
+        assert_eq!(pending.market_history[0].ticket.id(), 2);
+        assert_eq!(pending.market_history[0].progress.generation(), 0);
+        assert!(dispatcher.take_queued_events().is_empty());
+        assert!(pending.auto_candles.is_empty());
     }
 
     #[test]

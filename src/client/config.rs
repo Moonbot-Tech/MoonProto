@@ -407,6 +407,8 @@ impl ClientConfig {
     /// `Auto` is exchange/memory aware and allocates each dense ring only on
     /// first use. `auto_with_budget_percent(75..=800)` is the normal user
     /// control; `100` is the production baseline.
+    /// `Compact` is for capture stations: small rings, no automatic full-candle
+    /// downloads. `compact_with_budget_percent(75..=200)` scales that profile.
     pub fn with_market_history(mut self, market_history: impl Into<MarketHistorySizing>) -> Self {
         self.market_history = market_history.into();
         self

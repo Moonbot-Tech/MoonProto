@@ -40,6 +40,8 @@ retains/calculates data only for the listed markets. Passing an empty market
 list means all markets. This filtered storage mode is an accepted Rust API
 deviation for UI clients that want lower memory usage.
 
+For small headless capture stations, use the [Compact profile](#compact-capture-stations).
+
 Unlike MoonBot UI, the Rust library does not subscribe to all trades unless the
 application asks for it. Without a trades subscription intent, incoming trade
 stream packets are treated as unexpected and are dropped instead of becoming
@@ -135,8 +137,10 @@ row after `Ready` so the newly prepended history is included.
 Requests for different markets may run concurrently. MoonProto assembles each
 response by request identity, extends its wait after every new chunk, and
 retries the complete request after 15 seconds without progress. Applications
-do not assemble chunks or retry protocol packets themselves. The market must
-already be part of the retained trades scope.
+do not assemble chunks or retry protocol packets themselves. Queue the market's
+trades subscription before its chart request; waiting for published readers is
+not necessary. Outside the selected scope, the request fails through
+`MarketHistoryEvent::Failed`. Forgetting a pair cancels its pending request.
 
 ## Retained Readers
 
@@ -536,7 +540,120 @@ stream can be processed, memory can grow. Keep event callbacks light, use sane
 history capacities/scopes, and use FireTest/diagnostics CPU summaries to catch
 worker overload during integration.
 
+## Compact Capture Stations
+
+Use this profile to capture market history around bot trades without retaining
+the whole exchange. No core update or new protocol command is required.
+
+```rust
+use moonproto::{ClientConfig, TradesStreamMode, state::MarketHistorySizing};
+
+let cfg = ClientConfig::new(host, port, master_key, mac_key)
+    .with_market_history(MarketHistorySizing::compact_with_budget_percent(100));
+
+// After connecting with cfg, replace the station's retained selection.
+client.streams().subscribe_trades_for(TradesStreamMode::TradesOnly, ["BTCUSDT"])?;
+let ticket = client.history().request_chart("BTCUSDT")?;
+// No snapshot/readers wait is needed between these two calls.
+```
+
+`Compact` is equivalent to `compact_with_budget_percent(100)`. At 100% each
+selected market has capacities of 5,000 rows per trade tape and 1,000 points per
+LastPrice/MarkPrice line, liquidation tape, and mini-candle ring. Values are
+clamped to **75..=200%** and scale all these capacities proportionally. Unlike
+`Auto`, Compact does not depend on host RAM or exchange. The normal terminal
+profile and its 75..=800% control are unchanged.
+
+Compact has no retained MM or 5-minute candle rings and **does not automatically
+request the all-market candles snapshot**, including when the selection changes.
+Use `TradesOnly`; MM data is not needed for this capture workflow. Explicit
+chart archive requests still work. At the usual two-second market refresh,
+1,000 price points represent roughly 33 minutes, not a guaranteed time window.
+Trade rings limit row count, not elapsed time.
+
+### Station Lifecycle
+
+1. On a purchase, select the pair and request its chart immediately. The global
+   trade stream is subscribed as needed; only selected pairs retain history.
+2. If the deal has not closed after ten minutes, forget its pair and discard
+   its history without saving it.
+3. On a sale, if the pair is no longer selected, select it again and request its
+   chart again. Collect a short post-sale interval, save the required data in
+   the station, then forget the pair.
+4. Keep at most the station's configured number of pairs; evict older captures
+   when admitting a new pair at that limit. If several captures use one pair,
+   release it when none of them needs it.
+5. When no pairs remain, call `unsubscribe_all_trades()`. This sends the wire
+   unsubscribe and releases library-owned histories and the history worker.
+
+Timers, the pair limit, eviction selection, and saving belong to the station,
+not the library. **Strongly prefer a short post-sale interval, for example
+5-15 seconds, and a small pair limit, for example 50.** Longer intervals keep
+more captures active and can overwrite earlier rows in their finite rings.
+More pairs and larger rings require more VPS RAM. A small pair limit permits
+a larger percentage; with more pairs, reduce the percentage or increase RAM.
+
+To forget one pair, call `subscribe_trades_for` with the remaining nonempty
+list. **An empty list means all markets, not none**; use
+`unsubscribe_all_trades()` when the list becomes empty. Drop application-held
+readers and snapshots that reference old rings, plus temporary row copies, when
+forgetting a capture. Keeping a reader alive intentionally keeps its ring alive.
+Freed allocations may be reused by the allocator instead of immediately lowering
+the process's displayed working set.
+
+`MarketHistoryEvent::Ready` confirms the chart was merged into retained history;
+readers are then available in the snapshot. A request outside the current
+selection, or one whose pair is forgotten before completion, produces
+`MarketHistoryEvent::Failed`. Removing a pair cancels its outstanding archive
+collection/retries. Re-selecting it starts fresh storage. The archive contains
+what the core still retains; it cannot guarantee recovery of a discarded buy
+window or every original exchange tick.
+
+### Memory Estimate
+
+On 64-bit builds, trade and price rows occupy 16 bytes; mini-candles occupy
+32 bytes. With every Compact ring materialized at 100%, one pair uses:
+
+```text
+2 trade tapes * 5,000 * 16      = 160,000 bytes
+2 price lines * 1,000 * 16      =  32,000 bytes
+liquidations * 1,000 * 16       =  16,000 bytes
+mini-candles * 1,000 * 32       =  32,000 bytes
+total ring payload             = 240,000 bytes per pair
+```
+
+| Selected pairs | 75% | 100% | 200% |
+| --- | ---: | ---: | ---: |
+| 10 | 1.8 MB | 2.4 MB | 4.8 MB |
+| 50 | 9 MB | 12 MB | 24 MB |
+| 100 | 18 MB | 24 MB | 48 MB |
+
+These are decimal MB of **ring payload, not total process RAM**. Rings allocate
+only on first data: without a spot tape, for example, 50 futures pairs at 100%
+need about 8 MB of ring payload. Add ring/analytics metadata, normal client and
+protocol state, queued work, and any copies retained by the station. Chart
+archives are downloaded and unpacked at the core's size before trimming to the
+small rings, so concurrent archive requests cause temporary memory peaks.
+Request only charts actually needed; the Compact percentage is not a total
+process-memory cap.
+
 ## Recovery Policy
+
+Subscription changes are asynchronous. MoonProto keeps the latest requested
+state across reconnects and repairs reordered stream-control requests:
+
+- After an explicit unsubscribe, incoming live trade packets trigger another
+  unsubscribe, at most once per five seconds. A quiet connection is not polled.
+- While subscribed, fifteen seconds without live trade packets trigger the
+  existing unsubscribe/wait/subscribe sequence, even in the same connection.
+  A genuinely idle core may also cause this harmless retry.
+- A later explicit unsubscribe cancels the intent to resubscribe. Delayed resend
+  responses do not count as evidence that the live stream is still enabled.
+
+Applications do not need a separate subscription watchdog. Recovery is eventual,
+not instantaneous: packets already in flight may arrive after unsubscribe and
+are discarded without recreating retained history. Network outages or exhausted
+transport retries can delay convergence until communication resumes.
 
 MoonClient's trades recovery state maintains up to 50 gap buckets. Missing
 packet numbers are requested for up to three bucket retry cycles with a delay

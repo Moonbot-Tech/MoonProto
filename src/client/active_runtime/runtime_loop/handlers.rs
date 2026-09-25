@@ -126,6 +126,7 @@ pub(super) fn handle_command(
         RuntimeCommand::SubscribeTradesFor { want_mm, markets } => {
             client.subscribe_trades_for(want_mm, markets);
             sync_runtime_trade_storage_scope(client, dispatcher);
+            cancel_unselected_market_history(client, dispatcher, pending);
             schedule_auto_candles_snapshot(client, pending);
             false
         }
@@ -134,6 +135,7 @@ pub(super) fn handle_command(
             clear_auto_candles_pending(client, pending);
             pending.auto_candles_scope = None;
             sync_runtime_trade_storage_scope(client, dispatcher);
+            cancel_unselected_market_history(client, dispatcher, pending);
             false
         }
         RuntimeCommand::SubscribeCandles { markets, kind } => {
@@ -198,7 +200,7 @@ pub(super) fn handle_command(
             false
         }
         RuntimeCommand::MarketHistory(ticket) => {
-            schedule_market_history(client, &mut pending.market_history, ticket);
+            schedule_market_history(client, dispatcher, &mut pending.market_history, ticket);
             false
         }
         RuntimeCommand::Ui(cmd) => handle_ui_command(client, dispatcher, cmd),
@@ -345,6 +347,16 @@ pub(super) fn handle_command(
             false
         }
         #[cfg(any(test, feature = "diagnostics"))]
+        RuntimeCommand::DebugSendTradesSubscription(subscribe) => {
+            let payload = if subscribe {
+                crate::commands::engine_request::subscribe_all_trades(false)
+            } else {
+                crate::commands::engine_request::unsubscribe_all_trades()
+            };
+            client.send_api_request(&payload);
+            false
+        }
+        #[cfg(any(test, feature = "diagnostics"))]
         RuntimeCommand::DebugResetErrEmuDiagnostics => {
             client.reset_err_emu_diagnostics();
             false
@@ -379,6 +391,9 @@ pub(super) fn handle_command(
 }
 
 pub(super) fn schedule_auto_candles_snapshot(client: &mut Client, pending: &mut RuntimePending) {
+    if client.cfg.market_history.is_compact() {
+        return;
+    }
     let Some(intent) = client.trade_storage_intent() else {
         return;
     };
@@ -403,9 +418,18 @@ pub(super) fn schedule_auto_candles_snapshot(client: &mut Client, pending: &mut 
 
 fn schedule_market_history(
     client: &mut Client,
+    dispatcher: &mut crate::events::EventDispatcher,
     pending: &mut Vec<PendingMarketHistory>,
     ticket: crate::state::MarketHistoryTicket,
 ) {
+    // Validate owned state, not an asynchronously published reader snapshot.
+    if !client.trade_storage_intent().is_some_and(|intent| intent.scope.contains(&ticket.market)) {
+        dispatcher.queue_market_history_event(crate::state::MarketHistoryEvent::Failed {
+            ticket,
+            error: "market is outside the retained trades scope".to_string(),
+        });
+        return;
+    }
     let (uid, rx, progress) = client.api_request_market_history_async_registered(&ticket.market);
     pending.push(PendingMarketHistory {
         ticket,
@@ -415,6 +439,33 @@ fn schedule_market_history(
         progress,
         rx,
     });
+}
+
+fn cancel_unselected_market_history(
+    client: &mut Client,
+    dispatcher: &mut crate::events::EventDispatcher,
+    pending: &mut RuntimePending,
+) {
+    let intent = client.trade_storage_intent();
+    let mut keep = |ticket: &crate::state::MarketHistoryTicket| {
+        if intent.as_ref().is_some_and(|intent| intent.scope.contains(&ticket.market)) {
+            return true;
+        }
+        dispatcher.queue_market_history_event(crate::state::MarketHistoryEvent::Failed {
+            ticket: ticket.clone(),
+            error: "chart request cancelled: market was removed from retained trades".to_string(),
+        });
+        false
+    };
+    pending.market_history.retain(|item| {
+        if keep(&item.ticket) {
+            true
+        } else {
+            client.pending_api.pending_market_history.remove(&item.uid);
+            false
+        }
+    });
+    pending.market_history_apply.retain(|item| keep(&item.ticket));
 }
 
 fn schedule_transfer_assets_refresh(client: &mut Client, pending: &mut RuntimePending) {

@@ -356,6 +356,22 @@ impl Client {
         registry.mm_orders_sub
     }
 
+    pub(crate) fn repair_unwanted_trades_stream(&mut self, now_ms: i64) {
+        if !self.authorized || !self.subscriptions.domain_ready {
+            return;
+        }
+        if (now_ms - self.reconnect.last_trades_reconnect_check_ms).abs() < TRADES_RECONNECT_THROTTLE_MS {
+            return;
+        }
+        if self.subscriptions.subscription_registry.lock().all_trades_intent != AllTradesIntent::Unsubscribed {
+            return;
+        }
+        // A late Subscribe may have overtaken Off. Repair only while live packets prove it.
+        self.reconnect.last_trades_reconnect_check_ms = now_ms;
+        self.send_api_request_at(&crate::commands::engine_request::unsubscribe_all_trades(), now_ms);
+        log::debug!(target: "moonproto::client", "live trades after explicit unsubscribe; repeating unsubscribe");
+    }
+
     fn start_trades_reconnect_sequence(&mut self, now_ms: i64) {
         if self.registry_trades_want_mm().is_none() {
             return;
@@ -419,7 +435,13 @@ impl Client {
             return;
         }
         if self.server_token == trades_server_token {
-            return;
+            // A token proves an earlier subscription, not the latest asynchronous intent.
+            if self.reconnect.last_trades_stream_ms == NEVER_TIME_MS
+                || (now_ms - self.reconnect.last_trades_stream_ms).abs() < TRADES_STREAM_SILENCE_MS
+                || (now_ms - self.reconnect.last_trades_reconnect_check_ms).abs() < TRADES_STREAM_SILENCE_MS
+            {
+                return;
+            }
         }
         if (now_ms - self.reconnect.last_trades_reconnect_check_ms).abs()
             < TRADES_RECONNECT_THROTTLE_MS

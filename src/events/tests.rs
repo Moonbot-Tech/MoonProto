@@ -2206,6 +2206,31 @@ fn default_history_worker_uses_client_sizing_policy() {
 }
 
 #[test]
+fn unsubscribe_releases_owned_history_worker_and_old_snapshot_index() {
+    for sizing in [crate::state::MarketHistorySizing::Auto, crate::state::MarketHistorySizing::Compact] {
+        let mut d = EventDispatcher::new();
+        d.set_market_history_sizing(sizing);
+        seed_event_markets(&mut d, &["BTCUSDT"]);
+        d.set_trade_storage_scope(Some(&crate::state::TradeStorageScope::All), 45_000.0);
+        assert!(d.flush_market_history(mt(45_000.0)));
+        let snapshot = d.snapshot();
+        assert!(snapshot.market_history_readers("BTCUSDT").is_some());
+        assert!(d.owned_market_history.is_some());
+
+        d.set_trade_storage_scope(None, 45_000.0);
+        assert!(d.owned_market_history.is_none());
+        assert!(d.market_history.is_none());
+        assert!(snapshot.market_history_readers("BTCUSDT").is_none());
+        assert!(d.snapshot().market_history_readers("BTCUSDT").is_none());
+
+        d.set_trade_storage_scope(Some(&crate::state::TradeStorageScope::All), 45_000.0);
+        assert!(d.flush_market_history(mt(45_000.0)));
+        assert_eq!(d.market_history_readers("BTCUSDT").unwrap().futures_trades.unwrap().bounds().len, 0);
+        assert!(snapshot.market_history_readers("BTCUSDT").is_none());
+    }
+}
+
+#[test]
 fn candles_snapshot_ready_after_worker_barrier_exposes_reader_rows() {
     let worker = crate::state::MarketHistoryWorker::spawn(crate::state::MarketHistoryConfig {
         futures_trades_capacity: 0,

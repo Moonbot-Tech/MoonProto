@@ -357,6 +357,10 @@ pub(crate) struct ReconnectRestore {
     /// unsubscribe/sleep/subscribe sequence again.
     pub(crate) last_trades_reconnect_check_ms: i64,
 
+    /// Last live stream arrival, including packets discarded after an explicit unsubscribe.
+    /// Resend responses do not prove that the core is still subscribed.
+    pub(crate) last_trades_stream_ms: i64,
+
     /// Last queued `emk_SubscribeAllTrades` request, including requests queued
     /// through `ClientSender`. Delphi `SubscribeAllTrades` blocks inside
     /// `SendAndWait` for `FTimeout=12000`, so `NeedReconnectAllTrades` cannot
@@ -450,6 +454,7 @@ impl ReconnectRestore {
             update_markets_after_indexes: false,
             restore_orderbooks_after_indexes: false,
             last_trades_reconnect_check_ms: super::constants::NEVER_TIME_MS,
+            last_trades_stream_ms: super::constants::NEVER_TIME_MS,
             last_trades_subscribe_request_ms,
             subscribed_book_server_token: 0,
             last_book_reconnect_check_ms: super::constants::NEVER_TIME_MS,

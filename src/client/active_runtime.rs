@@ -303,6 +303,13 @@ impl MoonClient {
         self.send_no_reply(RuntimeCommand::DebugOutgoingBlackhole(enabled))
     }
 
+    /// FireTest: deliver a stale stream-control request without changing local intent.
+    #[cfg(any(test, feature = "diagnostics"))]
+    #[doc(hidden)]
+    pub fn debug_send_trades_subscription(&self, subscribe: bool) -> Result<(), MoonClientError> {
+        self.send_no_reply(RuntimeCommand::DebugSendTradesSubscription(subscribe))
+    }
+
     /// Hidden FireTest hook: reset client-side ErrEmu counters inside the
     /// runtime owner.
     #[cfg(any(test, feature = "diagnostics"))]
@@ -775,14 +782,6 @@ impl MoonClient {
         &self,
         market: String,
     ) -> Result<crate::state::MarketHistoryTicket, MoonClientError> {
-        let snapshot = self.snapshot().ok_or(MoonClientError::StateUnavailable(
-            "market state is not published yet",
-        ))?;
-        if snapshot.market_history_readers(&market).is_none() {
-            return Err(MoonClientError::StateUnavailable(
-                "market is outside the retained trades scope",
-            ));
-        }
         let request_id = loop {
             let value = rand::random::<u64>();
             if value != 0 {
@@ -1171,6 +1170,28 @@ impl Drop for MoonClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chart_public_api_can_follow_subscription_before_any_snapshot() {
+        let (tx, rx) = mpsc::channel();
+        let client = MoonClient {
+            tx,
+            shutdown: Default::default(),
+            event_queue: None,
+            snapshot: Default::default(),
+            startup_status: Default::default(),
+            err_emu_diagnostics: Default::default(),
+            protocol_metrics: Default::default(),
+            subscription_registry: Default::default(),
+            join: Default::default(),
+            lifecycle_join: Default::default(),
+        };
+        client.streams().subscribe_trades_for(TradesStreamMode::TradesOnly, ["BTCUSDT"]).unwrap();
+        let ticket = client.history().request_chart("BTCUSDT").unwrap();
+        assert!(client.snapshot().is_none());
+        assert!(matches!(rx.try_recv().unwrap(), RuntimeCommand::SubscribeTradesFor { want_mm: false, .. }));
+        assert!(matches!(rx.try_recv().unwrap(), RuntimeCommand::MarketHistory(queued) if queued == ticket));
+    }
 
     #[test]
     fn strategy_public_api_applies_to_orders_only_when_explicitly_requested() {

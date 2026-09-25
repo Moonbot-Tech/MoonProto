@@ -17,6 +17,63 @@ fn mt(days: f64) -> MoonTime {
 }
 
 #[test]
+fn compact_history_baselines_scale_without_host_memory_or_exchange() {
+    for (requested, percent) in [(0, 75), (75, 75), (100, 100), (150, 150), (200, 200), (800, 200)] {
+        let sizing = MarketHistorySizing::compact_with_budget_percent(requested);
+        assert!(sizing.is_compact());
+        let config = sizing.resolve(None);
+        assert_eq!(config, MarketHistorySizing::CompactBudgetPercent(requested).resolve(None));
+        assert_eq!(config, sizing.resolve(Some(ExchangeCode::FBinance)));
+        assert_eq!(config, sizing.resolve(Some(ExchangeCode::Gate)));
+        assert_eq!(config.futures_trades_capacity, 5_000 * percent / 100);
+        assert_eq!(config.spot_trades_capacity, config.futures_trades_capacity);
+        assert_eq!(config.last_price_capacity, 1_000 * percent / 100);
+        assert_eq!(config.liquidation_capacity, config.last_price_capacity);
+        assert_eq!(config.mini_candles_capacity, config.last_price_capacity);
+        assert_eq!(config.mm_orders_capacity, 0);
+        assert_eq!(config.candles_5m_capacity, 0);
+        // Includes both trade tapes, both price lines, liquidations and minis.
+        assert_eq!(config.estimated_bytes_per_market(), 240_000 * percent / 100);
+    }
+    assert_eq!(
+        MarketHistorySizing::Compact.resolve(None),
+        MarketHistorySizing::compact_with_budget_percent(100).resolve(None),
+    );
+    assert!(!MarketHistorySizing::Auto.is_compact());
+}
+
+#[test]
+fn compact_scope_eviction_releases_storage_and_reselection_starts_empty() {
+    let mut registry = MarketHistoryRegistry::new(MarketHistorySizing::Compact.resolve(None));
+    let names = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+    registry.configure_markets(&names, Some(&TradeStorageScope::from_markets(["BTCUSDT", "ETHUSDT"])));
+    let store = registry.get_mut("BTCUSDT").unwrap();
+    store.append_futures_trade(trade(45_000.0, 100.0, 1.0));
+    let held = store.read_handle();
+    let weak = Arc::downgrade(&held.inner);
+    registry.get_mut("ETHUSDT").unwrap().append_futures_trade(trade(45_000.0, 200.0, 1.0));
+
+    registry.configure_markets(&names, Some(&TradeStorageScope::from_markets(["ETHUSDT", "SOLUSDT"])));
+    assert!(registry.readers("BTCUSDT").is_none());
+    assert!(weak.upgrade().is_some(), "application-held readers still own their old storage");
+    drop(held);
+    assert!(weak.upgrade().is_none(), "no hidden owner retains an evicted market");
+    assert_eq!(registry.readers("ETHUSDT").unwrap().futures_trades.unwrap().bounds().len, 1);
+
+    registry.configure_markets(&names, Some(&TradeStorageScope::from_markets(["BTCUSDT"])));
+    let readers = registry.readers("BTCUSDT").unwrap();
+    let ring = readers.futures_trades.unwrap();
+    assert_eq!(ring.capacity(), 5_000);
+    assert_eq!(ring.bounds().len, 0);
+    assert!(!ring.is_allocated());
+    assert!(readers.mm_orders.is_none() && readers.candles_5m.is_none());
+    let weak = Arc::downgrade(&registry.read_handle("BTCUSDT").unwrap().inner);
+    registry.configure_markets(&names, None);
+    assert!(registry.is_empty());
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
 fn market_history_backfill_merges_live_tail_deduplicates_and_clips() {
     let mut store = MarketHistoryStore::new(MarketHistoryConfig {
         futures_trades_capacity: 3,

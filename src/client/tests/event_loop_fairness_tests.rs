@@ -362,6 +362,57 @@ fn post_init_trades_stream_requires_explicit_subscription_intent() {
 }
 
 #[test]
+fn trades_late_subscribe_is_corrected_only_by_live_packets_and_throttled() {
+    let mut client = Client::new(dummy_cfg());
+    client.testing_set_domain_ready(true);
+    client.authorized = true;
+    client.unsubscribe_all_trades();
+    client.take_send_queues_for_test();
+    let mut dispatcher = EventDispatcher::new();
+    let mut mode = RunMode::new(&mut dispatcher);
+    for (command, time, expected) in [
+        (Command::TradesResendResponse, 10_000, 0),
+        (Command::TradesStream, 10_000, 1),
+        (Command::TradesStream, 10_001, 0),
+        (Command::TradesStream, 14_999, 0),
+        (Command::TradesStream, 15_000, 1),
+    ] {
+        ProtocolCore { client: &mut client }.client_new_data(
+            command.to_byte(), vec![0], false, false, time, &mut mode,
+        );
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(sliced.len(), expected, "{command:?} at {time}");
+        for item in sliced {
+            assert_eq!(item.data[11], crate::commands::engine_api::EngineMethod::UnsubscribeAllTrades.to_byte());
+        }
+    }
+    assert!(mode.dispatcher.take_queued_events().is_empty());
+    assert_eq!(client.protocol_metrics_snapshot().trades_stream_recv_count, 4);
+    client.tick_trades_reconnect_sequence(100_000, 0);
+    assert!(client.take_send_queues_for_test().0.is_empty(), "Off does not poll a quiet core");
+}
+
+#[test]
+fn trades_off_repair_requires_ready_authorized_explicit_intent() {
+    for (ready, authorized, explicit_off) in [(false, true, true), (true, false, true), (true, true, false)] {
+        let mut client = Client::new(dummy_cfg());
+        client.testing_set_domain_ready(ready);
+        client.authorized = authorized;
+        if explicit_off {
+            client.unsubscribe_all_trades();
+        }
+        client.take_send_queues_for_test();
+        let mut dispatcher = EventDispatcher::new();
+        let mut mode = RunMode::new(&mut dispatcher);
+        ProtocolCore { client: &mut client }.client_new_data(
+            Command::TradesStream.to_byte(), vec![0], false, false, 10_000, &mut mode,
+        );
+        assert!(client.take_send_queues_for_test().0.is_empty());
+    }
+}
+
+#[test]
 fn data_read_sliced_payload_bypasses_recv_event_backlog() {
     let mut client = Client::new(dummy_cfg());
     client.testing_set_domain_ready(true);

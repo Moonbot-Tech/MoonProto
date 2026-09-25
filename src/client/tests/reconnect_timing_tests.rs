@@ -1392,6 +1392,70 @@ fn successful_subscribe_all_trades_response_refreshes_reconnect_gate() {
 }
 
 #[test]
+fn trades_same_session_silence_repairs_a_late_unsubscribe() {
+    let mut client = dummy_client();
+    client.set_domain_ready(true);
+    client.server_token = 7;
+    client.with_subscription_registry_mut(|registry| {
+        registry.all_trades_intent = AllTradesIntent::Subscribed(TradesSubscription { want_mm: false });
+    });
+    client.reconnect.last_trades_stream_ms = 10_000;
+    client.tick_trades_reconnect_sequence(10_000 + TRADES_STREAM_SILENCE_MS - 1, 7);
+    assert!(drain_send_items(&client).is_empty());
+    client.tick_trades_reconnect_sequence(10_000 + TRADES_STREAM_SILENCE_MS, 7);
+    let sent = drain_send_items(&client);
+    assert_eq!(api_methods(&sent), vec![EngineMethod::UnsubscribeAllTrades.to_byte()]);
+
+    // A lost response must not leave the recovery waiting forever.
+    let timeout = 10_000 + TRADES_STREAM_SILENCE_MS + crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS;
+    client.tick_trades_reconnect_sequence(timeout, 7);
+    assert!(drain_send_items(&client).is_empty());
+    client.tick_trades_reconnect_sequence(timeout + TRADES_RECONNECT_RESUBSCRIBE_DELAY_MS, 7);
+    assert_eq!(api_methods(&drain_send_items(&client)), vec![EngineMethod::SubscribeAllTrades.to_byte()]);
+}
+
+#[test]
+fn trades_recovery_never_resubscribes_after_latest_explicit_off() {
+    for receive_ack in [false, true] {
+        let mut client = dummy_client();
+        client.set_domain_ready(true);
+        client.server_token = 7;
+        client.with_subscription_registry_mut(|registry| {
+            registry.all_trades_intent = AllTradesIntent::Subscribed(TradesSubscription { want_mm: false });
+        });
+        client.tick_trades_reconnect_sequence(10_000, 0);
+        let sent = drain_send_items(&client);
+        let uid = request_uid(&sent[0].data).unwrap();
+        client.unsubscribe_all_trades();
+        drain_send_items(&client);
+        if receive_ack {
+            client.close_trades_unsubscribe_wait_if_matches(uid);
+        } else {
+            client.tick_trades_reconnect_sequence(10_000 + crate::api_pending::DEFAULT_PENDING_TIMEOUT_MS, 0);
+        }
+        let due = client.reconnect.pending_trades_resubscribe_after_ms.unwrap();
+        client.tick_trades_reconnect_sequence(due, 0);
+        client.tick_trades_reconnect_sequence(due + 60_000, 0);
+        assert!(drain_send_items(&client).is_empty(), "late ACK/timeout must respect explicit Off");
+    }
+}
+
+#[test]
+fn trades_healthy_stream_does_not_refresh_subscription_periodically() {
+    let mut client = dummy_client();
+    client.set_domain_ready(true);
+    client.server_token = 7;
+    client.with_subscription_registry_mut(|registry| {
+        registry.all_trades_intent = AllTradesIntent::Subscribed(TradesSubscription { want_mm: false });
+    });
+    for now_ms in (1_000..600_000).step_by(1_000) {
+        client.reconnect.last_trades_stream_ms = now_ms;
+        client.tick_trades_reconnect_sequence(now_ms, 7);
+    }
+    assert!(drain_send_items(&client).is_empty());
+}
+
+#[test]
 fn candle_reconnect_replays_per_market_timeframes_and_waits_for_responses() {
     let mut client = dummy_client();
     client.set_domain_ready(true);

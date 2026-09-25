@@ -1436,8 +1436,9 @@ impl MoonHistory<'_> {
 
     /// String-keyed chart archive request for scripts and tools.
     ///
-    /// The market must already belong to the retained trades scope. Completion
-    /// arrives as [`crate::Event::MarketHistory`].
+    /// May be called immediately after `subscribe_trades_for` on the same
+    /// client: the runtime checks the scope after processing earlier intents.
+    /// Completion or rejection arrives as [`crate::Event::MarketHistory`].
     pub fn request_chart(
         &self,
         market: impl Into<String>,

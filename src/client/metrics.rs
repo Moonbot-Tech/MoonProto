@@ -74,6 +74,8 @@ pub struct ProtocolMetricsSnapshot {
     /// UDP datagrams returned by `recv_from`, before MoonProto MAC/version
     /// acceptance.
     pub recv_count: u64,
+    /// Authenticated live trade packets, including packets discarded after unsubscribe.
+    pub trades_stream_recv_count: u64,
     /// Total nanoseconds spent in the reader-side protocol packet path after
     /// `recv_from` returned, excluding deliberate protocol waits.
     pub reader_protocol_count: u64,
@@ -349,6 +351,7 @@ impl ProfilePhase {
 #[derive(Debug, Default)]
 pub(crate) struct ProtocolMetrics {
     recv_count: AtomicU64,
+    trades_stream_recv_count: AtomicU64,
     reader_protocol_count: AtomicU64,
     reader_protocol_ns: AtomicU64,
     reader_protocol_max_ns: AtomicU64,
@@ -446,6 +449,10 @@ pub(crate) struct ProtocolMetrics;
 impl ProtocolMetrics {
     pub(crate) fn record_recv_packet(&self) {
         self.recv_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_trades_stream_packet(&self) {
+        self.trades_stream_recv_count.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn writer_tick_timer(&self) -> ProtocolMetricsTimer<'_> {
@@ -583,6 +590,7 @@ impl ProtocolMetrics {
     pub(crate) fn snapshot(&self, public_event_queue_len: usize) -> ProtocolMetricsSnapshot {
         ProtocolMetricsSnapshot {
             recv_count: self.recv_count.load(Ordering::Relaxed),
+            trades_stream_recv_count: self.trades_stream_recv_count.load(Ordering::Relaxed),
             reader_protocol_count: self.reader_protocol_count.load(Ordering::Relaxed),
             reader_protocol_ns: self.reader_protocol_ns.load(Ordering::Relaxed),
             reader_protocol_max_ns: self.reader_protocol_max_ns.load(Ordering::Relaxed),

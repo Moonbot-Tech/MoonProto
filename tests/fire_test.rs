@@ -72,6 +72,9 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "fire_test/compact.rs"]
+mod compact;
+
 use moonproto::client::{set_err_emu, ErrEmuDiagnostics, ErrEmuSlicedDatagramDiagnostics};
 use moonproto::commands::{
     parse_request_candles_data_response, parse_strategy_batch, CandlesAggregator,

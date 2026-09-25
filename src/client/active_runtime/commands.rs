@@ -70,6 +70,8 @@ pub(super) enum RuntimeCommand {
     #[cfg(any(test, feature = "diagnostics"))]
     DebugOutgoingBlackhole(bool),
     #[cfg(any(test, feature = "diagnostics"))]
+    DebugSendTradesSubscription(bool),
+    #[cfg(any(test, feature = "diagnostics"))]
     DebugResetErrEmuDiagnostics,
     #[cfg(any(test, feature = "diagnostics"))]
     DiagFillMarketHistoryToCapacity {
@@ -250,6 +252,8 @@ impl RuntimeCommand {
             Self::ReportTraces(_) => (63, 1),
             #[cfg(any(test, feature = "diagnostics"))]
             Self::DebugOutgoingBlackhole(_) => (56, 0),
+            #[cfg(any(test, feature = "diagnostics"))]
+            Self::DebugSendTradesSubscription(_) => (93, 0),
             #[cfg(any(test, feature = "diagnostics"))]
             Self::DebugResetErrEmuDiagnostics => (57, 0),
             #[cfg(any(test, feature = "diagnostics"))]
