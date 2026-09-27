@@ -141,12 +141,22 @@ pub struct StartupStatus {
     /// Physical UDP datagrams received on the current socket, before protocol
     /// validation.
     pub current_port_received_packets: u64,
+    /// Successfully sent UDP payload bytes on the current socket, including retries.
+    /// Excludes IP/UDP headers; resets when the socket is replaced. Live after Ready.
+    pub current_port_sent_bytes: u64,
+    /// Received UDP payload bytes on the current socket, including repeats and rejected packets.
+    /// Excludes IP/UDP headers; resets when the socket is replaced. Live after Ready.
+    pub current_port_received_bytes: u64,
     /// Local UDP port closed by the latest automatic reconnect.
     pub previous_local_udp_port: Option<u16>,
     /// Successfully sent physical UDP datagrams before the latest port change.
     pub sent_packets_before_last_port_change: u64,
     /// Physical UDP datagrams received before the latest port change.
     pub received_packets_before_last_port_change: u64,
+    /// Final UDP payload byte totals of the socket closed by the latest port change.
+    pub sent_bytes_before_last_port_change: u64,
+    /// Final received UDP payload bytes of that socket.
+    pub received_bytes_before_last_port_change: u64,
     /// Number of local sockets closed for automatic reconnect/port rotation.
     pub local_port_change_count: u32,
     /// Last full client/core UDP round-trip time reported by Ping.

@@ -117,6 +117,17 @@ not install a packet callback or add logging/locking to each received datagram.
 After `Ready`, startup transfer totals are frozen. The state can still move to
 `Reconnecting` and back to `Ready` if the established transport drops.
 
+Socket packet and byte counters remain live after `Ready`:
+`current_port_sent_bytes` and `current_port_received_bytes` count actual UDP
+payload bytes, including retransmissions, service packets and rejected incoming
+datagrams, but excluding IP/UDP headers. They describe this client socket only.
+They reset on socket replacement; `sent_bytes_before_last_port_change` and
+`received_bytes_before_last_port_change` preserve the previous socket's final
+totals. A protocol handshake without socket replacement does not reset them.
+To display traffic rate, divide the byte difference between two snapshots by
+elapsed time. Restart the measurement when `local_port_change_count` changes.
+Publication is normally every 250 ms; polling faster cannot improve resolution.
+
 `ServerRestart` is emitted during a successful handshake when the peer app token
 changes. If the one-time Init has already completed, the following successful
 reconnect restores required Engine API state automatically.

@@ -74,7 +74,7 @@ fn compact_scope_eviction_releases_storage_and_reselection_starts_empty() {
 }
 
 #[test]
-fn market_history_backfill_merges_live_tail_deduplicates_and_clips() {
+fn market_history_backfill_splices_live_tail_and_clips() {
     let mut store = MarketHistoryStore::new(MarketHistoryConfig {
         futures_trades_capacity: 3,
         spot_trades_capacity: 0,
@@ -109,6 +109,109 @@ fn market_history_backfill_merges_live_tail_deduplicates_and_clips() {
     assert_eq!(rows[2].price, 104.0);
     assert_eq!(summary.received.futures_trades, 3);
     assert_eq!(summary.retained.futures_trades, 3);
+}
+
+fn archive_trade(ms: i64, qty: f32) -> TradeHistoryRow {
+    TradeHistoryRow { time: MoonTime::from_unix_millis(ms), price: 100.0, qty }
+}
+
+fn archive_trade_store() -> MarketHistoryStore {
+    MarketHistoryStore::new(MarketHistoryConfig {
+        futures_trades_capacity: 32,
+        spot_trades_capacity: 0,
+        liquidation_capacity: 0,
+        mm_orders_capacity: 0,
+        last_price_capacity: 0,
+        mini_candles_capacity: 0,
+        candles_5m_capacity: 0,
+    })
+}
+
+#[test]
+fn archive_splice_keeps_one_aggregation_per_time_region_and_rebuilds_volume() {
+    let mut store = archive_trade_store();
+    let live = [
+        archive_trade(500, 1.0),
+        archive_trade(1_000, 3.0), archive_trade(1_100, 7.0),
+        archive_trade(2_000, 2.0), archive_trade(2_000, 4.0),
+        archive_trade(3_000, 5.0), archive_trade(3_000, 5.0),
+        archive_trade(4_000, -2.0),
+    ];
+    for row in live { store.append_futures_trade(row); }
+    let archive = crate::commands::market_history::MarketHistoryArchive {
+        futures_trades: vec![archive_trade(1_000, 10.0), archive_trade(2_000, 6.0), archive_trade(3_000, 10.0)],
+        ..Default::default()
+    };
+    // Archive owns <= 2000ms; the live tape owns > 2000ms, including identical rows.
+    let expected = [live[0], archive.futures_trades[0], archive.futures_trades[1], live[5], live[6], live[7]];
+    for _ in 0..3 {
+        store.merge_market_history_archive(&archive, MoonTime::from_unix_millis(4_000));
+        let mut rows = Vec::new();
+        store.readers().futures_trades.unwrap().copy_last(32, &mut rows);
+        assert_eq!(rows, expected);
+        assert_eq!(store.rolling_volumes_snapshot(MoonTime::from_unix_millis(4_000)).one_minute.total_value(), 2_900.0);
+    }
+    // A late live aggregate must not be appended inside the archive-owned interval.
+    assert_eq!(store.append_futures_trade(archive_trade(2_000, 6.0)), None);
+    assert!(store.append_futures_trade(archive_trade(4_000, -3.0)).is_some());
+    assert_eq!(store.rolling_volumes_snapshot(MoonTime::from_unix_millis(4_000)).one_minute.total_value(), 3_200.0);
+}
+
+#[test]
+fn archive_splice_handles_empty_short_and_nonmonotonic_inputs() {
+    let a = archive_trade;
+    let cases = [
+        (vec![], vec![a(1_000, 2.0), a(2_000, 3.0)], vec![a(1_000, 2.0), a(2_000, 3.0)]),
+        (vec![a(1_000, 2.0), a(1_000, 2.0)], vec![], vec![a(1_000, 2.0), a(1_000, 2.0)]),
+        // Newly selected pair: do not discard archive rows before live capture started.
+        (vec![a(2_900, 4.0), a(3_100, 5.0)], vec![a(2_500, 2.0), a(2_900, 4.0), a(3_000, 1.0)],
+            vec![a(2_500, 2.0), a(2_900, 4.0), a(3_100, 5.0)]),
+        // Live has not caught up: take the complete archive, not an incomplete tail.
+        (vec![a(1_000, 2.0)], vec![a(1_000, 3.0), a(3_000, 4.0)], vec![a(1_000, 3.0), a(3_000, 4.0)]),
+        // Disjoint intervals preserve both. Arrival order need not be chronological.
+        (vec![a(5_000, 5.0), a(4_000, 4.0)], vec![a(2_000, 2.0), a(1_000, 1.0)],
+            vec![a(1_000, 1.0), a(2_000, 2.0), a(4_000, 4.0), a(5_000, 5.0)]),
+        // Keep every archived row at the boundary, not just one row with that timestamp.
+        (vec![a(1_000, 3.0), a(3_000, 4.0)], vec![a(1_000, 1.0), a(1_000, 2.0), a(2_000, 4.0)],
+            vec![a(1_000, 1.0), a(1_000, 2.0), a(3_000, 4.0)]),
+    ];
+    for (live, archived, expected) in cases {
+        let mut store = archive_trade_store();
+        for row in live { store.append_futures_trade(row); }
+        store.merge_market_history_archive(&crate::commands::market_history::MarketHistoryArchive {
+            futures_trades: archived, ..Default::default()
+        }, MoonTime::from_unix_millis(6_000));
+        let mut rows = Vec::new();
+        store.readers().futures_trades.unwrap().copy_last(32, &mut rows);
+        assert_eq!(rows, expected);
+    }
+}
+
+#[test]
+fn archive_splice_does_not_advance_cutoff_when_no_archive_rows_are_used() {
+    let mut store = archive_trade_store();
+    store.append_futures_trade(archive_trade(1_000, 1.0));
+    store.append_futures_trade(archive_trade(3_000, 2.0));
+    store.merge_market_history_archive(&crate::commands::market_history::MarketHistoryArchive {
+        futures_trades: vec![archive_trade(2_500, 2.0)], ..Default::default()
+    }, MoonTime::from_unix_millis(3_000));
+    assert!(store.append_futures_trade(archive_trade(1_100, 3.0)).is_some());
+}
+
+#[test]
+fn archive_splice_older_reply_does_not_move_late_packet_boundary_backwards() {
+    let mut store = archive_trade_store();
+    store.merge_market_history_archive(&crate::commands::market_history::MarketHistoryArchive {
+        futures_trades: vec![archive_trade(1_000, 1.0), archive_trade(3_000, 2.0)], ..Default::default()
+    }, MoonTime::from_unix_millis(4_000));
+    store.merge_market_history_archive(&crate::commands::market_history::MarketHistoryArchive {
+        futures_trades: vec![archive_trade(1_000, 1.0), archive_trade(2_000, 3.0)], ..Default::default()
+    }, MoonTime::from_unix_millis(4_000));
+    let mut rows = Vec::new();
+    store.readers().futures_trades.unwrap().copy_last(32, &mut rows);
+    assert_eq!(rows, vec![archive_trade(1_000, 1.0), archive_trade(3_000, 2.0)]);
+    assert_eq!(store.append_futures_trade(archive_trade(2_500, 3.0)), None);
+    assert!(store.append_futures_trade(archive_trade(3_001, 4.0)).is_some());
 }
 
 #[test]

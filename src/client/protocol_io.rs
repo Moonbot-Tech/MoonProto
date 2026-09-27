@@ -138,9 +138,10 @@ impl Client {
 
         if let Some(result) = extra_result {
             match result {
-                Ok(_) => {
+                Ok(n) => {
                     self.transport.current_sent_packets =
                         self.transport.current_sent_packets.wrapping_add(1);
+                    self.transport.current_sent_bytes = self.transport.current_sent_bytes.wrapping_add(n as u64);
                 }
                 Err(e) => {
                     if self.should_log("send_extra_err", 1000) {
@@ -150,9 +151,10 @@ impl Client {
             }
         }
         match main_result {
-            Ok(_) => {
+            Ok(n) => {
                 self.transport.current_sent_packets =
                     self.transport.current_sent_packets.wrapping_add(1);
+                self.transport.current_sent_bytes = self.transport.current_sent_bytes.wrapping_add(n as u64);
                 #[cfg(any(test, feature = "diagnostics"))]
                 self.metrics
                     .err_emu_diagnostics

@@ -128,11 +128,25 @@ let ticket = client.history().request_chart_for(&market)?;
 
 `MarketHistoryEvent::Ready` is emitted only after the archive has been merged
 into the market's retained readers. The archive contains detailed futures
-trades, compact mini-candles, LastPrice points, and liquidations. Rows are
-decoded oldest first; live rows received while the archive is in flight are
-preserved, overlapping rows are deduplicated, and the configured ring
-capacities are applied. Restart that chart's cursors from the oldest retained
+trades, compact mini-candles, LastPrice points, and liquidations. Configured ring
+capacities still apply. Restart that chart's cursors from the oldest retained
 row after `Ready` so the newly prepended history is included.
+
+Futures trades are joined by time, not by comparing trade identities: the core
+can aggregate the same trades differently in its archive and live stream.
+MoonProto uses the archive up to one second before its newest trade, then the
+retained live tail. If that tail is shorter or has not caught up, it uses more
+of the archive instead. Existing history older than the archive is preserved.
+Every group with the same timestamp comes from just one input; distinct or
+identical-looking trades within that input are not deduplicated. Late live
+packets cannot append trades inside the already applied archive interval.
+
+The archive is generated on demand. The one-second margin covers ordinary
+aggregation/drain timing; it is not a delivery guarantee. A small volume error
+at the join is possible because aggregation boundaries and timestamp precision
+differ. Retained history is chart data, not an exact exchange execution ledger.
+Do not infer live packet loss from different live/archive row counts. Repeating
+a chart request replaces the overlap rather than accumulating both versions.
 
 Requests for different markets may run concurrently. MoonProto assembles each
 response by request identity, extends its wait after every new chunk, and

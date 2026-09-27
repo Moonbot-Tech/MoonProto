@@ -74,6 +74,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[path = "fire_test/compact.rs"]
 mod compact;
+#[path = "fire_test/history_compare.rs"]
+mod history_compare;
 
 use moonproto::client::{set_err_emu, ErrEmuDiagnostics, ErrEmuSlicedDatagramDiagnostics};
 use moonproto::commands::{
@@ -800,6 +802,7 @@ struct Session {
     parse_failure_correlations_logged: usize,
     report_events: Vec<ReportEvent>,
     market_history_events: Vec<MarketHistoryEvent>,
+    market_history_archives: Vec<(moonproto::state::MarketHistoryTicket, Vec<moonproto::state::TradeHistoryRow>)>,
     order_state_events: Option<Vec<FireTestOrderStateEvent>>,
     candle_tf_state_events: Vec<moonproto::CandleTimeframeStateEvent>,
 }
@@ -937,6 +940,7 @@ impl Session {
             parse_failure_correlations_logged: 0,
             report_events: Vec::new(),
             market_history_events: Vec::new(),
+            market_history_archives: Vec::new(),
             order_state_events: None,
             candle_tf_state_events: Vec::new(),
         };
@@ -994,6 +998,9 @@ impl Session {
                 self.candle_tf_state_events.push(state.clone());
             }
             record_event(&self.stats, &event, snapshot.as_deref(), None);
+            if let Event::MarketHistoryArchive { ticket, trades } = event {
+                self.market_history_archives.push((ticket, trades));
+            }
         }
     }
 
@@ -3177,6 +3184,9 @@ fn record_event(
         },
         Event::MarketHistory(event) => {
             log_server_event(&st, event_no, format!("MarketHistory {event:?}"));
+        }
+        Event::MarketHistoryArchive { ticket, trades } => {
+            log_server_event(&st, event_no, format!("MarketHistoryArchive {ticket:?} trades={}", trades.len()));
         }
         Event::Markets(ev) => {
             st.market_events += 1;

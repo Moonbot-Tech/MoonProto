@@ -2206,6 +2206,34 @@ fn default_history_worker_uses_client_sizing_policy() {
 }
 
 #[test]
+fn inactive_history_configuration_is_cached_and_new_markets_invalidate_it() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    d.sync_market_history_storage();
+    assert_eq!(d.last_market_history_markets_version, Some(d.markets.markets_version()));
+    assert!(d.market_history.is_none());
+
+    let scope = crate::state::TradeStorageScope::from_markets(["ETHUSDT"]);
+    d.set_trade_storage_scope(Some(&scope), 45_000.0);
+    assert_eq!(d.last_market_history_scope, Some(scope.clone()));
+    assert_eq!(d.last_market_history_markets_version, Some(d.markets.markets_version()));
+    assert!(d.market_history.is_none());
+
+    d.markets.markets_list_refresh_needed = true;
+    seed_event_markets(&mut d, &["BTCUSDT", "ETHUSDT"]);
+    d.sync_market_history_storage();
+    assert!(d.flush_market_history(mt(45_000.0)));
+    assert!(d.market_history_readers("ETHUSDT").is_some());
+    assert!(d.market_history_readers("BTCUSDT").is_none());
+
+    d.set_trade_storage_scope(None, 45_000.0);
+    d.sync_market_history_storage();
+    assert!(d.market_history.is_none());
+    assert_eq!(d.last_market_history_scope, None);
+    assert_eq!(d.last_market_history_markets_version, Some(d.markets.markets_version()));
+}
+
+#[test]
 fn unsubscribe_releases_owned_history_worker_and_old_snapshot_index() {
     for sizing in [crate::state::MarketHistorySizing::Auto, crate::state::MarketHistorySizing::Compact] {
         let mut d = EventDispatcher::new();

@@ -397,11 +397,15 @@ impl StartupStatusPublisher {
         self.cached.current_local_udp_port = client.transport.current_local_port;
         self.cached.current_port_sent_packets = client.transport.current_sent_packets;
         self.cached.current_port_received_packets = client.transport.current_received_packets;
+        self.cached.current_port_sent_bytes = client.transport.current_sent_bytes;
+        self.cached.current_port_received_bytes = client.transport.current_received_bytes;
         self.cached.previous_local_udp_port = client.transport.previous_local_port;
         self.cached.sent_packets_before_last_port_change = client.transport.previous_sent_packets;
         self.cached.received_packets_before_last_port_change =
             client.transport.previous_received_packets;
         self.cached.local_port_change_count = client.transport.rebind_count;
+        self.cached.sent_bytes_before_last_port_change = client.transport.previous_sent_bytes;
+        self.cached.received_bytes_before_last_port_change = client.transport.previous_received_bytes;
         if self.startup_finished {
             self.store(now);
             return;
@@ -527,9 +531,13 @@ mod startup_status_tests {
         client.transport.current_local_port = Some(31000);
         client.transport.current_sent_packets = 17;
         client.transport.current_received_packets = 23;
+        client.transport.current_sent_bytes = 170;
+        client.transport.current_received_bytes = 230;
         client.transport.previous_local_port = Some(30999);
         client.transport.previous_sent_packets = 11;
         client.transport.previous_received_packets = 13;
+        client.transport.previous_sent_bytes = 110;
+        client.transport.previous_received_bytes = 130;
         client.transport.rebind_count = 1;
         receive_partial_sliced(&mut client, 7);
         publisher.last_rate_sample_at = Instant::now() - Duration::from_secs(1);
@@ -562,6 +570,10 @@ mod startup_status_tests {
         assert_eq!(status.sent_packets_before_last_port_change, 11);
         assert_eq!(status.received_packets_before_last_port_change, 13);
         assert_eq!(status.local_port_change_count, 1);
+        assert_eq!(status.current_port_sent_bytes, 170);
+        assert_eq!(status.current_port_received_bytes, 230);
+        assert_eq!(status.sent_bytes_before_last_port_change, 110);
+        assert_eq!(status.received_bytes_before_last_port_change, 130);
     }
 
     #[test]
@@ -584,11 +596,15 @@ mod startup_status_tests {
 
         receive_partial_sliced(&mut client, 8);
         client.authorized = true;
+        client.transport.current_sent_bytes = 111;
+        client.transport.current_received_bytes = 222;
         publisher.publish(&client, None, true);
         let status = *shared.read();
         assert_eq!(status.state, StartupState::Ready);
         assert_eq!(status.reconnect_count, 1);
         assert_eq!(status.received_sliced_bytes, bytes_at_ready);
+        assert_eq!(status.current_port_sent_bytes, 111);
+        assert_eq!(status.current_port_received_bytes, 222);
         assert!(status.completed_steps.contains(InitStep::StartupSnapshot));
         assert!(status.completed_steps.contains(InitStep::StartupEvents));
     }

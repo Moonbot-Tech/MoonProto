@@ -312,6 +312,8 @@ pub(super) fn poll_market_history(
                     changed = true;
                     continue;
                 }
+                #[cfg(any(test, feature = "diagnostics"))]
+                dispatcher.queue_market_history_archive(item.ticket.clone(), merged.archive.futures_trades.clone());
                 if let Some(rx) = dispatcher
                     .apply_market_history_archive_async(item.ticket.market.clone(), merged.archive)
                 {

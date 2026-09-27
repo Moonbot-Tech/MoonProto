@@ -33,12 +33,17 @@ pub(crate) struct ClientTransport {
     pub(crate) current_sent_packets: u64,
     /// Physical UDP datagrams returned by `recv_from` on the current socket.
     pub(crate) current_received_packets: u64,
+    /// Physical UDP payload bytes on the current socket, including retries.
+    pub(crate) current_sent_bytes: u64,
+    pub(crate) current_received_bytes: u64,
     /// Local UDP port closed by the latest automatic reconnect.
     pub(crate) previous_local_port: Option<u16>,
     /// Successfully sent physical UDP datagrams before that socket was closed.
     pub(crate) previous_sent_packets: u64,
     /// Physical UDP datagrams received before that socket was closed.
     pub(crate) previous_received_packets: u64,
+    pub(crate) previous_sent_bytes: u64,
+    pub(crate) previous_received_bytes: u64,
     /// Number of sockets closed for automatic reconnect/port rotation.
     pub(crate) rebind_count: u32,
     /// How many consecutive `bind_socket` 200-port walks failed (for `BindFailed`).
@@ -69,9 +74,13 @@ impl ClientTransport {
             current_local_port: None,
             current_sent_packets: 0,
             current_received_packets: 0,
+            current_sent_bytes: 0,
+            current_received_bytes: 0,
             previous_local_port: None,
             previous_sent_packets: 0,
             previous_received_packets: 0,
+            previous_sent_bytes: 0,
+            previous_received_bytes: 0,
             rebind_count: 0,
             bind_failure_streak: 0,
             first_bind_failure_ms: super::constants::NEVER_TIME_MS,
@@ -87,6 +96,8 @@ impl ClientTransport {
         self.current_local_port = Some(local_port);
         self.current_sent_packets = 0;
         self.current_received_packets = 0;
+        self.current_sent_bytes = 0;
+        self.current_received_bytes = 0;
     }
 
     pub(crate) fn close_for_rebind(&mut self) {
@@ -96,8 +107,12 @@ impl ClientTransport {
         self.previous_local_port = self.current_local_port.take();
         self.previous_sent_packets = self.current_sent_packets;
         self.previous_received_packets = self.current_received_packets;
+        self.previous_sent_bytes = self.current_sent_bytes;
+        self.previous_received_bytes = self.current_received_bytes;
         self.current_sent_packets = 0;
         self.current_received_packets = 0;
+        self.current_sent_bytes = 0;
+        self.current_received_bytes = 0;
         self.rebind_count = self.rebind_count.wrapping_add(1);
     }
 }

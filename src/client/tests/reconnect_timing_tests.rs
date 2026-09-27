@@ -31,6 +31,11 @@ fn automatic_rebind_preserves_previous_socket_packet_counts() {
     client.transport.install_socket(socket, port);
     client.transport.current_sent_packets = 17;
     client.transport.current_received_packets = 23;
+    client.transport.current_sent_bytes = 170;
+    client.transport.current_received_bytes = 230;
+    client.full_reset();
+    assert_eq!(client.transport.current_sent_bytes, 170);
+    assert_eq!(client.transport.current_received_bytes, 230);
 
     ProtocolCore {
         client: &mut client,
@@ -45,6 +50,10 @@ fn automatic_rebind_preserves_previous_socket_packet_counts() {
     assert_eq!(client.transport.previous_sent_packets, 17);
     assert_eq!(client.transport.previous_received_packets, 23);
     assert_eq!(client.transport.rebind_count, 1);
+    assert_eq!(client.transport.current_sent_bytes, 0);
+    assert_eq!(client.transport.current_received_bytes, 0);
+    assert_eq!(client.transport.previous_sent_bytes, 170);
+    assert_eq!(client.transport.previous_received_bytes, 230);
 
     let next_socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let next_port = next_socket.local_addr().unwrap().port();
@@ -56,6 +65,10 @@ fn automatic_rebind_preserves_previous_socket_packet_counts() {
     assert_eq!(client.transport.previous_local_port, Some(port));
     assert_eq!(client.transport.previous_sent_packets, 17);
     assert_eq!(client.transport.previous_received_packets, 23);
+    assert_eq!(client.transport.current_sent_bytes, 0);
+    assert_eq!(client.transport.current_received_bytes, 0);
+    assert_eq!(client.transport.previous_sent_bytes, 170);
+    assert_eq!(client.transport.previous_received_bytes, 230);
 }
 
 fn test_market(name: &str) -> Market {

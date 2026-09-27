@@ -69,6 +69,8 @@ impl ProtocolCore<'_> {
                         .transport
                         .current_received_packets
                         .wrapping_add(1);
+                    self.client.transport.current_received_bytes =
+                        self.client.transport.current_received_bytes.wrapping_add(n as u64);
                     let continue_recv = self.process_datagram(&buf[..n], n as u64, mode);
                     self.drain_post_receive_delivery(cur_tm, mode);
                     if !continue_recv {

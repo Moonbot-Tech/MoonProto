@@ -421,6 +421,13 @@ pub enum Event {
     /// only after all four archive sections are visible through retained
     /// history readers.
     MarketHistory(crate::state::MarketHistoryEvent),
+    /// Raw archive trades before merging with live history, for parity measurements only.
+    #[cfg(any(test, feature = "diagnostics"))]
+    #[doc(hidden)]
+    MarketHistoryArchive {
+        ticket: crate::state::MarketHistoryTicket,
+        trades: Vec<crate::state::TradeHistoryRow>,
+    },
     /// Completion of a non-blocking user-facing Engine API action.
     EngineAction(EngineActionEvent),
     /// Legacy closed-sell SQL compatibility stream.

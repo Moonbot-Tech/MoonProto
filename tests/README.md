@@ -107,5 +107,22 @@ This check trims the FireTest process working set, then verifies through the
 public `MoonClient` path that its owned history worker restores a materialized
 retained ring. It does not mutate the MoonBot server.
 
+Live trades versus the raw chart archive (read-only, about 140 seconds):
+
+```powershell
+cargo test --release --features diagnostics --test fire_test history_compare::fire_test_live_trades_vs_raw_archive -- --exact --ignored --nocapture
+```
+
+This collects live rows for three markets before requesting any archive, lets
+late packets settle, and captures each decoded archive before the history merge.
+It writes live/archive/merged CSVs and five-second volume buckets under
+`target/history-compare-<timestamp>`. Output includes exact multiset overlap,
+BUY/SELL volume totals and physical UDP payload byte counts after Ready.
+Different aggregation can change row counts without losing volume. The gate
+requires <=3% total-volume difference between independent live/archive data and
+between merged/live data through the join; the settled archive-owned region
+must match exactly. Repeated requests and a late-packet wait must leave that
+region unchanged. This is not a guarantee of zero packet loss.
+
 Quick FireTest is the frequent development gate. Full FireTest is the
 destructive/stress gate for “this is a good point” decisions.

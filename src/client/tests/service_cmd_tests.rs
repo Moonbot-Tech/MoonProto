@@ -115,15 +115,17 @@ fn socket_packet_counters_track_physical_send_and_receive() {
 
     client.dispatch_send(
         Command::Ping.to_byte(),
-        &[0xAA],
+        &[0xAA; 3],
         Some(&[0xBB]),
         server_sock.local_addr().unwrap(),
     );
     assert_eq!(client.transport.current_sent_packets, 2);
+    assert_eq!(client.transport.current_sent_bytes, 4);
 
-    server_sock.send_to(&[0xCC], client_addr).unwrap();
+    server_sock.send_to(&[0xCC; 2], client_addr).unwrap();
     pump_inline_reader(&mut client);
     assert_eq!(client.transport.current_received_packets, 1);
+    assert_eq!(client.transport.current_received_bytes, 2);
 }
 
 fn pump_inline_reader(client: &mut Client) {

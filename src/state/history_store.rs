@@ -23,6 +23,8 @@ use parking_lot::RwLock;
 
 const FIVE_MINUTES_MS: i64 = 5 * 60 * 1_000;
 const STALE_CANDLES_SNAPSHOT_MS: i64 = 11 * 60 * 1_000;
+// On-demand archive: 200ms aggregation and roughly 250ms history drain, no chart cache.
+const ARCHIVE_LIVE_TAIL_MS: i64 = 1_000;
 
 mod config;
 mod derived;
@@ -109,6 +111,7 @@ pub(crate) struct MarketHistoryStore {
     readers: MarketHistoryReaders,
     read_handle: MarketHistoryReadHandle,
     evicted_futures_for_compaction: Vec<TradeHistoryRow>,
+    futures_archive_end: Option<MoonTime>,
     mini_scratch: Vec<MiniCandle>,
     rolling_volumes: RollingTradeVolumes,
     rolling_volumes_publish_dirty: bool,
@@ -184,6 +187,7 @@ impl MarketHistoryStore {
             readers,
             read_handle,
             evicted_futures_for_compaction: Vec::new(),
+            futures_archive_end: None,
             mini_scratch: Vec::new(),
             rolling_volumes: RollingTradeVolumes::default(),
             rolling_volumes_publish_dirty: false,
@@ -372,12 +376,7 @@ impl MarketHistoryStore {
         archive: &crate::commands::market_history::MarketHistoryArchive,
         now_time: MoonTime,
     ) -> crate::state::MarketHistoryApplySummary {
-        let futures = merge_retained_rows(
-            &mut self.futures_trades,
-            self.readers.futures_trades.as_ref(),
-            &archive.futures_trades,
-            cmp_trade_row,
-        );
+        let futures = self.merge_futures_archive(&archive.futures_trades);
         let minis = merge_retained_rows(
             &mut self.mini_candles,
             self.readers.mini_candles.as_ref(),
@@ -429,6 +428,41 @@ impl MarketHistoryStore {
             #[cfg(any(test, feature = "diagnostics"))]
             apply_wall_micros: 0,
         }
+    }
+
+    fn merge_futures_archive(&mut self, archive: &[TradeHistoryRow]) -> Vec<TradeHistoryRow> {
+        let (Some(writer), Some(reader)) = (self.futures_trades.as_mut(), self.readers.futures_trades.as_ref()) else {
+            return Vec::new();
+        };
+        let capacity = reader.capacity();
+        let mut rows = Vec::new();
+        reader.copy_last(capacity, &mut rows);
+        let Some(first) = archive.iter().map(|row| row.time).min() else { return rows; };
+        let last = archive.iter().map(|row| row.time).max().unwrap();
+        let mut cut = last;
+        if let (Some(live_first), Some(live_last)) = (rows.iter().map(|row| row.time).min(), rows.iter().map(|row| row.time).max()) {
+            if live_first <= last && live_last >= last {
+                // Keep a live tail only where it exists; a newly selected pair may have less than 1s.
+                cut = MoonTime::from_unix_millis(
+                    last.unix_millis().saturating_sub(ARCHIVE_LIVE_TAIL_MS)
+                        .max(live_first.unix_millis().saturating_sub(1)),
+                );
+            }
+        }
+        if cut < first {
+            return rows;
+        }
+        // The same trades can be aggregated differently in each input. Select whole time regions,
+        // never union (time, price, quantity) keys. Equal-time rows all come from the same input.
+        rows.retain(|row| row.time < first || row.time > cut);
+        rows.extend(archive.iter().copied().filter(|row| row.time <= cut));
+        rows.sort_by_key(|row| row.time);
+        if rows.len() > capacity {
+            rows.drain(..rows.len() - capacity);
+        }
+        writer.replace_batch(&rows);
+        self.futures_archive_end = Some(self.futures_archive_end.map_or(cut, |previous| previous.max(cut)));
+        rows
     }
 
     /// Retained LastPrice row from market-price updates.
@@ -487,6 +521,9 @@ impl MarketHistoryStore {
 
     // parity: MoonBot MoonProtoEngine.pas:ProcessTradesStream (futures trade -> m.FuturesTrades)
     pub(crate) fn append_futures_trade(&mut self, row: TradeHistoryRow) -> Option<u64> {
+        if self.futures_archive_end.is_some_and(|end| row.time <= end) {
+            return None;
+        }
         let seq = self.push_retained_futures_trade(row)?;
         let quantity = row.quantity();
         self.rolling_volumes.add_trade_with_quantity(row, quantity);
