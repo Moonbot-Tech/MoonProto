@@ -166,6 +166,7 @@ cargo run --release --example history_bars   -- "<key>" "HOST:PORT" BTCUSDT 1h
 | [`order_snapshot`](examples/order_snapshot.rs) | Fresh order snapshot through `MoonClient`. |
 | [`cancel_open_order`](examples/cancel_open_order.rs) | Tracked cancel intent through `client.orders()`. |
 | [`multi_client_test`](examples/multi_client_test.rs) | Two independent `MoonClient` runtimes. |
+| [`runtime_bench`](examples/runtime_bench.rs) | Windows CPU, memory, traffic and allocation measurements; see [method](docs/performance.md). |
 | [`shutdown_core`](examples/shutdown_core.rs) | Guarded core shutdown request; takes `MOONPROTO_KEY` from the environment. Verify process exit separately. |
 
 ## Documentation

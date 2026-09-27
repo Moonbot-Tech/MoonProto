@@ -108,7 +108,7 @@ impl MarketsState {
         let mut count = 0;
 
         for item in &upd.items {
-            let Some(handle) = self.get(&item.market_name) else {
+            let Some(handle) = self.handles_by_name.get(&item.market_name) else {
                 continue;
             };
             handle.with_mut(|market| {
@@ -119,7 +119,7 @@ impl MarketsState {
         }
 
         for handle in self.markets.iter() {
-            let was_seen = handle.with(|market| seen.contains(market.bn_market_name.as_str()));
+            let was_seen = seen.contains(handle.name());
             if !was_seen {
                 handle.with_mut(reset_missing_balance);
             }
@@ -136,7 +136,7 @@ impl MarketsState {
     fn apply_balance_increment(&mut self, upd: &BalanceUpdate) -> BalanceEvent {
         let mut count = 0;
         for item in &upd.items {
-            let Some(handle) = self.get(&item.market_name) else {
+            let Some(handle) = self.handles_by_name.get(&item.market_name) else {
                 continue;
             };
             let applied = handle.with_mut(|market| {

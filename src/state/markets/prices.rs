@@ -1,5 +1,6 @@
 //! `UpdateMarketsList` price-apply path.
 
+use crate::state::history_store::TradeStorageScope;
 use std::sync::Arc;
 
 use crate::commands::candles::current_local_time_shift_minutes;
@@ -39,7 +40,13 @@ impl MarketsState {
         }
         let base_usdt_context = self.base_usdt_market_context();
         for p in &resp.prices {
-            self.apply_one_market_price_update(p, resp.send_funding, &base_usdt_context, now_ms);
+            self.apply_one_market_price_update(
+                p,
+                resp.send_funding,
+                &base_usdt_context,
+                now_ms,
+                None,
+            );
         }
         if resp.send_corr_markets {
             for c in &resp.corr_prices {
@@ -73,13 +80,17 @@ impl MarketsState {
         data: &[u8],
         last_price_rows: Option<&mut Vec<MarketLastPriceHistoryInput>>,
     ) -> Option<MarketsEvent> {
-        self.apply_markets_prices_payload_collecting_last_price_at(data, last_price_rows, 0)
+        self.apply_markets_prices_payload_collecting_last_price_at(
+            data,
+            last_price_rows.map(|rows| (&TradeStorageScope::All, rows)),
+            0,
+        )
     }
 
     pub(crate) fn apply_markets_prices_payload_collecting_last_price_at(
         &mut self,
         data: &[u8],
-        last_price_rows: Option<&mut Vec<MarketLastPriceHistoryInput>>,
+        last_price_rows: Option<(&TradeStorageScope, &mut Vec<MarketLastPriceHistoryInput>)>,
         now_ms: i64,
     ) -> Option<MarketsEvent> {
         self.apply_markets_prices_payload_with_local_shift_at(
@@ -100,7 +111,7 @@ impl MarketsState {
         self.apply_markets_prices_payload_with_local_shift_at(
             data,
             local_shift_minutes,
-            last_price_rows,
+            last_price_rows.map(|rows| (&TradeStorageScope::All, rows)),
             0,
         )
     }
@@ -109,7 +120,7 @@ impl MarketsState {
         &mut self,
         data: &[u8],
         local_shift_minutes: f64,
-        mut last_price_rows: Option<&mut Vec<MarketLastPriceHistoryInput>>,
+        mut last_price_rows: Option<(&TradeStorageScope, &mut Vec<MarketLastPriceHistoryInput>)>,
         now_ms: i64,
     ) -> Option<MarketsEvent> {
         for handle in self.markets.iter() {
@@ -137,8 +148,9 @@ impl MarketsState {
                 send_funding,
                 &base_usdt_context,
                 now_ms,
+                last_price_rows.as_ref().map(|(scope, _)| *scope),
             ) {
-                if let Some(rows) = last_price_rows.as_deref_mut() {
+                if let Some((_, rows)) = last_price_rows.as_mut() {
                     rows.push(row);
                 }
             }
@@ -174,10 +186,16 @@ impl MarketsState {
     /// after the agreed trades-storage opt-in, so the already-known `pLast`
     /// values must be copied once when the storage scope becomes active.
     // parity: MoonBot MarketsU.pas:TMarket.AddFrom (LastPrice history backfill)
-    pub(crate) fn current_last_price_history_rows(&self) -> Vec<MarketLastPriceHistoryInput> {
+    pub(crate) fn current_last_price_history_rows(
+        &self,
+        scope: &TradeStorageScope,
+    ) -> Vec<MarketLastPriceHistoryInput> {
         let mut rows = Vec::new();
         let base_usdt_context = self.base_usdt_market_context();
         for handle in self.markets.iter() {
+            if !scope.contains(handle.name()) {
+                continue;
+            }
             let market_name = handle.name_arc();
             let (price, is_btc_market, is_base_usdt_market) = handle.with(|market| {
                 (
@@ -206,16 +224,19 @@ impl MarketsState {
         send_funding: bool,
         base_usdt_context: &BaseUsdtMarketContext,
         now_ms: i64,
+        history_scope: Option<&TradeStorageScope>,
     ) -> Option<MarketLastPriceHistoryInput> {
         if let Some(idx) = self.local_pos_for_server_index(p.m_index) {
-            let handle = self.markets.get(idx).cloned()?;
-            let market_name = handle.name_arc();
+            let handle = self.markets.get(idx)?;
+            let market_name = history_scope
+                .filter(|scope| scope.contains(handle.name()))
+                .map(|_| handle.name_arc());
             // Delphi `AddNewAksPrice` (MarketsU.pas:8510,8516) gates and computes
             // ChartPriceStep against `_epsM`, not `_eps`.
             let eps_m = self.eps_profile.eps_m;
             // The price lives on the `Market` (Delphi `TMarket`): write on the shared object
             // through a per-market lock, without cloning the markets container on price-apply.
-            let (row, is_global_btc_base_market) = handle.with_mut(|market| {
+            let (row, is_global_btc_base_market, current) = handle.with_mut(|market| {
                 if send_funding {
                     market.funding_rate = p.funding_rate;
                     market.funding_time = p.funding_time;
@@ -252,7 +273,7 @@ impl MarketsState {
                 price.mark_price = p.mark_price;
                 price.mark_price_found = p.mark_price_found;
                 (
-                    MarketLastPriceHistoryInput {
+                    market_name.map(|market_name| MarketLastPriceHistoryInput {
                         market_name,
                         current: price.p_last,
                         bid: price.bid,
@@ -261,14 +282,15 @@ impl MarketsState {
                         mark_price_found: price.mark_price_found,
                         is_btc_market,
                         is_base_usdt_market,
-                    },
+                    }),
                     is_global_btc_base_market,
+                    price.p_last,
                 )
             });
             if is_global_btc_base_market {
-                self.apply_global_btc_delta_from_base_price(row.current, now_ms);
+                self.apply_global_btc_delta_from_base_price(current, now_ms);
             }
-            Some(row)
+            row
         } else if self.price_row_points_to_missing_market(p.m_index) {
             self.markets_list_refresh_needed = true;
             None

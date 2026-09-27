@@ -23,6 +23,8 @@ pub(crate) struct ClientTransport {
     pub(crate) recv_poller: Option<Poller>,
     /// Reusable event buffer for `recv_poller.wait`.
     pub(crate) recv_events: PollEvents,
+    /// Owner-local UDP scratch buffer, initialized once rather than on every probe.
+    pub(crate) recv_buf: Vec<u8>,
     /// Cached resolved server address; cleared on bind and on a resolve error.
     pub(crate) cached_server_addr: Option<SocketAddr>,
     /// Next UDP bind port to try (200-port walk in `bind_socket`).
@@ -69,6 +71,7 @@ impl ClientTransport {
             recv_slicer: slicing::SlicingReceiver::new(),
             recv_poller: None,
             recv_events: PollEvents::new(),
+            recv_buf: vec![0; 65535],
             cached_server_addr: None,
             next_port,
             current_local_port: None,

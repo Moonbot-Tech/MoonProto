@@ -14,6 +14,9 @@ use super::MarketsState;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ArbApplySummary {
+    pub market_blocks: usize,
+    pub price_items: usize,
+    pub isolation_entries: usize,
     pub applied_prices: usize,
     pub applied_isolation_entries: usize,
 }
@@ -21,32 +24,36 @@ pub(crate) struct ArbApplySummary {
 impl MarketsState {
     // parity: MoonBot MoonProtoEngine.pas:ParseArbPayloadCompact
     pub(crate) fn apply_arb_payload(
-        &mut self,
-        payload: &ArbPayload,
+        &self,
+        payload: &ArbPayload<'_>,
         wanted_platforms: Option<&[bool; 256]>,
         now_time_days: f64,
     ) -> ArbApplySummary {
         let mut summary = ArbApplySummary::default();
-        let Some(wanted_platforms) = wanted_platforms else {
-            return summary;
-        };
-
         match payload {
             ArbPayload::Price { blocks, .. } => {
-                for block in blocks {
+                for block in blocks.clone() {
+                    if !self.indexes_synchronized {
+                        continue;
+                    }
                     let Some(local_idx) = self.local_pos_for_server_index(block.market_index)
                     else {
                         continue;
                     };
-                    let Some(handle) = self.markets.get(local_idx).cloned() else {
+                    let Some(handle) = self.markets.get(local_idx) else {
                         continue;
                     };
-                    let my_price = handle.with(|market| market.price.p_last as f32);
+                    summary.market_blocks += 1;
+                    summary.price_items += block.prices.len() / 5;
+                    let Some(wanted_platforms) = wanted_platforms else {
+                        continue;
+                    };
                     handle.with_mut(|market| {
-                        for item in &block.prices {
+                        let my_price = market.price.p_last as f32;
+                        for item in block.items() {
                             if apply_arb_price(
                                 market,
-                                item,
+                                &item,
                                 wanted_platforms,
                                 now_time_days,
                                 my_price,
@@ -58,30 +65,40 @@ impl MarketsState {
                 }
             }
             ArbPayload::Isolation { entries, .. } => {
-                for entry in entries {
-                    let Some(handle) = self.market_by_index(entry.market_index) else {
+                for entry in entries.chunks_exact(4) {
+                    if !self.indexes_synchronized {
+                        continue;
+                    }
+                    let index = u16::from_le_bytes([entry[0], entry[1]]);
+                    let Some(handle) = self.market_by_index(index) else {
                         continue;
                     };
+                    summary.isolation_entries += 1;
+                    if wanted_platforms.is_none() {
+                        continue;
+                    }
                     handle.with_mut(|market| {
                         if market.arb_slots.is_empty() {
                             return;
                         }
                         market
                             .arb_slots
-                            .entry(ArbPlatformCode::from_byte(entry.platform_code))
+                            .entry(ArbPlatformCode::from_byte(entry[2]))
                             .or_default()
-                            .isolated_flags_tmp = ArbIsolationFlags::from_byte(entry.flags);
+                            .isolated_flags_tmp = ArbIsolationFlags::from_byte(entry[3]);
                         summary.applied_isolation_entries += 1;
                     });
                 }
-                self.arb_isol_commit();
+                if wanted_platforms.is_some() {
+                    self.arb_isol_commit();
+                }
             }
         }
         summary
     }
 
     // parity: MoonBot MoonProtoEngine.pas:ParseArbPayloadCompact (isolation commit pass)
-    fn arb_isol_commit(&mut self) {
+    fn arb_isol_commit(&self) {
         for handle in self.markets.iter() {
             handle.with_mut(|market| {
                 for slot in market.arb_slots.values_mut() {

@@ -223,7 +223,9 @@ impl EventDispatcher {
             self.markets
                 .apply_markets_prices_payload_collecting_last_price_at(
                     &resp.data,
-                    Some(&mut last_price_rows),
+                    self.trade_storage_scope
+                        .as_ref()
+                        .map(|scope| (scope, &mut last_price_rows)),
                     now_ms,
                 )
         } else {
@@ -254,7 +256,6 @@ impl EventDispatcher {
         }
         let rows: Vec<MarketHistoryLastPriceInput> = rows
             .into_iter()
-            .filter(|row| self.active_trade_storage_allows_market(row.market_name.as_ref()))
             .map(|row| MarketHistoryLastPriceInput {
                 market_name: row.market_name,
                 current: row.current,
@@ -266,15 +267,15 @@ impl EventDispatcher {
                 is_base_usdt_market: row.is_base_usdt_market,
             })
             .collect();
-        if rows.is_empty() {
-            return;
-        }
         handle.send_last_price_batch(MarketHistoryLastPriceBatch { now_time, rows });
     }
 
     // parity: MoonBot MarketsU.pas:TMarket.AddFrom (LastPrice history backfill)
     pub(super) fn queue_current_last_price_history(&self, now_time_days: f64) {
-        let rows = self.markets.current_last_price_history_rows();
+        let Some(scope) = self.trade_storage_scope.as_ref() else {
+            return;
+        };
+        let rows = self.markets.current_last_price_history_rows(scope);
         self.queue_last_price_history(Some(now_time_days), rows);
     }
 }

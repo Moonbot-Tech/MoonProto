@@ -15,29 +15,29 @@ const ARB_PRICES_CMD_ID: u8 = 6;
 
 #[derive(Debug, Clone)]
 #[doc(hidden)]
-pub(crate) struct ArbPricesCommand {
+pub(crate) struct ArbPricesCommand<'a> {
     pub uid: u64,
-    pub payload: Vec<u8>,
+    pub payload: &'a [u8],
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 #[doc(hidden)]
-pub(crate) enum ArbPayload {
+pub(crate) enum ArbPayload<'a> {
     Price {
         version: u8,
-        blocks: Vec<ArbPriceBlock>,
+        blocks: ArbPriceBlocks<'a>,
     },
     Isolation {
         version: u8,
-        entries: Vec<ArbIsolationEntry>,
+        entries: &'a [u8],
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 #[doc(hidden)]
-pub(crate) struct ArbPriceBlock {
+pub(crate) struct ArbPriceBlock<'a> {
     pub market_index: u16,
-    pub prices: Vec<ArbPriceItem>,
+    pub prices: &'a [u8],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,12 +47,33 @@ pub(crate) struct ArbPriceItem {
     pub price: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[doc(hidden)]
-pub(crate) struct ArbIsolationEntry {
-    pub market_index: u16,
-    pub platform_code: u8,
-    pub flags: u8,
+#[derive(Debug, Clone)]
+pub(crate) struct ArbPriceBlocks<'a>(&'a [u8]);
+
+impl<'a> Iterator for ArbPriceBlocks<'a> {
+    type Item = ArbPriceBlock<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let data = self.0;
+        self.0 = &[];
+        let header = data.get(..3)?;
+        let end = 3 + usize::from(header[2]) * 5;
+        let prices = data.get(3..end)?;
+        self.0 = &data[end..];
+        Some(ArbPriceBlock {
+            market_index: u16::from_le_bytes([header[0], header[1]]),
+            prices,
+        })
+    }
+}
+
+impl ArbPriceBlock<'_> {
+    pub(crate) fn items(&self) -> impl ExactSizeIterator<Item = ArbPriceItem> + '_ {
+        self.prices.chunks_exact(5).map(|row| ArbPriceItem {
+            platform_code: row[0],
+            price: f32::from_le_bytes(row[1..5].try_into().unwrap()),
+        })
+    }
 }
 
 const ARB_VER_MIN: u8 = 1;
@@ -64,7 +85,7 @@ const CMD_ISOL: u8 = 2;
 /// `payload` must already be routed from the MPC_Balance channel. Returns
 /// `None` when `cmd_id != 6` or the command envelope is too short.
 #[doc(hidden)]
-pub(crate) fn parse_arb_prices(payload: &[u8]) -> Option<ArbPricesCommand> {
+pub(crate) fn parse_arb_prices(payload: &[u8]) -> Option<ArbPricesCommand<'_>> {
     if payload.len() < 11 {
         return None;
     }
@@ -80,25 +101,19 @@ pub(crate) fn parse_arb_prices(payload: &[u8]) -> Option<ArbPricesCommand> {
 
     let mut pos = 11;
     if pos + 4 > payload.len() {
-        return Some(ArbPricesCommand {
-            uid,
-            payload: Vec::new(),
-        });
+        return Some(ArbPricesCommand { uid, payload: &[] });
     }
     let len = i32::from_le_bytes(payload[pos..pos + 4].try_into().unwrap());
     pos += 4;
     let blob = if len > 0 {
         let len = len as usize;
         if pos + len <= payload.len() {
-            let mut blob = Vec::new();
-            blob.try_reserve_exact(len).ok()?;
-            blob.extend_from_slice(&payload[pos..pos + len]);
-            blob
+            &payload[pos..pos + len]
         } else {
-            Vec::new()
+            &[]
         }
     } else {
-        Vec::new()
+        &[]
     };
     Some(ArbPricesCommand { uid, payload: blob })
 }
@@ -110,7 +125,7 @@ pub(crate) fn parse_arb_prices(payload: &[u8]) -> Option<ArbPricesCommand> {
 /// - `ArbClientU.pas:205-226` — compact price items;
 /// - `ArbClientU.pas:232-259` — compact isolation snapshot.
 #[doc(hidden)]
-pub(crate) fn parse_arb_payload_compact(payload: &[u8]) -> Option<ArbPayload> {
+pub(crate) fn parse_arb_payload_compact(payload: &[u8]) -> Option<ArbPayload<'_>> {
     if payload.len() < 2 {
         return None;
     }
@@ -124,7 +139,7 @@ pub(crate) fn parse_arb_payload_compact(payload: &[u8]) -> Option<ArbPayload> {
     if version <= 2 {
         return Some(ArbPayload::Price {
             version,
-            blocks: parse_price_items_compact(payload, &mut pos),
+            blocks: ArbPriceBlocks(&payload[pos..]),
         });
     }
 
@@ -137,81 +152,20 @@ pub(crate) fn parse_arb_payload_compact(payload: &[u8]) -> Option<ArbPayload> {
     match cmd {
         CMD_PRICE => Some(ArbPayload::Price {
             version,
-            blocks: parse_price_items_compact(payload, &mut pos),
+            blocks: ArbPriceBlocks(&payload[pos..]),
         }),
         CMD_ISOL => Some(ArbPayload::Isolation {
             version,
-            entries: parse_isolation_compact(payload, &mut pos),
+            entries: isolation_entries(&payload[pos..])?,
         }),
         _ => None,
     }
 }
 
-fn parse_price_items_compact(data: &[u8], pos: &mut usize) -> Vec<ArbPriceBlock> {
-    let mut blocks = Vec::new();
-
-    while *pos + 3 <= data.len() {
-        let market_index = u16::from_le_bytes([data[*pos], data[*pos + 1]]);
-        *pos += 2;
-        let price_count = data[*pos] as usize;
-        *pos += 1;
-
-        let block_size = price_count.saturating_mul(5);
-        if *pos + block_size > data.len() {
-            break;
-        }
-
-        let mut prices = Vec::new();
-        for _ in 0..price_count {
-            let platform_code = data[*pos];
-            *pos += 1;
-            let price = f32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap());
-            *pos += 4;
-            prices.push(ArbPriceItem {
-                platform_code,
-                price,
-            });
-        }
-
-        blocks.push(ArbPriceBlock {
-            market_index,
-            prices,
-        });
-    }
-
-    blocks
-}
-
-fn parse_isolation_compact(data: &[u8], pos: &mut usize) -> Vec<ArbIsolationEntry> {
-    if *pos + 2 > data.len() {
-        return Vec::new();
-    }
-
-    let count = u16::from_le_bytes([data[*pos], data[*pos + 1]]) as usize;
-    *pos += 2;
-    let possible_count = data.len().saturating_sub(*pos) / 4;
-    let mut entries = Vec::with_capacity(count.min(possible_count));
-
-    for _ in 0..count {
-        if *pos + 4 > data.len() {
-            break;
-        }
-
-        let market_index = u16::from_le_bytes([data[*pos], data[*pos + 1]]);
-        *pos += 2;
-        let platform_code = data[*pos];
-        *pos += 1;
-        let flags = data[*pos];
-        *pos += 1;
-
-        entries.push(ArbIsolationEntry {
-            market_index,
-            platform_code,
-            flags,
-        });
-    }
-
-    entries
+fn isolation_entries(data: &[u8]) -> Option<&[u8]> {
+    let header = data.get(..2)?;
+    let count = usize::from(u16::from_le_bytes([header[0], header[1]]));
+    Some(&data[2..2 + count.min((data.len() - 2) / 4) * 4])
 }
 
 /// Build `TArbPricesCommand` for low-level protocol tools.

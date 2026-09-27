@@ -4,6 +4,9 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use sysinfo::{get_current_pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
+#[cfg(windows)]
+mod windows;
+
 const CPU_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const MEMORY_SAMPLE_EVERY: u8 = 5;
 
@@ -85,7 +88,16 @@ impl LocalNodeTelemetryCache {
 fn start_sampler() -> Arc<LocalNodeTelemetryCache> {
     let mut system = System::new();
     let pid = get_current_pid().ok();
-    let initial = refresh_system(&mut system, pid, true);
+    #[cfg(windows)]
+    let mut native = windows::Sampler::new();
+    let mut sample = move |include_memory| {
+        #[cfg(windows)]
+        if let Some(native) = &mut native {
+            return native.sample(include_memory);
+        }
+        refresh_system(&mut system, pid, include_memory)
+    };
+    let initial = sample(true);
     let cache = Arc::new(LocalNodeTelemetryCache::new(initial));
     let worker_cache = Arc::clone(&cache);
 
@@ -97,7 +109,7 @@ fn start_sampler() -> Arc<LocalNodeTelemetryCache> {
                 std::thread::sleep(CPU_SAMPLE_INTERVAL);
                 sample_index = sample_index.wrapping_add(1);
                 let include_memory = sample_index % MEMORY_SAMPLE_EVERY == 0;
-                worker_cache.store(refresh_system(&mut system, pid, include_memory));
+                worker_cache.store(sample(include_memory));
             }
         })
     {

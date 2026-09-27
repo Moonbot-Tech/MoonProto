@@ -151,12 +151,14 @@ impl EventDispatcher {
             self.server_time_delta_source = Some(Arc::clone(&ctx.server_time_delta_source));
         }
         self.set_eps_profile(ctx.eps_profile);
-        self.markets
-            .set_copy_max_leverage_from_markets_list(ctx.copy_max_leverage_from_markets_list);
-        self.markets.set_server_base_currency(
-            ctx.server_base_currency_name.as_deref(),
-            ctx.server_base_currency_code,
-        );
+        // Avoid cloning published market metadata for unchanged packet context.
+        if self.markets.copy_max_leverage_from_markets_list() != ctx.copy_max_leverage_from_markets_list {
+            self.markets.set_copy_max_leverage_from_markets_list(ctx.copy_max_leverage_from_markets_list);
+        }
+        let base_name = ctx.server_base_currency_name.as_deref();
+        if !self.markets.server_base_currency_matches(base_name, ctx.server_base_currency_code) {
+            self.markets.set_server_base_currency(base_name, ctx.server_base_currency_code);
+        }
         self.orders.set_route(
             ctx.server_base_currency_code
                 .unwrap_or(BaseCurrency::UNKNOWN),
@@ -315,8 +317,10 @@ impl EventDispatcher {
             self.last_markets_list_refresh_ms = now_ms;
             actions.push(ActiveAction::RequestMarketsList);
         }
-        let new_markets_need_price_refresh =
-            self.markets.take_new_markets_pending_price_refresh() > 0;
+        let new_markets_need_price_refresh = self.markets.new_markets_need_price_refresh();
+        if new_markets_need_price_refresh {
+            self.markets.take_new_markets_pending_price_refresh();
+        }
         // now_ms is passed through dispatch_into for state.on_packet(now_ms).
         // Delphi `ProcessTradesStream` calls `CheckMissingTradesPackets` at the end;
         // so recovery resend is an after-effect of a successful trades packet, not an

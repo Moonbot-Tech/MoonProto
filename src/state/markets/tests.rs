@@ -955,6 +955,55 @@ fn direct_price_payload_rejects_impossible_huge_price_count_without_history_grow
 }
 
 #[test]
+fn selected_price_history_does_not_collect_other_markets_or_skip_their_prices() {
+    use crate::state::history_store::TradeStorageScope;
+    let mut st = MarketsState::new();
+    st.apply_markets_list(MarketsListResponse {
+        markets: vec![mk_market("BTCUSDT", 0), mk_market("ETHUSDT", 1)],
+        corr_markets: vec![],
+    });
+    st.apply_markets_indexes(vec!["ETHUSDT".into(), "BTCUSDT".into()]);
+    let scope = TradeStorageScope::from_markets(["BTCUSDT"]);
+    let mut data = vec![0];
+    data.extend_from_slice(&2i32.to_le_bytes());
+    for (index, price) in [(0u16, 10f64), (1, 100f64)] {
+        data.extend_from_slice(&index.to_le_bytes());
+        data.extend_from_slice(&price.to_le_bytes());
+        data.extend_from_slice(&(price + 2.0).to_le_bytes());
+        data.extend_from_slice(&price.to_le_bytes());
+        data.push(1); // MarkPriceFound.
+    }
+    data.push(0); // No correlation markets.
+    let mut rows = Vec::new();
+    assert!(st
+        .apply_markets_prices_payload_with_local_shift_at(
+            &data,
+            0.0,
+            Some((&scope, &mut rows)),
+            1000,
+        )
+        .is_some());
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].market_name.as_ref(), "BTCUSDT");
+    assert_eq!(rows[0].current, 101.0);
+    assert_eq!(st.price("ETHUSDT").unwrap().p_last, 11.0);
+    let backfill = st.current_last_price_history_rows(&scope);
+    assert_eq!(backfill.len(), 1);
+    assert_eq!(backfill[0].market_name.as_ref(), "BTCUSDT");
+    rows.clear();
+    st.mark_indexes_stale();
+    assert!(st
+        .apply_markets_prices_payload_with_local_shift_at(
+            &data,
+            0.0,
+            Some((&scope, &mut rows)),
+            2000,
+        )
+        .is_some());
+    assert!(rows.is_empty());
+}
+
+#[test]
 // parity: MoonBot MoonProtoEngine.pas:UpdateMarketsList
 fn apply_prices_updates_last_price_and_min_lot() {
     let mut market = mk_market("BTCUSDT", 0);

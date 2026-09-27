@@ -322,11 +322,12 @@ impl StratsState {
             .min();
     }
 
+    pub(crate) fn strategy_edit_timeout_due(&self, now: Instant) -> bool {
+        self.next_strategy_edit_deadline.is_some_and(|deadline| now >= deadline)
+    }
+
     pub(crate) fn tick_strategy_edit_timeouts(&mut self, now: Instant) -> Vec<u64> {
-        if self
-            .next_strategy_edit_deadline
-            .is_none_or(|deadline| now < deadline)
-        {
+        if !self.strategy_edit_timeout_due(now) {
             return Vec::new();
         }
         let mut timed_out = Vec::new();

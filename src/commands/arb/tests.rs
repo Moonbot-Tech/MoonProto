@@ -1,5 +1,65 @@
 use super::*;
 
+// Compare decoded values without requiring the production parser to allocate.
+#[derive(Debug, PartialEq)]
+enum ArbPayload {
+    Price {
+        version: u8,
+        blocks: Vec<ArbPriceBlock>,
+    },
+    Isolation {
+        version: u8,
+        entries: Vec<ArbIsolationEntry>,
+    },
+}
+
+#[derive(Debug, PartialEq)]
+struct ArbPriceBlock {
+    market_index: u16,
+    prices: Vec<ArbPriceItem>,
+}
+
+#[derive(Debug, PartialEq)]
+struct ArbIsolationEntry {
+    market_index: u16,
+    platform_code: u8,
+    flags: u8,
+}
+
+fn parse_arb_payload_compact(bytes: &[u8]) -> Option<ArbPayload> {
+    Some(match super::parse_arb_payload_compact(bytes)? {
+        super::ArbPayload::Price { version, blocks } => ArbPayload::Price {
+            version,
+            blocks: blocks
+                .map(|block| ArbPriceBlock {
+                    market_index: block.market_index,
+                    prices: block.items().collect(),
+                })
+                .collect(),
+        },
+        super::ArbPayload::Isolation { version, entries } => ArbPayload::Isolation {
+            version,
+            entries: entries
+                .chunks_exact(4)
+                .map(|row| ArbIsolationEntry {
+                    market_index: u16::from_le_bytes([row[0], row[1]]),
+                    platform_code: row[2],
+                    flags: row[3],
+                })
+                .collect(),
+        },
+    })
+}
+
+#[test]
+fn envelope_borrows_input_and_ignores_trailing_bytes() {
+    let mut raw = build_arb_prices(42, &[3, 2, 0, 0]);
+    raw.extend_from_slice(&[99; 16]);
+    let parsed = parse_arb_prices(&raw).unwrap();
+    assert_eq!(parsed.payload, &[3, 2, 0, 0]);
+    assert_eq!(parsed.payload.as_ptr(), raw[15..].as_ptr());
+}
+
 #[test]
 fn roundtrip() {
     let original = b"hello arb data";
@@ -220,4 +280,8 @@ fn compact_rejects_invalid_header() {
     assert!(parse_arb_payload_compact(&[0, 1]).is_none());
     assert!(parse_arb_payload_compact(&[3]).is_none());
     assert!(parse_arb_payload_compact(&[3, 99]).is_none());
+    assert!(parse_arb_payload_compact(&[3, CMD_ISOL]).is_none());
+    assert!(parse_arb_payload_compact(&[3, CMD_ISOL, 0]).is_none());
+    assert_eq!(parse_arb_payload_compact(&[3, CMD_ISOL, 0, 0]),
+        Some(ArbPayload::Isolation { version: 3, entries: vec![] }));
 }

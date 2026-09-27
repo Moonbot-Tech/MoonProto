@@ -33,16 +33,19 @@ impl MarketsState {
         );
     }
 
+    pub(crate) fn server_base_currency_matches(&self, name: Option<&str>, code: Option<BaseCurrency>) -> bool {
+        self.server_base_currency_name.as_deref() == name && self.server_base_currency_code == code
+    }
+
     pub(crate) fn set_server_base_currency(
         &mut self,
         name: Option<&str>,
         code: Option<BaseCurrency>,
     ) {
-        let next_name = name.map(ToOwned::to_owned);
-        if self.server_base_currency_name == next_name && self.server_base_currency_code == code {
+        if self.server_base_currency_matches(name, code) {
             return;
         }
-        self.server_base_currency_name = next_name;
+        self.server_base_currency_name = name.map(ToOwned::to_owned);
         self.server_base_currency_code = code;
         self.check_corr_markets();
         self.check_currency_ref_markets();

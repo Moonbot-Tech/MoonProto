@@ -30,7 +30,7 @@ impl ProtocolCore<'_> {
         max_datagrams: usize,
         mode: &mut RunMode<'_>,
     ) -> RecvPhaseOutcome {
-        let mut buf = [0u8; 65535];
+        let mut buf = std::mem::take(&mut self.client.transport.recv_buf);
         let mut drained_any = false;
         let mut deadline_reached = false;
         let mut datagrams = 0usize;
@@ -97,6 +97,7 @@ impl ProtocolCore<'_> {
             }
         }
 
+        self.client.transport.recv_buf = buf;
         if drained_any {
             self.rearm_recv_poller();
         }

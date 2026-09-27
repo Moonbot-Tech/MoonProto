@@ -49,6 +49,10 @@ impl EventDispatcher {
     }
 
     pub(crate) fn tick_strategy_edit_timeouts(&mut self, now: Instant) -> bool {
+        // Check before requesting mutable COW access to the published strategies.
+        if !self.strats.strategy_edit_timeout_due(now) {
+            return false;
+        }
         let strategy_ids = self.strats.tick_strategy_edit_timeouts(now);
         if strategy_ids.is_empty() {
             return false;

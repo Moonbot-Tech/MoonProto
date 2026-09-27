@@ -128,6 +128,22 @@ fn socket_packet_counters_track_physical_send_and_receive() {
     assert_eq!(client.transport.current_received_bytes, 2);
 }
 
+#[test]
+fn receive_scratch_is_reused_and_short_packets_do_not_include_old_tail() {
+    let (server_sock, client_addr, mut client) = inline_reader_test_client();
+    let buffer = client.transport.recv_buf.as_ptr();
+    for packet in [&[0xCC; 512][..], &[0xDD; 2][..], &[][..]] {
+        server_sock.send_to(packet, client_addr).unwrap();
+        pump_inline_reader(&mut client);
+        assert_eq!(client.transport.recv_buf.as_ptr(), buffer);
+        assert_eq!(client.transport.recv_buf.len(), 65535);
+    }
+    pump_inline_reader(&mut client); // WouldBlock must also return the same buffer.
+    assert_eq!(client.transport.recv_buf.as_ptr(), buffer);
+    assert_eq!(client.transport.current_received_packets, 3);
+    assert_eq!(client.transport.current_received_bytes, 514);
+}
+
 fn pump_inline_reader(client: &mut Client) {
     let _events = pump_inline_reader_collect(client);
 }

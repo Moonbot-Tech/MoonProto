@@ -45,8 +45,7 @@ impl EventDispatcher {
             },
             6 => match parse_arb_prices(payload) {
                 Some(arb) => {
-                    if let Some(parsed) = parse_arb_payload_compact(&arb.payload) {
-                        let parsed = self.filter_arb_payload_to_known_markets(parsed);
+                    if let Some(parsed) = parse_arb_payload_compact(arb.payload) {
                         let wanted = self
                             .settings
                             .client_settings
@@ -58,22 +57,20 @@ impl EventDispatcher {
                             now_time_days.unwrap_or_default(),
                         );
                         out.push(match &parsed {
-                            ArbPayload::Price { version, blocks } => {
+                            ArbPayload::Price { version, .. } => {
                                 #[cfg(not(any(test, feature = "diagnostics")))]
                                 let _ = version;
-                                let price_items =
-                                    blocks.iter().map(|block| block.prices.len()).sum();
                                 Event::Arb(ArbEvent::PricesApplied {
                                     #[cfg(any(test, feature = "diagnostics"))]
                                     uid: arb.uid,
                                     #[cfg(any(test, feature = "diagnostics"))]
                                     version: *version,
-                                    market_blocks: blocks.len(),
-                                    price_items,
+                                    market_blocks: summary.market_blocks,
+                                    price_items: summary.price_items,
                                     applied_prices: summary.applied_prices,
                                 })
                             }
-                            ArbPayload::Isolation { version, entries } => {
+                            ArbPayload::Isolation { version, .. } => {
                                 #[cfg(not(any(test, feature = "diagnostics")))]
                                 let _ = version;
                                 Event::Arb(ArbEvent::IsolationApplied {
@@ -81,7 +78,7 @@ impl EventDispatcher {
                                     uid: arb.uid,
                                     #[cfg(any(test, feature = "diagnostics"))]
                                     version: *version,
-                                    entries: entries.len(),
+                                    entries: summary.isolation_entries,
                                     applied_entries: summary.applied_isolation_entries,
                                 })
                             }
@@ -114,25 +111,6 @@ impl EventDispatcher {
                 }
             }
             _ => {}
-        }
-    }
-
-    fn filter_arb_payload_to_known_markets(&self, payload: ArbPayload) -> ArbPayload {
-        match payload {
-            ArbPayload::Price {
-                version,
-                mut blocks,
-            } => {
-                blocks.retain(|block| self.markets.has_server_market_index(block.market_index));
-                ArbPayload::Price { version, blocks }
-            }
-            ArbPayload::Isolation {
-                version,
-                mut entries,
-            } => {
-                entries.retain(|entry| self.markets.has_server_market_index(entry.market_index));
-                ArbPayload::Isolation { version, entries }
-            }
         }
     }
 }

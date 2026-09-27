@@ -161,6 +161,10 @@ impl MarketsState {
         self.markets_list_refresh_needed
     }
 
+    pub(crate) fn new_markets_need_price_refresh(&self) -> bool {
+        self.new_markets_pending_price_refresh > 0
+    }
+
     pub(crate) fn take_new_markets_pending_price_refresh(&mut self) -> usize {
         let count = self.new_markets_pending_price_refresh;
         self.new_markets_pending_price_refresh = 0;
@@ -179,6 +183,10 @@ impl MarketsState {
     #[doc(hidden)]
     pub fn last_markets_list_apply_timing(&self) -> Option<MarketsListApplyTiming> {
         self.last_markets_list_timing
+    }
+
+    pub(crate) fn copy_max_leverage_from_markets_list(&self) -> bool {
+        self.copy_max_leverage_from_markets_list
     }
 
     pub(crate) fn set_copy_max_leverage_from_markets_list(&mut self, enabled: bool) {
