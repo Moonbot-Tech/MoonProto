@@ -556,8 +556,16 @@ worker overload during integration.
 
 ## Compact Capture Stations
 
-Use this profile to capture market history around bot trades without retaining
-the whole exchange. No core update or new protocol command is required.
+Use this profile to save a chart segment around a bot trade: the available
+history before the purchase, the live tape from purchase to close, and a short
+post-close tail. The station stores the segment in its own database or file;
+MoonProto supplies the initial archive and subsequent live rows while retaining
+only selected pairs. No core update or new protocol command is required.
+
+**Subscribe once, request the initial archive, then keep reading the live
+tape until the capture ends.** Do not replace this workflow with periodic
+`request_chart` polling. Receiving the archive does not end the subscription;
+the archive seeds the chart, and the live stream extends it.
 
 ```rust
 use moonproto::{ClientConfig, TradesStreamMode, state::MarketHistorySizing};
@@ -565,11 +573,16 @@ use moonproto::{ClientConfig, TradesStreamMode, state::MarketHistorySizing};
 let cfg = ClientConfig::new(host, port, master_key, mac_key)
     .with_market_history(MarketHistorySizing::compact_with_budget_percent(100));
 
-// After connecting with cfg, replace the station's retained selection.
+// After connecting with cfg, select the first pair to capture.
 client.streams().subscribe_trades_for(TradesStreamMode::TradesOnly, ["BTCUSDT"])?;
 let ticket = client.history().request_chart("BTCUSDT")?;
 // No snapshot/readers wait is needed between these two calls.
 ```
+
+Each `subscribe_trades_for` call replaces the selection: pass the complete set
+of pairs still needed, including earlier captures. It does not add one pair to
+the previous set. Selection limits retained memory, not network traffic: while
+subscribed, the core sends the exchange-wide trade stream.
 
 `Compact` is equivalent to `compact_with_budget_percent(100)`. At 100% each
 selected market has capacities of 5,000 rows per trade tape and 1,000 points per
@@ -587,23 +600,83 @@ Trade rings limit row count, not elapsed time.
 
 ### Station Lifecycle
 
-1. On a purchase, select the pair and request its chart immediately. The global
-   trade stream is subscribed as needed; only selected pairs retain history.
-2. If the deal has not closed after ten minutes, forget its pair and discard
-   its history without saving it.
-3. On a sale, if the pair is no longer selected, select it again and request its
-   chart again. Collect a short post-sale interval, save the required data in
-   the station, then forget the pair.
-4. Keep at most the station's configured number of pairs; evict older captures
-   when admitting a new pair at that limit. If several captures use one pair,
-   release it when none of them needs it.
-5. When no pairs remain, call `unsubscribe_all_trades()`. This sends the wire
-   unsubscribe and releases library-owned histories and the history worker.
+1. **Purchase: start the capture.** From the application's order/report updates,
+   record the trade identity, pair, and desired start time (purchase time minus
+   any pre-purchase context). Add the pair to the selected set, call
+   `subscribe_trades_for(TradesOnly, selected_pairs)`, then immediately request
+   that pair's chart. Live data starts accumulating while the archive is in
+   flight. If the station already records this pair and has the required
+   history, share that recording instead of starting another subscription or
+   archive request.
+2. **Archive ready: seed local storage.** Match `MarketHistoryEvent::Ready` to
+   the request ticket. Obtain the pair's readers from the current snapshot and
+   create a `cursor_from_oldest()` for each required ring. Drain the merged
+   history into the station's storage, filtering by the desired start time.
+   Do not start with `cursor_from_now()`: that would skip the archive and live
+   rows already received. The library performs the archive/live join; the
+   station does not append a separate raw archive on top of live data.
+3. **While open: keep the subscription and save new rows.** Reuse the readers,
+   cursors, and batch buffers; regularly drain new rows into the same local
+   recording. No repeated chart requests are needed during normal connected
+   capture. Do not wait for the deal to close before reading the rings.
+4. **Close: collect the tail.** Record the desired end time as the close time
+   plus the configured tail. Keep recording until that interval has elapsed,
+   perform a final drain, and finalize the stored segment. If the pair was
+   forgotten earlier, select it again and request its archive before collecting
+   the tail; that starts a fresh capture of the available closing window.
+5. **Finish: release the pair.** Remove it from the selection only when no other
+   capture needs it. When no pairs remain, call `unsubscribe_all_trades()`.
+   This sends the wire unsubscribe and releases library-owned histories and
+   the history worker.
+
+### Save Continuously
+
+**A retained ring is a bounded buffer, not storage for the entire deal.** At
+100%, a trade tape holds 5,000 rows, not a guaranteed number of minutes. To keep
+the complete captured interval without growing library RAM, continuously copy
+new rows to the station's database or temporary file and finalize it at the end.
+This is local ring reading, not polling the core for archives.
+
+Use `reader.drain_new_bounded(&mut cursor, batch_size, &mut rows)` with a saved
+cursor per ring. Persist each returned batch before reusing the buffer; when
+`caught_up` is false, continue draining the backlog. Schedule reads frequently
+enough for the selected markets' trade rate. `TradesEvent::Applied` can wake
+the reader, but also read on the next normal capture update: the event is not
+a retained-write barrier. `meta.clipped` means unread rows were overwritten;
+mark that segment incomplete instead of silently calling it complete. See
+[retained readers](#retained-readers) for the cursor API.
+
+Keep all rows in the chosen time interval, including multiple trades with the
+same timestamp. Advance by the ring cursor, not by dropping everything at or
+before the last saved timestamp. Apply the desired time-window filter to each
+batch; late rows need not arrive in timestamp order. Save any required price
+lines, mini-candles, and liquidations through their own readers and cursors.
+
+An archive contains only history the core still retains, trimmed to the
+configured local capacities. Network loss can also leave gaps; automatic
+[stream recovery](#recovery-policy) is not a lossless-recording guarantee.
+Waiting for an archive or seeing `Ready` does not prove that the entire desired
+time interval exists. This workflow records available chart data, not a
+certified exchange execution ledger.
+
+### Capture Limits And Cleanup
+
+A memory-limited station can stop an unfinished capture after ten minutes:
+forget the pair and discard its temporary recording, without saving a finished
+segment. A later sale starts the closing-window capture described above. The
+discarded middle is deliberately not recorded; do not promise a full
+purchase-to-close segment for a capture cancelled by this policy.
+
+Keep at most the station's configured number of pairs; evict older captures
+when admitting a new pair at that limit. Shared pairs remain selected while
+any other capture needs them. These limits are application policy, not timers
+or limits automatically imposed by MoonProto.
 
 Timers, the pair limit, eviction selection, and saving belong to the station,
 not the library. **Strongly prefer a short post-sale interval, for example
 5-15 seconds, and a small pair limit, for example 50.** Longer intervals keep
-more captures active and can overwrite earlier rows in their finite rings.
+more captures active and increase the station's saved data. Slow local draining
+can overwrite unread rows in the finite rings regardless of capture duration.
 More pairs and larger rings require more VPS RAM. A small pair limit permits
 a larger percentage; with more pairs, reduce the percentage or increase RAM.
 
