@@ -349,7 +349,7 @@ impl EventDispatcher {
 
     /// Push session identity (BaseCheck/AuthCheck) into the dispatcher so the
     /// published snapshot exposes server/account info. The active runtime calls
-    /// this once Init completes (and after reconnect re-auth).
+    /// this once Init completes and after a core-restart identity refresh.
     pub(crate) fn set_session_identity(
         &mut self,
         server_info: ServerInfo,

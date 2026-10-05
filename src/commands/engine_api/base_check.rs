@@ -107,9 +107,10 @@ pub(crate) mod exchange_type_flags {
 /// 7. `base_currency_name` — "USDT", "BTC", etc.;
 /// 8. `base_currency_code` — MoonBot base-currency ordinal;
 /// 9. `server_version` — MoonBot version number;
-/// 10. `moonproto_version` — MoonProto protocol version.
+/// 10. `moonproto_version` — MoonProto protocol version;
+/// 11. `version_suffix` — running binary's trimmed version suffix.
 ///
-/// Source: `MoonProtoEngineServer.pas:244-273`.
+/// Source: `MoonProtoEngineServer.pas`, `TEngineWorker.ProcessRequest/emk_BaseCheck`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServerInfo {
     /// Stable 64-bit server id (`cfg.UniqueBotID`), if the server sends it.
@@ -133,6 +134,10 @@ pub struct ServerInfo {
     pub server_version: Option<u32>,
     /// MoonProto protocol version.
     pub moonproto_version: Option<u32>,
+    /// Running binary's version suffix, for example `"R2"` (without surrounding spaces).
+    /// `Some("")` denotes a release build; `None` means the server did not report it.
+    /// This is not the filename requested for a download or update.
+    pub version_suffix: Option<String>,
 }
 
 impl ServerInfo {
@@ -227,7 +232,10 @@ pub(crate) fn parse_base_check_response(data: &[u8]) -> ServerInfo {
     }
     info.moonproto_version =
         Some(i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as u32);
-    // pos += 4;  // no longer used
+    pos += 4;
+
+    // 11. version_suffix (optional string)
+    info.version_suffix = read_string(data, &mut pos);
 
     info
 }

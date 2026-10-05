@@ -140,6 +140,7 @@ pub(super) fn runtime_loop(
         } else {
             #[cfg(any(test, feature = "diagnostics"))]
             let pending_start = Instant::now();
+            let server_info_changed = poll_server_info(&mut client, &mut pending, &mut dispatcher);
             #[cfg(any(test, feature = "diagnostics"))]
             let auto_candles_start = Instant::now();
             let candles_changed = poll_auto_candles(&mut client, &mut pending, &mut dispatcher);
@@ -245,7 +246,8 @@ pub(super) fn runtime_loop(
             let now = Instant::now();
             let strategy_edits_changed = dispatcher.tick_strategy_edit_timeouts(now);
             dispatcher.tick_report_trace_timeouts(now);
-            candles_changed
+            server_info_changed
+                || candles_changed
                 || market_history_changed
                 || coin_card_changed
                 || transfer_assets_changed
@@ -803,6 +805,140 @@ mod tests {
             ..Default::default()
         });
         client
+    }
+
+    fn identity_client() -> Client {
+        let mut client = ready_client();
+        client.authorized = true;
+        client.peer_app_token = 1;
+        client.set_server_info(ServerInfo {
+            server_version: Some(771),
+            version_suffix: Some("R1".into()),
+            ..Default::default()
+        });
+        client
+    }
+
+    fn identity_response(uid: u64, success: bool) -> crate::commands::engine_api::EngineResponse {
+        use crate::commands::registry::write_string;
+        let mut data = 42_i64.to_le_bytes().to_vec();
+        write_string(&mut data, "Test");
+        data.push(ExchangeCode::FBinance.to_byte());
+        write_string(&mut data, "Binance Futures");
+        data.push(2); // Futures
+        write_string(&mut data, "");
+        write_string(&mut data, "USDT");
+        data.push(BaseCurrency::USDT.to_byte());
+        data.extend_from_slice(&771_i32.to_le_bytes());
+        data.extend_from_slice(&3_i32.to_le_bytes());
+        write_string(&mut data, "R2");
+        crate::commands::engine_api::EngineResponse {
+            ver: crate::commands::registry::CURRENT_PROTO_CMD_VER,
+            request_uid: uid,
+            method: crate::commands::engine_api::EngineMethod::BaseCheck,
+            success,
+            error_code: 0,
+            error_msg: String::new(),
+            data,
+        }
+    }
+
+    #[test]
+    fn server_info_refresh_skips_same_process_reconnect() {
+        let mut client = identity_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        client.authorized = false;
+        client.peer_app_token = 0;
+        assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        client.server_token = 99;
+        client.peer_app_token = 1;
+        client.authorized = true;
+        assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        assert!(pending.server_info.is_none());
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(sliced.is_empty() && high.is_empty() && low.is_empty());
+    }
+
+    #[test]
+    fn server_info_refresh_after_restart_publishes_without_repeating_init() {
+        let mut client = identity_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        dispatcher.set_session_identity(client.server_info().clone(), None);
+        let mut pending = RuntimePending::default();
+        let snapshot = RwLock::new(None);
+        publish_snapshot(&dispatcher, &snapshot);
+        let old = snapshot.read().clone().unwrap();
+        client.peer_app_token = 2;
+        client.authorized = false;
+        assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        assert!(pending.server_info.is_none());
+        client.authorized = true;
+        assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        let uid = pending.server_info.as_ref().unwrap().request_uid;
+        assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        let sent: Vec<_> = sliced.into_iter().chain(high).chain(low).collect();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].cmd, Command::API.to_byte());
+        assert_eq!(engine_request_uid(&sent[0].data), Some(uid));
+        assert_eq!(engine_request_method(&sent[0].data), Some(crate::commands::engine_api::EngineMethod::BaseCheck));
+
+        assert!(client.pending_api.api_pending.dispatch(identity_response(uid, true)).is_none());
+        assert!(poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        publish_snapshot(&dispatcher, &snapshot);
+        assert_eq!(snapshot.read().as_ref().unwrap().server_info(), client.server_info());
+        assert_eq!(client.server_info().version_suffix.as_deref(), Some("R2"));
+        assert_eq!(old.server_info().version_suffix.as_deref(), Some("R1"));
+        assert_eq!(client.identity.server_info_peer_app_token, 2);
+        assert!(pending.server_info.is_none());
+        assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(sliced.is_empty() && high.is_empty() && low.is_empty());
+    }
+
+    #[test]
+    fn server_info_refresh_discards_previous_process_response_and_retries_failures() {
+        let mut client = identity_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        client.peer_app_token = 2;
+        poll_server_info(&mut client, &mut pending, &mut dispatcher);
+        let old_uid = pending.server_info.as_ref().unwrap().request_uid;
+        // The old response was decoded, but a new Hello arrived before the runtime applied it.
+        client.pending_api.api_pending.dispatch(identity_response(old_uid, true));
+        client.peer_app_token = 3;
+        assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        assert_eq!(client.server_info().version_suffix.as_deref(), Some("R1"));
+        let failed_uid = pending.server_info.as_ref().unwrap().request_uid;
+        assert_ne!(old_uid, failed_uid);
+        assert!(!client.pending_api.api_pending.contains(old_uid));
+        client.pending_api.api_pending.dispatch(identity_response(failed_uid, false));
+        for _ in 0..3 {
+            assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+            assert_eq!(pending.server_info.as_ref().unwrap().request_uid, failed_uid);
+        }
+        pending.server_info.as_mut().unwrap().deadline = Instant::now();
+        assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        let lost_uid = pending.server_info.as_ref().unwrap().request_uid;
+        assert_ne!(lost_uid, failed_uid);
+        assert!(client.pending_api.api_pending.contains(lost_uid));
+        pending.server_info.as_mut().unwrap().deadline = Instant::now();
+        assert!(!poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        assert!(!client.pending_api.api_pending.contains(lost_uid));
+        let uid = pending.server_info.as_ref().unwrap().request_uid;
+        assert_ne!(uid, lost_uid);
+        assert!(client.pending_api.api_pending.dispatch(identity_response(lost_uid, true)).is_some());
+
+        // Downgrading to a core without the tail must clear the old suffix, not retain R1.
+        let mut response = identity_response(uid, true);
+        response.data.truncate(response.data.len() - 4);
+        client.pending_api.api_pending.dispatch(response);
+        assert!(poll_server_info(&mut client, &mut pending, &mut dispatcher));
+        assert_eq!(client.server_info().server_version, Some(771));
+        assert_eq!(client.server_info().version_suffix, None);
+        assert_eq!(client.identity.server_info_peer_app_token, 3);
     }
 
     fn seed_runtime_order(

@@ -10,6 +10,7 @@ const CHUNK_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Default)]
 pub(super) struct RuntimePending {
+    pub(super) server_info: Option<PendingServerInfo>,
     pub(super) auto_candles_scope: Option<std::sync::Arc<crate::state::TradeStorageScope>>,
     pub(super) auto_candles_requested: bool,
     pub(super) auto_candles: Vec<PendingAutoCandles>,
@@ -23,6 +24,54 @@ pub(super) struct RuntimePending {
     pub(super) next_transfer_assets_batch_id: u64,
     pub(super) next_transfer_assets_refresh_at: Option<Instant>,
     pub(super) engine_actions: Vec<PendingEngineAction>,
+}
+
+pub(super) struct PendingServerInfo {
+    pub(super) peer_app_token: u64,
+    pub(super) request_uid: u64,
+    pub(super) deadline: Instant,
+    pub(super) rx: mpsc::Receiver<crate::commands::engine_api::EngineResponse>,
+}
+
+pub(super) fn poll_server_info(
+    client: &mut Client,
+    pending: &mut RuntimePending,
+    dispatcher: &mut crate::events::EventDispatcher,
+) -> bool {
+    if pending.server_info.as_ref().is_some_and(|request| {
+        request.peer_app_token != client.peer_app_token || Instant::now() >= request.deadline
+    }) {
+        let request = pending.server_info.take().unwrap();
+        client.pending_api.api_pending.remove(request.request_uid);
+    }
+    if !client.authorized
+        || client.peer_app_token == 0
+        || client.identity.server_info_peer_app_token == client.peer_app_token
+    {
+        return false;
+    }
+
+    if let Some(request) = pending.server_info.as_ref() {
+        if let Ok(response) = request.rx.try_recv() {
+            if response.success && response.method == crate::commands::engine_api::EngineMethod::BaseCheck {
+                client.set_server_info(crate::commands::engine_api::parse_base_check_response(&response.data));
+                dispatcher.set_session_identity(client.server_info().clone(), client.auth_info().cloned());
+                pending.server_info = None;
+                return true;
+            }
+        }
+        // Failed/closed requests wait until the same deadline before retrying.
+        return false;
+    }
+
+    let payload = crate::commands::engine_request::base_check();
+    pending.server_info = Some(PendingServerInfo {
+        peer_app_token: client.peer_app_token,
+        request_uid: engine_request_uid(&payload).unwrap(),
+        deadline: engine_pending_deadline(),
+        rx: client.send_api_request_async(&payload),
+    });
+    false
 }
 
 pub(super) struct PendingAutoCandles {

@@ -240,6 +240,8 @@ struct SessionIdentity {
     /// **Multi-server**: when connecting to several servers the application keeps a
     /// `Vec<Client>` and tells them apart by `client.server_info().bot_id`.
     server_info: crate::commands::engine_api::ServerInfo,
+    /// Core process that supplied the retained BaseCheck identity.
+    server_info_peer_app_token: u64,
 
     /// Cache of `server_info.base_currency_name` as `Arc<str>`. Cloned (refcount-bump)
     /// in `ActiveDispatchContext::from_client` on EVERY packet instead of heap-cloning the
@@ -260,6 +262,7 @@ impl SessionIdentity {
     fn new() -> Self {
         Self {
             server_info: crate::commands::engine_api::ServerInfo::default(),
+            server_info_peer_app_token: 0,
             server_base_currency_name_arc: None,
             auth_info: None,
         }

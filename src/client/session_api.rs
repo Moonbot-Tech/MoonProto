@@ -4,7 +4,7 @@ use super::*;
 
 impl Client {
     /// Server identity (`bot_id`, `exchange_name`, `base_currency_name`, versions, etc.).
-    /// Filled automatically during Init after a successful `emk_BaseCheck`.
+    /// Filled during Init and refreshed after a core process restart.
     ///
     /// Before the first successful BaseCheck it returns the default with all `None`. Used
     /// for the UI ("connected to Binance Futures, USDT") and for multi-server identification.
@@ -23,14 +23,14 @@ impl Client {
         self.identity.auth_info.as_ref()
     }
 
-    /// Set `ServerInfo` manually. Usually not needed — Init does this
-    /// automatically. Useful only for internal protocol tests.
+    /// Retain a successful BaseCheck response for the current core process.
     pub(crate) fn set_server_info(&mut self, info: crate::commands::engine_api::ServerInfo) {
         // opt #7 parity: cache the base currency name as Arc<str>, so per-packet
         // `from_client` clones a refcount instead of heap-cloning the string (Delphi reads cfg inline).
         self.identity.server_base_currency_name_arc =
             info.base_currency_name.as_deref().map(std::sync::Arc::from);
         self.identity.server_info = info;
+        self.identity.server_info_peer_app_token = self.peer_app_token;
     }
 
     /// Cheap per-packet handle to the base currency name (Arc refcount-bump, no heap-clone).

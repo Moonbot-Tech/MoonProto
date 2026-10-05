@@ -438,6 +438,9 @@ mod base_check_tests {
             return buf;
         };
         buf.extend_from_slice(&(mp as i32).to_le_bytes());
+        if let Some(suffix) = &info.version_suffix {
+            write_string(&mut buf, suffix);
+        }
         buf
     }
 
@@ -465,6 +468,7 @@ mod base_check_tests {
             base_currency_code: Some(BaseCurrency::USDT),
             server_version: Some(763), // v7.63
             moonproto_version: Some(3),
+            version_suffix: Some("R2".to_string()),
         };
         let payload = encode_full(&original);
         let parsed = parse_base_check_response(&payload);
@@ -488,6 +492,7 @@ mod base_check_tests {
             base_currency_code: Some(BaseCurrency::USDT),
             server_version: Some(763),
             moonproto_version: Some(3),
+            version_suffix: None,
         };
 
         let payload = encode_full(&original);
@@ -511,6 +516,7 @@ mod base_check_tests {
             base_currency_code: Some(BaseCurrency::TUSD),
             server_version: Some(763),
             moonproto_version: Some(3),
+            version_suffix: None,
         };
         let payload = encode_full(&original);
         let parsed = parse_base_check_response(&payload);
@@ -562,6 +568,7 @@ mod base_check_tests {
             base_currency_code: Some(BaseCurrency::BNB),
             server_version: None,
             moonproto_version: None,
+            version_suffix: None,
         };
         let mut payload = encode_full(&info_partial);
         // Append a truncated 2 bytes instead of the full 4 for server_version.
@@ -587,6 +594,7 @@ mod base_check_tests {
             base_currency_code: Some(BaseCurrency::TUSD),
             server_version: Some(763),
             moonproto_version: None,
+            version_suffix: None,
         };
         let payload = encode_full(&info_partial);
         let parsed = parse_base_check_response(&payload);
@@ -608,6 +616,7 @@ mod base_check_tests {
             base_currency_code: Some(BaseCurrency::TUSD),
             server_version: Some(763),
             moonproto_version: Some(3),
+            version_suffix: None,
         };
         let parsed = parse_base_check_response(&encode_full(&info));
         assert!(parsed.supports(exchange_type_flags::PREDICT));
@@ -622,6 +631,40 @@ mod base_check_tests {
         assert!(!info.has_identity());
         assert!(!info.supports(exchange_type_flags::SPOT));
         assert!(!info.supports(exchange_type_flags::FUTURES));
+    }
+
+    #[test]
+    fn base_check_version_suffix_is_optional_and_preserves_old_fields() {
+        let mut info = ServerInfo {
+            bot_id: Some(42),
+            server_name: Some("Test".into()),
+            exchange_code: Some(ExchangeCode::FBinance),
+            exchange_name: Some("Binance Futures".into()),
+            exchange_type_mask: Some(exchange_type_flags::FUTURES),
+            dex_name: Some(String::new()),
+            base_currency_name: Some("USDT".into()),
+            base_currency_code: Some(BaseCurrency::USDT),
+            server_version: Some(771),
+            moonproto_version: Some(3),
+            version_suffix: None,
+        };
+        let old_payload = encode_full(&info);
+        assert_eq!(parse_base_check_response(&old_payload), info);
+
+        // Delphi WriteStr: u16 byte length followed by UTF-8, including an empty string.
+        for suffix in ["", "R2"] {
+            let mut payload = old_payload.clone();
+            payload.extend_from_slice(&(suffix.len() as u16).to_le_bytes());
+            payload.extend_from_slice(suffix.as_bytes());
+            for len in old_payload.len()..payload.len() {
+                assert_eq!(parse_base_check_response(&payload[..len]), info);
+            }
+            info.version_suffix = Some(suffix.into());
+            assert_eq!(parse_base_check_response(&payload), info);
+            payload.extend_from_slice(&[1, 2, 3]); // Future tail does not change known fields.
+            assert_eq!(parse_base_check_response(&payload), info);
+            info.version_suffix = None;
+        }
     }
 
     #[test]

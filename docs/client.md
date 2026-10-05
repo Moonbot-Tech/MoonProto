@@ -278,6 +278,26 @@ Init is a one-time step for a `MoonClient` session. After it succeeds, do not
 start a second init just because the UDP transport reconnected; the library
 maintains the user-requested active-lib state for that session.
 
+### Core Version and Build
+
+Read `client.server_info()` (or `snapshot.server_info()`) for the core's
+numeric `server_version` and optional `version_suffix`. For example, `771` and
+`Some("R2")` identify version `7.71 R2`. The suffix describes the **running
+binary**, not the filename requested by an update command:
+
+- `Some("R2")`: the core reports that build suffix, without surrounding spaces.
+- `Some("")`: the core reports a release build with no suffix.
+- `None`: the core does not report a suffix; do not infer that it is a release.
+
+After a detected core process restart, the library refreshes this metadata in
+the background after authorization, without repeating Init. A lost or failed
+request is retried at the normal 12-second request interval. Until it succeeds,
+the last known metadata remains available. Read a fresh snapshot when updating
+the UI; the pre-restart snapshot does not change. A reconnect to the same core
+process does not trigger another metadata request.
+
+### Init Details
+
 Cold init does not send a separate `GetMarketsIndexes`: `GetMarketsList` builds
 the server-index map from the server list order and stores the current
 `PeerAppToken`. After reconnect/server-token changes, the library
