@@ -57,13 +57,18 @@ impl MarketHistoryStore {
         }
 
         let refresh_last_price = self.last_price_analytics_dirty
-            || (short_bucket_changed
-                && self.derived.last_price_deltas != DerivedDeltaSnapshot::default());
+            // Compare with the last calculation, not an idle maintenance tick:
+            // a zero result may have skipped intervening clock/bucket changes.
+            || (self.last_price_analytics_bucket != Some(short_bucket)
+                && (self.last_price_received_since_refresh
+                    || self.derived.last_price_deltas != DerivedDeltaSnapshot::default()));
+        self.last_price_received_since_refresh = false;
         if refresh_last_price {
             self.derived.last_price_deltas = self
                 .rolling_last_price_ranges
                 .snapshot(now_time, self.eps_profile.eps);
             self.last_price_analytics_dirty = false;
+            self.last_price_analytics_bucket = Some(short_bucket);
             changed = true;
             #[cfg(test)]
             {

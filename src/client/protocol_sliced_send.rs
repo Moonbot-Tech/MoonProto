@@ -206,7 +206,7 @@ impl ProtocolCore<'_> {
 
     pub(crate) fn retry_sliced(&mut self, cur_tm: i64) {
         #[cfg(any(test, feature = "diagnostics"))]
-        let retry_start = Instant::now();
+        let retry_start = crate::client::thread_cpu::ProfileTimer::start();
         #[cfg(any(test, feature = "diagnostics"))]
         let sending_count = self.client.sending.len();
         let client = &mut self.client;

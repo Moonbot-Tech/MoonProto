@@ -44,9 +44,13 @@ pub(super) fn runtime_loop(
         startup.as_ref().map(RuntimeInitMachine::startup_status),
         true,
     );
+    #[cfg(any(test, feature = "diagnostics"))]
+    let profile_metrics = Arc::clone(&client.metrics.protocol_metrics);
     loop {
         #[cfg(any(test, feature = "diagnostics"))]
-        let command_drain_start = Instant::now();
+        let turn_profile = crate::client::thread_cpu::ProfileTimer::start();
+        #[cfg(any(test, feature = "diagnostics"))]
+        let command_drain_start = crate::client::thread_cpu::ProfileTimer::start();
         let (stop, changed) = if startup.is_some() {
             drain_commands_during_startup(rx, deferred_commands)
         } else {
@@ -80,9 +84,11 @@ pub(super) fn runtime_loop(
             break;
         }
 
+        #[cfg(any(test, feature = "diagnostics"))]
+        let tail_profile = crate::client::thread_cpu::ProfileTimer::start();
         let state_changed = if let Some(startup_machine) = startup.as_mut() {
             #[cfg(any(test, feature = "diagnostics"))]
-            let init_poll_start = Instant::now();
+            let init_poll_start = crate::client::thread_cpu::ProfileTimer::start();
             #[cfg(any(test, feature = "diagnostics"))]
             let (init_cmd, init_api_method) = startup_machine.profile_source();
             let init_poll = startup_machine.poll(&mut client, &mut dispatcher);
@@ -139,10 +145,10 @@ pub(super) fn runtime_loop(
             }
         } else {
             #[cfg(any(test, feature = "diagnostics"))]
-            let pending_start = Instant::now();
+            let pending_start = crate::client::thread_cpu::ProfileTimer::start();
             let server_info_changed = poll_server_info(&mut client, &mut pending, &mut dispatcher);
             #[cfg(any(test, feature = "diagnostics"))]
-            let auto_candles_start = Instant::now();
+            let auto_candles_start = crate::client::thread_cpu::ProfileTimer::start();
             let candles_changed = poll_auto_candles(&mut client, &mut pending, &mut dispatcher);
             #[cfg(any(test, feature = "diagnostics"))]
             client
@@ -161,7 +167,7 @@ pub(super) fn runtime_loop(
             let market_history_changed =
                 poll_market_history(&mut client, &mut pending, &mut dispatcher);
             #[cfg(any(test, feature = "diagnostics"))]
-            let coin_card_start = Instant::now();
+            let coin_card_start = crate::client::thread_cpu::ProfileTimer::start();
             let coin_card_changed = poll_coin_card_candles(
                 &mut pending.coin_card_candles,
                 &mut dispatcher,
@@ -179,7 +185,7 @@ pub(super) fn runtime_loop(
                     pending.coin_card_candles.len(),
                 );
             #[cfg(any(test, feature = "diagnostics"))]
-            let transfer_assets_start = Instant::now();
+            let transfer_assets_start = crate::client::thread_cpu::ProfileTimer::start();
             let transfer_assets_changed =
                 poll_transfer_assets(&mut pending, &mut dispatcher, &api_pending);
             #[cfg(any(test, feature = "diagnostics"))]
@@ -194,7 +200,7 @@ pub(super) fn runtime_loop(
                     pending.transfer_assets.len() + pending.transfer_assets_batches.len(),
                 );
             #[cfg(any(test, feature = "diagnostics"))]
-            let account_start = Instant::now();
+            let account_start = crate::client::thread_cpu::ProfileTimer::start();
             let account_changed = poll_account_refreshes(
                 &mut pending.account_refreshes,
                 &mut dispatcher,
@@ -212,7 +218,7 @@ pub(super) fn runtime_loop(
                     pending.account_refreshes.len(),
                 );
             #[cfg(any(test, feature = "diagnostics"))]
-            let engine_actions_start = Instant::now();
+            let engine_actions_start = crate::client::thread_cpu::ProfileTimer::start();
             poll_engine_actions(&mut pending.engine_actions, &mut dispatcher, &api_pending);
             #[cfg(any(test, feature = "diagnostics"))]
             client
@@ -266,6 +272,8 @@ pub(super) fn runtime_loop(
             publish_snapshot_profiled(&client, &dispatcher, &snapshot);
         }
 
+        #[cfg(any(test, feature = "diagnostics"))]
+        let events_profile = crate::client::thread_cpu::ProfileTimer::start();
         if startup.is_none() {
             let events =
                 take_queued_events_and_publish_snapshot(&client, &mut dispatcher, &snapshot);
@@ -277,7 +285,11 @@ pub(super) fn runtime_loop(
         }
 
         #[cfg(any(test, feature = "diagnostics"))]
-        let command_drain_start = Instant::now();
+        profile_metrics.record_profile_phase_labeled(
+            ProfilePhase::RuntimeEvents, events_profile.elapsed(), u8::MAX, u8::MAX, 0,
+        );
+        #[cfg(any(test, feature = "diagnostics"))]
+        let command_drain_start = crate::client::thread_cpu::ProfileTimer::start();
         let (stop, changed) = if startup.is_some() {
             drain_commands_during_startup(rx, deferred_commands)
         } else {
@@ -306,6 +318,14 @@ pub(super) fn runtime_loop(
         if stop {
             break;
         }
+        #[cfg(any(test, feature = "diagnostics"))]
+        profile_metrics.record_profile_phase_labeled(
+            ProfilePhase::RuntimeTail, tail_profile.elapsed(), u8::MAX, u8::MAX, 0,
+        );
+        #[cfg(any(test, feature = "diagnostics"))]
+        profile_metrics.record_profile_phase_labeled(
+            ProfilePhase::RuntimeTurn, turn_profile.elapsed(), u8::MAX, u8::MAX, 0,
+        );
     }
     if client.shutdown_requested() {
         startup_publisher.mark_disconnected();
@@ -730,7 +750,7 @@ fn publish_snapshot_profiled(
     #[cfg(not(any(test, feature = "diagnostics")))]
     let _ = client;
     #[cfg(any(test, feature = "diagnostics"))]
-    let snapshot_start = Instant::now();
+    let snapshot_start = crate::client::thread_cpu::ProfileTimer::start();
     publish_snapshot(dispatcher, snapshot);
     #[cfg(any(test, feature = "diagnostics"))]
     client
@@ -844,6 +864,47 @@ mod tests {
     }
 
     #[test]
+    fn logs_subscription_defers_until_ready_and_restores_latest_choice() {
+        let mut client = identity_client();
+        assert!(client.subscriptions.subscription_registry.lock().active_subscriptions().server_logs);
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let (tx, rx) = mpsc::channel();
+        let mut deferred = VecDeque::new();
+        tx.send(RuntimeCommand::Ui(UiRuntimeCommand::LogsSubscribe(false))).unwrap();
+        assert_eq!(drain_commands_during_startup(&rx, &mut deferred), (false, false));
+        assert!(client.subscriptions.subscription_registry.lock().active_subscriptions().server_logs);
+        drain_deferred_and_live_commands(&mut client, &mut dispatcher, &rx, &mut pending, &mut deferred);
+        assert!(!client.subscriptions.subscription_registry.lock().active_subscriptions().server_logs);
+        let (_, high, _) = client.take_send_queues_for_test();
+        assert_eq!(high.len(), 1);
+        assert_eq!(high[0].data[0], 49);
+        assert_eq!(high[0].data[11], 0);
+        assert!(high[0].encrypted);
+        assert_eq!(high[0].u_key.kind, crate::commands::registry::UK_LOG_SUBSCRIPTION);
+        assert_eq!(high[0].u_key.uid, 1);
+
+        for subscribe in [false, true] {
+            handle_command(
+                &mut client, &mut dispatcher,
+                RuntimeCommand::Ui(UiRuntimeCommand::LogsSubscribe(subscribe)), &mut pending,
+            );
+            client.take_send_queues_for_test();
+            // Same core process, new hard session: no metadata BaseCheck.
+            client.server_token += 1;
+            client.restore_domain_after_reconnect();
+            let (_, high, _) = client.take_send_queues_for_test();
+            let logs: Vec<_> = high.iter()
+                .filter(|item| item.cmd == Command::UI.to_byte() && item.data[0] == 49)
+                .collect();
+            assert_eq!(logs.len(), 1);
+            assert_eq!(logs[0].data[11], u8::from(subscribe));
+            let subscriptions = client.subscriptions.subscription_registry.lock().active_subscriptions();
+            assert_eq!(subscriptions.server_logs, subscribe);
+        }
+    }
+
+    #[test]
     fn server_info_refresh_skips_same_process_reconnect() {
         let mut client = identity_client();
         let mut dispatcher = crate::events::EventDispatcher::new();
@@ -864,6 +925,7 @@ mod tests {
     #[test]
     fn server_info_refresh_after_restart_publishes_without_repeating_init() {
         let mut client = identity_client();
+        client.subscriptions.subscription_registry.lock().logs_sub = Some(false);
         let mut dispatcher = crate::events::EventDispatcher::new();
         dispatcher.set_session_identity(client.server_info().clone(), None);
         let mut pending = RuntimePending::default();
@@ -884,6 +946,8 @@ mod tests {
         assert_eq!(sent[0].cmd, Command::API.to_byte());
         assert_eq!(engine_request_uid(&sent[0].data), Some(uid));
         assert_eq!(engine_request_method(&sent[0].data), Some(crate::commands::engine_api::EngineMethod::BaseCheck));
+        assert_eq!(&sent[0].data[18..], &[4, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(!client.subscriptions.subscription_registry.lock().active_subscriptions().server_logs);
 
         assert!(client.pending_api.api_pending.dispatch(identity_response(uid, true)).is_none());
         assert!(poll_server_info(&mut client, &mut pending, &mut dispatcher));

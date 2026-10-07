@@ -197,8 +197,11 @@ impl InitialStrategies {
 /// GetMarketsList, UpdateMarketsList, balance refresh,
 /// orders, strategy snapshot sync, and settings sync are the init contract
 /// itself. This config only carries optional stream subscriptions and timing.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct InitConfig {
+    /// Receive server log events. Enabled by default; the library restores
+    /// the latest choice after reconnect. Older cores always send logs.
+    pub subscribe_logs: bool,
     /// Local strategies to install into the active library before Init starts.
     ///
     /// `None` preserves any strategy state already configured on the internal
@@ -226,6 +229,18 @@ pub struct InitConfig {
     /// with 2000 ms between attempts. A mandatory Sliced timeout retries only
     /// the current init step; transport traffic never extends its deadline.
     pub step_timeout: Option<Duration>,
+}
+
+impl Default for InitConfig {
+    fn default() -> Self {
+        Self {
+            subscribe_logs: true,
+            initial_strategies: None,
+            subscribe_trades: None,
+            subscribe_orderbooks: Vec::new(),
+            step_timeout: None,
+        }
+    }
 }
 
 /// Result of the internal one-time Init sequence.

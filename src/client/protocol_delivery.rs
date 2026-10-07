@@ -123,7 +123,7 @@ impl ProtocolCore<'_> {
         mode.payload_buf.clear();
         let authorized_before = self.client.authorized;
         #[cfg(any(test, feature = "diagnostics"))]
-        let active_decode_start = Instant::now();
+        let active_decode_start = crate::client::thread_cpu::ProfileTimer::start();
         let decode_result = catch_unwind(AssertUnwindSafe(|| {
             self.client.client_new_data_decoded(
                 cmd,
@@ -200,14 +200,20 @@ impl ProtocolCore<'_> {
             let dispatch_result = catch_unwind(AssertUnwindSafe(|| {
                 mode.event_buf.clear();
                 mode.active_actions_buf.clear();
+                #[cfg(any(test, feature = "diagnostics"))]
+                let context_profile = crate::client::thread_cpu::ProfileTimer::start();
                 let ctx = crate::events::ActiveDispatchContext::from_client(self.client);
+                #[cfg(any(test, feature = "diagnostics"))]
+                self.client.metrics.protocol_metrics.record_profile_phase_labeled(
+                    ProfilePhase::ActiveContext, context_profile.elapsed(), u8::MAX, u8::MAX, 0,
+                );
                 #[cfg(any(test, feature = "diagnostics"))]
                 let active_dispatch_start = Instant::now();
                 #[cfg(any(test, feature = "diagnostics"))]
                 let active_dispatch_thread_cpu_start =
                     crate::client::thread_cpu::ThreadCpuTimer::start();
                 #[cfg(any(test, feature = "diagnostics"))]
-                let active_dispatch_inner_start = Instant::now();
+                let active_dispatch_inner_start = crate::client::thread_cpu::ProfileTimer::start();
                 mode.dispatcher.dispatch_into_active_actions(
                     c,
                     &p,
@@ -241,7 +247,7 @@ impl ProtocolCore<'_> {
                 #[cfg(any(test, feature = "diagnostics"))]
                 let action_count = mode.active_actions_buf.len();
                 #[cfg(any(test, feature = "diagnostics"))]
-                let active_actions_start = Instant::now();
+                let active_actions_start = crate::client::thread_cpu::ProfileTimer::start();
                 self.client
                     .apply_active_actions(mode.active_actions_buf.drain(..));
                 #[cfg(any(test, feature = "diagnostics"))]
@@ -284,7 +290,7 @@ impl ProtocolCore<'_> {
                     }
                 }
                 #[cfg(any(test, feature = "diagnostics"))]
-                let drain_events_start = Instant::now();
+                let drain_events_start = crate::client::thread_cpu::ProfileTimer::start();
                 mode.drain_events(
                     &self.client.metrics.protocol_metrics,
                     Some(c),

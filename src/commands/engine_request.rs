@@ -138,9 +138,17 @@ pub(crate) fn unsubscribe_order_book(markets: &[&str]) -> Vec<u8> {
     build_engine_request(EngineMethod::UnsubscribeOrderBook, "", markets)
 }
 
-/// `emk_BaseCheck`: server health and identity check.
-pub(crate) fn base_check() -> Vec<u8> {
-    build_engine_request(EngineMethod::BaseCheck, "", &[])
+/// `emk_BaseCheck`: server health/identity and optional log subscription.
+/// Params start with a u32 presence mask; bit 0 carries one boolean.
+/// Append future fields in ascending bit order so older cores can ignore the tail.
+pub(crate) fn base_check(logs: Option<bool>) -> Vec<u8> {
+    let mut params = [0u8; 5];
+    if let Some(subscribe) = logs {
+        params[0] = 1;
+        params[4] = u8::from(subscribe);
+    }
+    let len = if logs.is_some() { 5 } else { 4 };
+    build_engine_request_full(EngineMethod::BaseCheck, "", &[], &params[..len])
 }
 
 /// `emk_AuthCheck`: check exchange API authorization.

@@ -782,3 +782,69 @@ fn is_zero_for_each_type() {
     assert!(FieldValue::Double(1e-15).is_zero()); // < 1e-10
     assert!(!FieldValue::Double(1e-5).is_zero());
 }
+
+#[test]
+fn decoded_fields_survive_source_drop_and_isolate_edits_between_strategies() {
+    let schema = sample_schema();
+    let original = sample_strategy(10, "Retained", "Folder");
+    let mut writer = StrategyBatchBuilder::new(&schema);
+    writer.write_strategy(&original);
+    writer.write_strategy(&sample_strategy(20, "Peer", "Folder"));
+    let mut snapshots = parse_strategy_batch_with_schema(&writer.finalize(), Some(&schema))
+        .unwrap().strategies;
+    let peer = snapshots.pop().unwrap();
+    let retained = snapshots.pop().unwrap();
+    drop(snapshots);
+    let mut edited = retained.clone();
+    assert_eq!(edited.fields.insert("OrderSize", FieldValue::Double(42.0)), Some(FieldValue::Double(123.45)));
+    // Known to the batch dictionary, but absent from this strategy's field list.
+    assert_eq!(edited.fields.insert("DebugLog", FieldValue::Bool(true)), None);
+    // New caller-defined names must not change the shared dictionary of peers.
+    assert_eq!(edited.fields.insert("FutureField", FieldValue::UInt64(u64::MAX)), None);
+    assert_eq!(retained.fields.get_double("OrderSize"), Some(123.45));
+    assert!(!retained.fields.contains_key("DebugLog"));
+    assert!(!peer.fields.contains_key("FutureField"));
+    assert_eq!(peer.strategy_name(), Some("Peer"));
+    assert_eq!(edited.fields.get("FutureField"), Some(&FieldValue::UInt64(u64::MAX)));
+    let mut expected = original;
+    expected.fields.insert("OrderSize", FieldValue::Double(42.0));
+    expected.fields.insert("DebugLog", FieldValue::Bool(true));
+    expected.fields.insert("FutureField", FieldValue::UInt64(u64::MAX));
+    assert_eq!(edited, expected);
+    let mut actual_wire = StrategyBatchBuilder::new(&schema);
+    actual_wire.write_strategy(&edited);
+    let mut expected_wire = StrategyBatchBuilder::new(&schema);
+    expected_wire.write_strategy(&expected);
+    assert_eq!(actual_wire.finalize(), expected_wire.finalize());
+    // Moving the retained read model to another thread must keep its names alive.
+    std::thread::spawn(move || {
+        assert_eq!(retained.strategy_name(), Some("Retained"));
+        assert_eq!(retained.fields.get_double("OrderSize"), Some(123.45));
+    }).join().unwrap();
+}
+
+#[test]
+fn snapshots_from_different_name_dictionary_orders_keep_their_own_meaning() {
+    let field_a = schema_field("A", TID_INT32, None, &[5]);
+    let field_b = schema_field("B", TID_INT32, None, &[5]);
+    let schemas = [
+        schema_for_fields(vec![field_a.clone(), field_b.clone()]),
+        schema_for_fields(vec![field_b, field_a]),
+    ];
+    let expected = strategy_with_fields(StrategyKind::PUMP_DETECTION, true, &[
+        ("A", FieldValue::Int32(11)), ("B", FieldValue::Int32(22)),
+    ]);
+    let decoded: Vec<_> = schemas.iter().map(|schema| {
+        let mut writer = StrategyBatchBuilder::new(schema);
+        writer.write_strategy(&expected);
+        parse_strategy_batch_with_schema(&writer.finalize(), Some(schema)).unwrap().strategies.remove(0)
+    }).collect();
+    assert_eq!(decoded[0], expected);
+    assert_eq!(decoded[1], expected);
+    assert_eq!(decoded[0].fields.iter().map(|(name, _)| name.as_ref()).collect::<Vec<_>>(), ["A", "B"]);
+    assert_eq!(decoded[1].fields.iter().map(|(name, _)| name.as_ref()).collect::<Vec<_>>(), ["B", "A"]);
+    for snapshot in decoded {
+        assert_eq!(snapshot.fields.get("A"), Some(&FieldValue::Int32(11)));
+        assert_eq!(snapshot.fields.get("B"), Some(&FieldValue::Int32(22)));
+    }
+}

@@ -69,7 +69,7 @@ impl ClientMetrics {
 /// prove whether the protocol-owned work is bounded and fast enough for the
 /// Delphi machine-effect parity plan.
 #[cfg(any(test, feature = "diagnostics"))]
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ProtocolMetricsSnapshot {
     /// UDP datagrams returned by `recv_from`, before MoonProto MAC/version
     /// acceptance.
@@ -205,14 +205,54 @@ pub struct ProtocolMetricsSnapshot {
     /// Detailed diagnostics-only profile phases. These split the broad
     /// reader/writer/dispatch counters into concrete protocol sections.
     pub profile_phases: Vec<ProtocolProfilePhaseSnapshot>,
+    /// Domain dispatch grouped by decoded command. These are children of active.dispatch.
+    pub dispatch_commands: Vec<ProtocolCommandProfileSnapshot>,
 }
 
 #[cfg(any(test, feature = "diagnostics"))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl ProtocolMetricsSnapshot {
+    /// Empty sampled timer measurements for estimating the clock's own cost.
+    /// Windows only: other platforms do not expose thread cycle counters here.
+    #[doc(hidden)]
+    pub fn calibrate_profile_timer_cycles() -> Vec<u64> {
+        (0..65_536).filter_map(|_| super::thread_cpu::ProfileTimer::start().elapsed().cpu.cycles).collect()
+    }
+
+    /// Empty sampled CPU timers for platforms with thread CPU time, including Linux.
+    #[doc(hidden)]
+    pub fn calibrate_profile_timer_cpu_ns() -> Vec<u64> {
+        (0..65_536).filter_map(|_| {
+            super::thread_cpu::ProfileTimer::start().elapsed().cpu.time.map(|time| time.as_nanos() as u64)
+        }).collect()
+    }
+}
+
+#[cfg(any(test, feature = "diagnostics"))]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ProtocolCommandProfileSnapshot {
+    pub command: u8,
+    pub count: u64,
+    pub payload_bytes: u64,
+    pub total_ns: u64,
+    pub cpu_samples: u64,
+    pub cpu_ns: u64,
+    pub cycles_samples: u64,
+    pub cycles: u64,
+}
+
+#[cfg(any(test, feature = "diagnostics"))]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ProtocolProfilePhaseSnapshot {
     pub name: &'static str,
     pub count: u64,
     pub total_ns: u64,
+    /// CPU is randomly sampled on approximately 1/64 of calls. Counters below
+    /// sum only those samples; estimate a phase total as sum * count / samples.
+    /// They exclude scheduler preemption. Nested phases are inclusive.
+    pub cpu_samples: u64,
+    pub cpu_ns: u64,
+    pub cycles_samples: u64,
+    pub cycles: u64,
     pub max_ns: u64,
     pub max_cmd: u8,
     pub max_api_method: u8,
@@ -257,13 +297,47 @@ pub(crate) enum ProfilePhase {
     CandlesSnapshotBaselines,
     CandlesSnapshotBuildRows,
     CandlesSnapshotQueue,
+    RuntimeTurn,
+    RuntimeTail,
+    SocketRecv,
+    SocketWait,
+    SocketRearm,
+    RuntimeEvents,
+    ActiveContext,
+    HistoryStream,
+    HistoryLastPrice,
+    HistoryCandles,
+    HistoryOther,
+    HistoryWait,
+    HistoryWarmup,
+    HistoryCompact,
+    HistoryAnalytics,
 }
 
 #[cfg(any(test, feature = "diagnostics"))]
 pub(crate) const RUNTIME_PROFILE_CMD: u8 = 254;
 
 #[cfg(any(test, feature = "diagnostics"))]
-const PROFILE_PHASE_COUNT: usize = 32;
+const PROFILE_PHASE_COUNT: usize = 47;
+
+#[cfg(any(test, feature = "diagnostics"))]
+#[derive(Debug)]
+struct ProfileSlots<const N: usize = PROFILE_PHASE_COUNT>([AtomicU64; N]);
+
+#[cfg(any(test, feature = "diagnostics"))]
+impl<const N: usize> Default for ProfileSlots<N> {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| AtomicU64::new(0)))
+    }
+}
+
+#[cfg(any(test, feature = "diagnostics"))]
+impl<const N: usize> std::ops::Index<usize> for ProfileSlots<N> {
+    type Output = AtomicU64;
+    fn index(&self, index: usize) -> &AtomicU64 {
+        &self.0[index]
+    }
+}
 
 #[cfg(any(test, feature = "diagnostics"))]
 impl ProfilePhase {
@@ -306,6 +380,21 @@ impl ProfilePhase {
             Self::CandlesSnapshotBaselines => "candles.snapshot.baselines",
             Self::CandlesSnapshotBuildRows => "candles.snapshot.build_rows",
             Self::CandlesSnapshotQueue => "candles.snapshot.queue",
+            Self::RuntimeTurn => "runtime.turn",
+            Self::RuntimeTail => "runtime.tail",
+            Self::SocketRecv => "socket.recv",
+            Self::SocketWait => "socket.wait",
+            Self::SocketRearm => "socket.rearm",
+            Self::RuntimeEvents => "runtime.events",
+            Self::ActiveContext => "active.context",
+            Self::HistoryStream => "history.stream",
+            Self::HistoryLastPrice => "history.last_price",
+            Self::HistoryCandles => "history.candles",
+            Self::HistoryOther => "history.other",
+            Self::HistoryWait => "history.wait",
+            Self::HistoryWarmup => "history.warmup",
+            Self::HistoryCompact => "history.compact",
+            Self::HistoryAnalytics => "history.analytics",
         }
     }
 
@@ -343,6 +432,21 @@ impl ProfilePhase {
             Self::CandlesSnapshotBaselines,
             Self::CandlesSnapshotBuildRows,
             Self::CandlesSnapshotQueue,
+            Self::RuntimeTurn,
+            Self::RuntimeTail,
+            Self::SocketRecv,
+            Self::SocketWait,
+            Self::SocketRearm,
+            Self::RuntimeEvents,
+            Self::ActiveContext,
+            Self::HistoryStream,
+            Self::HistoryLastPrice,
+            Self::HistoryCandles,
+            Self::HistoryOther,
+            Self::HistoryWait,
+            Self::HistoryWarmup,
+            Self::HistoryCompact,
+            Self::HistoryAnalytics,
         ]
     }
 }
@@ -430,15 +534,26 @@ pub(crate) struct ProtocolMetrics {
     send_phase_ns: AtomicU64,
     send_phase_max_ns: AtomicU64,
     last_pmtu: AtomicU64,
-    profile_count: [AtomicU64; PROFILE_PHASE_COUNT],
-    profile_ns: [AtomicU64; PROFILE_PHASE_COUNT],
-    profile_max_ns: [AtomicU64; PROFILE_PHASE_COUNT],
-    profile_max_cmd: [AtomicU64; PROFILE_PHASE_COUNT],
-    profile_max_api_method: [AtomicU64; PROFILE_PHASE_COUNT],
-    profile_max_payload_len: [AtomicU64; PROFILE_PHASE_COUNT],
-    profile_over_100us: [AtomicU64; PROFILE_PHASE_COUNT],
-    profile_over_1ms: [AtomicU64; PROFILE_PHASE_COUNT],
-    profile_over_5ms: [AtomicU64; PROFILE_PHASE_COUNT],
+    dispatch_count: ProfileSlots<256>,
+    dispatch_bytes: ProfileSlots<256>,
+    dispatch_ns: ProfileSlots<256>,
+    dispatch_cycles_samples: ProfileSlots<256>,
+    dispatch_cycles: ProfileSlots<256>,
+    dispatch_cpu_samples: ProfileSlots<256>,
+    dispatch_cpu_ns: ProfileSlots<256>,
+    profile_count: ProfileSlots,
+    profile_ns: ProfileSlots,
+    profile_cpu_samples: ProfileSlots,
+    profile_cpu_ns: ProfileSlots,
+    profile_cycles_samples: ProfileSlots,
+    profile_cycles: ProfileSlots,
+    profile_max_ns: ProfileSlots,
+    profile_max_cmd: ProfileSlots,
+    profile_max_api_method: ProfileSlots,
+    profile_max_payload_len: ProfileSlots,
+    profile_over_100us: ProfileSlots,
+    profile_over_1ms: ProfileSlots,
+    profile_over_5ms: ProfileSlots,
 }
 
 #[cfg(not(any(test, feature = "diagnostics")))]
@@ -704,6 +819,19 @@ impl ProtocolMetrics {
             public_event_queue_len,
             last_pmtu: self.last_pmtu.load(Ordering::Relaxed) as u16,
             profile_phases: self.profile_snapshot(),
+            dispatch_commands: (0..=255).filter_map(|command| {
+                let idx = command as usize;
+                let count = self.dispatch_count[idx].load(Ordering::Relaxed);
+                (count > 0).then(|| ProtocolCommandProfileSnapshot {
+                    command, count,
+                    payload_bytes: self.dispatch_bytes[idx].load(Ordering::Relaxed),
+                    total_ns: self.dispatch_ns[idx].load(Ordering::Relaxed),
+                    cycles_samples: self.dispatch_cycles_samples[idx].load(Ordering::Relaxed),
+                    cycles: self.dispatch_cycles[idx].load(Ordering::Relaxed),
+                    cpu_samples: self.dispatch_cpu_samples[idx].load(Ordering::Relaxed),
+                    cpu_ns: self.dispatch_cpu_ns[idx].load(Ordering::Relaxed),
+                })
+            }).collect(),
         }
     }
 
@@ -798,12 +926,34 @@ impl ProtocolMetrics {
     pub(crate) fn record_profile_phase_labeled(
         &self,
         phase: ProfilePhase,
-        duration: Duration,
+        elapsed: super::thread_cpu::ProfileElapsed,
         source_cmd: u8,
         source_api_method: u8,
         payload_len: usize,
     ) {
         let idx = phase.idx();
+        if phase == ProfilePhase::ActiveDispatch {
+            let cmd = usize::from(source_cmd);
+            self.dispatch_count[cmd].fetch_add(1, Ordering::Relaxed);
+            self.dispatch_bytes[cmd].fetch_add(payload_len as u64, Ordering::Relaxed);
+            self.dispatch_ns[cmd].fetch_add(elapsed.wall.as_nanos() as u64, Ordering::Relaxed);
+            if let Some(cpu) = elapsed.cpu.time {
+                self.dispatch_cpu_samples[cmd].fetch_add(1, Ordering::Relaxed);
+                self.dispatch_cpu_ns[cmd].fetch_add(cpu.as_nanos() as u64, Ordering::Relaxed);
+            }
+            if let Some(cycles) = elapsed.cpu.cycles {
+                self.dispatch_cycles_samples[cmd].fetch_add(1, Ordering::Relaxed);
+                self.dispatch_cycles[cmd].fetch_add(cycles, Ordering::Relaxed);
+            }
+        }
+        if let Some(cpu) = elapsed.cpu.time {
+            self.profile_cpu_samples[idx].fetch_add(1, Ordering::Relaxed);
+            self.profile_cpu_ns[idx].fetch_add(cpu.as_nanos() as u64, Ordering::Relaxed);
+        }
+        if let Some(cycles) = elapsed.cpu.cycles {
+            self.profile_cycles_samples[idx].fetch_add(1, Ordering::Relaxed);
+            self.profile_cycles[idx].fetch_add(cycles, Ordering::Relaxed);
+        }
         if record_timing(
             &self.profile_count[idx],
             &self.profile_ns[idx],
@@ -811,7 +961,7 @@ impl ProtocolMetrics {
             &self.profile_over_100us[idx],
             &self.profile_over_1ms[idx],
             &self.profile_over_5ms[idx],
-            duration,
+            elapsed.wall,
         ) {
             self.profile_max_cmd[idx].store(u64::from(source_cmd), Ordering::Relaxed);
             self.profile_max_api_method[idx].store(u64::from(source_api_method), Ordering::Relaxed);
@@ -829,6 +979,10 @@ impl ProtocolMetrics {
                     name: phase.name(),
                     count,
                     total_ns: self.profile_ns[idx].load(Ordering::Relaxed),
+                    cpu_samples: self.profile_cpu_samples[idx].load(Ordering::Relaxed),
+                    cpu_ns: self.profile_cpu_ns[idx].load(Ordering::Relaxed),
+                    cycles_samples: self.profile_cycles_samples[idx].load(Ordering::Relaxed),
+                    cycles: self.profile_cycles[idx].load(Ordering::Relaxed),
                     max_ns: self.profile_max_ns[idx].load(Ordering::Relaxed),
                     max_cmd: self.profile_max_cmd[idx].load(Ordering::Relaxed) as u8,
                     max_api_method: self.profile_max_api_method[idx].load(Ordering::Relaxed) as u8,
@@ -901,4 +1055,31 @@ fn record_timing(
         over_5ms.fetch_add(1, Ordering::Relaxed);
     }
     is_max
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use crate::client::thread_cpu::{ProfileElapsed, ThreadCpuElapsed};
+
+    #[test]
+    fn sampled_cpu_stays_separate_from_wall_time_and_protocol_waits() {
+        let metrics = ProtocolMetrics::default();
+        let sample = ProfileElapsed {
+            wall: Duration::from_millis(40),
+            cpu: ThreadCpuElapsed { time: Some(Duration::from_millis(1)), cycles: Some(1234) },
+        }.excluding_wait(Duration::from_millis(32));
+        metrics.record_profile_phase_labeled(ProfilePhase::RecvRoute, sample, 7, 8, 99);
+        metrics.record_profile_phase_labeled(ProfilePhase::RecvRoute, ProfileElapsed {
+            wall: Duration::from_secs(2),
+            cpu: ThreadCpuElapsed { time: None, cycles: None },
+        }, 9, 10, 111);
+        let snapshot = metrics.snapshot(0);
+        let phase = &snapshot.profile_phases[0];
+        assert_eq!(phase.count, 2);
+        assert_eq!(phase.total_ns, 2_008_000_000);
+        assert_eq!((phase.cpu_samples, phase.cpu_ns), (1, 1_000_000));
+        assert_eq!((phase.cycles_samples, phase.cycles), (1, 1234));
+        assert_eq!((phase.max_cmd, phase.max_api_method, phase.max_payload_len), (9, 10, 111));
+    }
 }

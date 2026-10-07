@@ -136,6 +136,8 @@ impl MoonClient {
         let shared_state = ClientSharedState::new();
         let lifecycle_sink = event_sink.clone();
         let lifecycle_join = thread::spawn(move || {
+            #[cfg(any(test, feature = "diagnostics"))]
+            super::thread_cpu::set_diagnostic_thread_name("moonproto-lifecycle");
             while let Ok(event) = lifecycle_rx.recv() {
                 if let Err(payload) =
                     catch_unwind(AssertUnwindSafe(|| lifecycle_sink.emit_lifecycle(event)))
@@ -151,6 +153,8 @@ impl MoonClient {
 
         let thread_shared_state = shared_state.clone();
         let join = thread::spawn(move || {
+            #[cfg(any(test, feature = "diagnostics"))]
+            super::thread_cpu::set_diagnostic_thread_name("moonproto-runtime");
             supervise_runtime_loop(
                 cfg,
                 connect,

@@ -14,6 +14,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
+#[cfg(any(test, feature = "diagnostics"))]
+use crate::client::{
+    metrics::{ProfilePhase, ProtocolMetrics},
+    thread_cpu::ProfileTimer,
+};
 
 use crate::state::eps::EpsProfile;
 use crate::state::history::{
@@ -106,6 +111,8 @@ type MarketHistoryReadIndex = Arc<RwLock<HashMap<Arc<str>, MarketHistoryReadHand
 pub(crate) struct MarketHistoryHandle {
     tx: mpsc::Sender<MarketHistoryCommand>,
     read_index: MarketHistoryReadIndex,
+    #[cfg(any(test, feature = "diagnostics"))]
+    profile: Arc<ProtocolMetrics>,
 }
 
 impl fmt::Debug for MarketHistoryHandle {
@@ -175,9 +182,17 @@ impl MarketHistoryWorker {
         let (tx, rx) = mpsc::channel::<MarketHistoryCommand>();
         let read_index = Arc::new(RwLock::new(HashMap::new()));
         let worker_read_index = Arc::clone(&read_index);
+        #[cfg(any(test, feature = "diagnostics"))]
+        let profile = Arc::new(ProtocolMetrics::default());
+        #[cfg(any(test, feature = "diagnostics"))]
+        let worker_profile = Arc::clone(&profile);
         let join = thread::spawn(move || {
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
-                worker_loop(default_config, rx, worker_read_index)
+                worker_loop(
+                    default_config, rx, worker_read_index,
+                    #[cfg(any(test, feature = "diagnostics"))]
+                    worker_profile,
+                )
             })) {
                 log::error!(
                     target: "moonproto::history_worker",
@@ -187,7 +202,11 @@ impl MarketHistoryWorker {
             }
         });
         Self {
-            handle: MarketHistoryHandle { tx, read_index },
+            handle: MarketHistoryHandle {
+                tx, read_index,
+                #[cfg(any(test, feature = "diagnostics"))]
+                profile,
+            },
             join: Some(join),
         }
     }
@@ -257,6 +276,11 @@ impl Drop for MarketHistoryWorker {
 }
 
 impl MarketHistoryHandle {
+    #[cfg(any(test, feature = "diagnostics"))]
+    pub(crate) fn profile_snapshot(&self) -> crate::client::ProtocolMetricsSnapshot {
+        self.profile.snapshot(0)
+    }
+
     pub(crate) fn set_eps_profile(&self, eps_profile: EpsProfile) -> bool {
         self.tx
             .send(MarketHistoryCommand::SetEpsProfile(eps_profile))
@@ -458,7 +482,10 @@ fn worker_loop(
     default_config: MarketHistoryConfig,
     rx: mpsc::Receiver<MarketHistoryCommand>,
     read_index: MarketHistoryReadIndex,
+    #[cfg(any(test, feature = "diagnostics"))] profile: Arc<ProtocolMetrics>,
 ) {
+    #[cfg(any(test, feature = "diagnostics"))]
+    crate::client::thread_cpu::set_diagnostic_thread_name("moonproto-history");
     let mut registry = MarketHistoryRegistry::new(default_config);
     let mut last_maintenance = Instant::now();
     let mut last_warmup = Instant::now();
@@ -467,8 +494,24 @@ fn worker_loop(
     let page_size = crate::state::memory_warmup::system_page_size();
 
     loop {
+        #[cfg(any(test, feature = "diagnostics"))]
+        let wait_profile = ProfileTimer::start();
         let command = rx.recv_timeout(STORE_WORKER_RECV_TIMEOUT);
+        #[cfg(any(test, feature = "diagnostics"))]
+        profile.record_profile_phase_labeled(
+            ProfilePhase::HistoryWait, wait_profile.elapsed(), u8::MAX, u8::MAX, 0,
+        );
+
         let idle = matches!(command, Err(mpsc::RecvTimeoutError::Timeout));
+        #[cfg(any(test, feature = "diagnostics"))]
+        let command_phase = match &command {
+            Ok(MarketHistoryCommand::StreamBatch(_)) => ProfilePhase::HistoryStream,
+            Ok(MarketHistoryCommand::LastPriceBatch(_)) => ProfilePhase::HistoryLastPrice,
+            Ok(MarketHistoryCommand::CandlesSnapshot { .. }) => ProfilePhase::HistoryCandles,
+            _ => ProfilePhase::HistoryOther,
+        };
+        #[cfg(any(test, feature = "diagnostics"))]
+        let command_profile = ProfileTimer::start();
         let keep_running = catch_unwind(AssertUnwindSafe(|| {
             handle_worker_command(
                 command,
@@ -478,6 +521,10 @@ fn worker_loop(
                 &mut last_maintenance,
             )
         }));
+        #[cfg(any(test, feature = "diagnostics"))]
+        profile.record_profile_phase_labeled(
+            command_phase, command_profile.elapsed(), u8::MAX, u8::MAX, 0,
+        );
         match keep_running {
             Ok(true) => {}
             Ok(false) => break,
@@ -491,15 +538,26 @@ fn worker_loop(
         }
 
         if idle && last_warmup.elapsed() >= STORE_WORKER_WARMUP_INTERVAL {
+            #[cfg(any(test, feature = "diagnostics"))]
+            let warmup_profile = ProfileTimer::start();
             if let Some(page_size) = page_size {
                 registry.warm_up_next_market(page_size, &mut warmup_market_index);
             }
             last_warmup = Instant::now();
+            #[cfg(any(test, feature = "diagnostics"))]
+            profile.record_profile_phase_labeled(
+                ProfilePhase::HistoryWarmup, warmup_profile.elapsed(), u8::MAX, u8::MAX, 0,
+            );
+
         }
 
         if last_maintenance.elapsed() >= STORE_WORKER_MAINTENANCE_INTERVAL {
             let maintenance = catch_unwind(AssertUnwindSafe(|| {
-                run_store_maintenance(&mut registry, last_now_time);
+                run_store_maintenance(
+                    &mut registry, last_now_time,
+                    #[cfg(any(test, feature = "diagnostics"))]
+                    Some(&profile),
+                );
                 last_maintenance = Instant::now();
             }));
             if let Err(payload) = maintenance {
@@ -613,7 +671,7 @@ fn handle_worker_command(
         #[cfg(test)]
         Ok(MarketHistoryCommand::Flush { now_time, reply }) => {
             *last_now_time = now_time;
-            run_store_maintenance(registry, now_time);
+            run_store_maintenance(registry, now_time, None);
             *_last_maintenance = Instant::now();
             let _ = reply.send(());
         }
@@ -750,10 +808,31 @@ fn process_candles_snapshot(
     }
 }
 
-fn run_store_maintenance(registry: &mut MarketHistoryRegistry, now_time: MoonTime) {
+fn run_store_maintenance(
+    registry: &mut MarketHistoryRegistry,
+    now_time: MoonTime,
+    #[cfg(any(test, feature = "diagnostics"))] profile: Option<&ProtocolMetrics>,
+) {
     if now_time != MoonTime::ZERO {
+        #[cfg(any(test, feature = "diagnostics"))]
+        let compact_profile = ProfileTimer::start();
         registry.compact_evicted_futures(now_time);
+        #[cfg(any(test, feature = "diagnostics"))]
+        if let Some(profile) = profile {
+            profile.record_profile_phase_labeled(
+                ProfilePhase::HistoryCompact, compact_profile.elapsed(), u8::MAX, u8::MAX, 0,
+            );
+        }
+        #[cfg(any(test, feature = "diagnostics"))]
+        let analytics_profile = ProfileTimer::start();
+
         registry.refresh_derived_analytics(now_time);
+        #[cfg(any(test, feature = "diagnostics"))]
+        if let Some(profile) = profile {
+            profile.record_profile_phase_labeled(
+                ProfilePhase::HistoryAnalytics, analytics_profile.elapsed(), u8::MAX, u8::MAX, 0,
+            );
+        }
     }
 }
 

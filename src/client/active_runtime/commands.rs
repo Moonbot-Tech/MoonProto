@@ -87,6 +87,7 @@ pub(super) enum RuntimeCommand {
 pub(super) enum UiRuntimeCommand {
     SettingsRequest,
     MmSubscribe(bool),
+    LogsSubscribe(bool),
     SendSettings(crate::commands::ui::ClientSettingsCommand),
     /// Request the kernel's current safe-share config (CmdId=29).
     SharedConfigRequest,
@@ -270,6 +271,7 @@ impl UiRuntimeCommand {
         match self {
             Self::SettingsRequest => (20, 0),
             Self::MmSubscribe(_) => (21, 0),
+            Self::LogsSubscribe(_) => (94, 0),
             Self::SendSettings(_) => (22, 1),
             Self::UpdateVersion { .. } => (23, 0),
             Self::SwitchDex(_) => (24, 1),

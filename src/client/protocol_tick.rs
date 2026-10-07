@@ -35,28 +35,38 @@ impl ProtocolCore<'_> {
         self.drain_post_receive_delivery(cur_tm, mode);
     }
 
-    pub(crate) fn wait_5ms(&mut self) {
+    pub(crate) fn idle_wait_duration(&self) -> Duration {
+        Duration::from_millis(if self.client.cfg.market_history.is_compact() { 15 } else { DEFAULT_SLEEP_MS })
+    }
+
+    pub(crate) fn wait_for_data(&mut self) {
         // Delphi writer sleeps a fixed short tick when there is no outgoing
         // work. In the single-owner Rust loop this wait is also the UDP
         // readable wait; the next loop drains the socket before send phase.
         if !self.client.send_lock.lock().is_empty() {
             return;
         }
-        let timeout = Some(Duration::from_millis(DEFAULT_SLEEP_MS));
+        let timeout = self.idle_wait_duration();
         let Some(poller) = self.client.transport.recv_poller.as_ref() else {
-            thread::sleep(Duration::from_millis(DEFAULT_SLEEP_MS));
+            thread::sleep(timeout);
             return;
         };
+        #[cfg(any(test, feature = "diagnostics"))]
+        let wait_profile = crate::client::thread_cpu::ProfileTimer::start();
         self.client.transport.recv_events.clear();
-        match poller.wait(&mut self.client.transport.recv_events, timeout) {
+        match poller.wait(&mut self.client.transport.recv_events, Some(timeout)) {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
             Err(e) => {
                 log::warn!(target: "moonproto::reader",
                     "UDP poller wait failed: {e}; falling back to sleep for this tick");
-                thread::sleep(Duration::from_millis(DEFAULT_SLEEP_MS));
+                thread::sleep(timeout);
             }
         }
+        #[cfg(any(test, feature = "diagnostics"))]
+        self.client.metrics.protocol_metrics.record_profile_phase_labeled(
+            ProfilePhase::SocketWait, wait_profile.elapsed(), u8::MAX, u8::MAX, 0,
+        );
     }
 
     pub(crate) fn send_maintenance_phase(
@@ -68,7 +78,7 @@ impl ProtocolCore<'_> {
         #[cfg(any(test, feature = "diagnostics"))]
         let send_phase_start = Instant::now();
         #[cfg(any(test, feature = "diagnostics"))]
-        let send_maintenance_start = Instant::now();
+        let send_maintenance_start = crate::client::thread_cpu::ProfileTimer::start();
         self.transport_writer_maintenance_tick(cur_tm);
         #[cfg(any(test, feature = "diagnostics"))]
         protocol_metrics.record_profile_phase_labeled(

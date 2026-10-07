@@ -103,7 +103,7 @@ impl Client {
 
         self.record_bind_failure(cur_tm);
 
-        // Leave auth_status as Base — the main loop will try to bind again after DEFAULT_SLEEP_MS.
+        // Leave auth_status as Base; the main loop retries after the profile's idle wait.
         // If the app explicitly called disconnect() — it will set need_connect=false itself.
     }
 

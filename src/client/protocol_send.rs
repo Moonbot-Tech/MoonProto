@@ -27,7 +27,7 @@ impl ProtocolCore<'_> {
         // Delphi `Execute` under `SendLock`:
         // GetCopySendList; GetCopyAcks; FClient.CopyRecvdData.
         #[cfg(any(test, feature = "diagnostics"))]
-        let send_lock_snapshot_start = Instant::now();
+        let send_lock_snapshot_start = crate::client::thread_cpu::ProfileTimer::start();
         self.get_copy_send_lock_snapshot(
             &mut copy_send_list,
             &mut copy_send_list_h,
@@ -47,7 +47,7 @@ impl ProtocolCore<'_> {
             );
 
         #[cfg(any(test, feature = "diagnostics"))]
-        let check_sening_start = Instant::now();
+        let check_sening_start = crate::client::thread_cpu::ProfileTimer::start();
         self.check_sening_data(
             &copy_send_list,
             &mut copy_send_list_h,

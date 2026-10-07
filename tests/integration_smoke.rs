@@ -77,6 +77,7 @@ fn runtime_smoke_full_happy_path() {
 
     let cfg = ClientConfig::new(&ip, port, info.keys.master_key, info.keys.mac_key);
     let init = InitConfig {
+        subscribe_logs: true,
         initial_strategies: Some(InitialStrategies::new(0, Vec::new())),
         subscribe_trades: Some(TradesStreamMode::TradesOnly),
         subscribe_orderbooks: vec!["BTCUSDT".to_string()],

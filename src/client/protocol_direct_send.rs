@@ -106,7 +106,7 @@ impl ProtocolCore<'_> {
 
     pub(crate) fn retry_pending_h(&mut self, cur_tm: i64) {
         #[cfg(any(test, feature = "diagnostics"))]
-        let retry_start = Instant::now();
+        let retry_start = crate::client::thread_cpu::ProfileTimer::start();
         #[cfg(any(test, feature = "diagnostics"))]
         let pending_count = self.client.pending_h.len();
         let path_delay = pending_h_path_delay(self.client.round_trip_delay);

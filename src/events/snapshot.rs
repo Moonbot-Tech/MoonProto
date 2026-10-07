@@ -33,6 +33,13 @@ pub struct MoonStateSnapshot {
 }
 
 impl MoonStateSnapshot {
+    /// Diagnostic counters for the currently owned retained-history worker.
+    #[cfg(any(test, feature = "diagnostics"))]
+    #[doc(hidden)]
+    pub fn history_profile_snapshot(&self) -> Option<crate::client::ProtocolMetricsSnapshot> {
+        self.market_history.as_ref().map(MarketHistoryHandle::profile_snapshot)
+    }
+
     /// Read-only order state, keyed by server order UID.
     pub fn orders(&self) -> &Orders {
         &self.orders

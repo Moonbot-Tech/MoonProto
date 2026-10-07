@@ -73,7 +73,7 @@ fn handle_command_profiled(
     #[cfg(any(test, feature = "diagnostics"))]
     let (kind, payload_len) = cmd.profile_source();
     #[cfg(any(test, feature = "diagnostics"))]
-    let start = Instant::now();
+    let start = crate::client::thread_cpu::ProfileTimer::start();
     let changed = handle_command(client, dispatcher, cmd, pending);
     #[cfg(any(test, feature = "diagnostics"))]
     client
@@ -593,6 +593,10 @@ fn handle_ui_command(
             sync_runtime_trade_storage_scope(client, dispatcher);
             false
         }
+        UiRuntimeCommand::LogsSubscribe(subscribe) => {
+            client.set_logs_subscription(subscribe);
+            false
+        }
         UiRuntimeCommand::SharedConfigRequest => {
             client.ui_shared_config_request();
             false
@@ -736,7 +740,7 @@ fn handle_strategy_snapshot_batch(
         dispatcher.mark_local_strategies_changed(submitted_at.unix_millis());
     }
     #[cfg(any(test, feature = "diagnostics"))]
-    let state_started = Instant::now();
+    let state_started = crate::client::thread_cpu::ProfileTimer::start();
     let now = Instant::now();
     let edit_outcome = strategies.map_or_else(Default::default, |strategies| {
         dispatcher.stage_local_strategies_owned(
@@ -760,7 +764,7 @@ fn handle_strategy_snapshot_batch(
             strategy_count,
         );
     #[cfg(any(test, feature = "diagnostics"))]
-    let serialize_started = Instant::now();
+    let serialize_started = crate::client::thread_cpu::ProfileTimer::start();
     let reply = if order_changed || folders_changed {
         dispatcher.local_strategy_snapshot_reply()
     } else {
@@ -795,7 +799,7 @@ fn handle_strategy_snapshot_batch(
             reply.data.len(),
         );
     #[cfg(any(test, feature = "diagnostics"))]
-    let send_started = Instant::now();
+    let send_started = crate::client::thread_cpu::ProfileTimer::start();
     client.strat_send_snapshot_payload(
         reply.server_epoch,
         reply.client_max_last_date,

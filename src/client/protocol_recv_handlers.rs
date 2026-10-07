@@ -193,7 +193,7 @@ impl ProtocolCore<'_> {
             return true;
         }
         #[cfg(any(test, feature = "diagnostics"))]
-        let sliced_start = Instant::now();
+        let sliced_start = crate::client::thread_cpu::ProfileTimer::start();
         let (assembled, ack) = self
             .client
             .transport

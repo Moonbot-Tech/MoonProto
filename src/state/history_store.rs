@@ -121,6 +121,8 @@ pub(crate) struct MarketHistoryStore {
     current_candle: Option<Candle5mRow>,
     trade_analytics_dirty: bool,
     last_price_analytics_dirty: bool,
+    last_price_received_since_refresh: bool,
+    last_price_analytics_bucket: Option<i64>,
     short_analytics_bucket: Option<i64>,
     sealed_candle_analytics_dirty: bool,
     current_candle_analytics_dirty: bool,
@@ -195,6 +197,8 @@ impl MarketHistoryStore {
             current_candle: None,
             trade_analytics_dirty: false,
             last_price_analytics_dirty: false,
+            last_price_received_since_refresh: false,
+            last_price_analytics_bucket: None,
             short_analytics_bucket: None,
             sealed_candle_analytics_dirty: false,
             current_candle_analytics_dirty: false,
@@ -495,9 +499,9 @@ impl MarketHistoryStore {
             time: real_time,
         };
         let seq = self.last_prices.as_mut()?.push(row);
-        self.rolling_last_price_ranges
+        self.last_price_analytics_dirty |= self.rolling_last_price_ranges
             .add_price(row.time, row.current);
-        self.last_price_analytics_dirty = true;
+        self.last_price_received_since_refresh = true;
         Some(seq)
     }
 

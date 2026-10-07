@@ -246,9 +246,10 @@ impl RuntimeInitMachine {
                 }
                 RuntimeInitPhase::SendBaseCheck { attempt } => {
                     self.record_attempt(InitStep::BaseCheck);
+                    client.subscriptions.subscription_registry.lock().logs_sub = Some(self.cfg.subscribe_logs);
                     let pending = begin_engine_init_step(
                         client,
-                        crate::commands::engine_request::base_check(),
+                        crate::commands::engine_request::base_check(Some(self.cfg.subscribe_logs)),
                         self.timeouts.base_auth,
                     );
                     self.phase = RuntimeInitPhase::WaitBaseCheck { attempt, pending };
@@ -801,6 +802,40 @@ mod progress_tests {
 
     fn test_client() -> Client {
         Client::new(ClientConfig::new("127.0.0.1", 3000, [0; 16], [0; 16]))
+    }
+
+    #[test]
+    fn base_check_sends_log_preference_and_post_init_reapplies_it() {
+        assert!(InitConfig::default().subscribe_logs);
+        for subscribe in [true, false] {
+            let mut client = test_client();
+            client.authorized = true;
+            let mut dispatcher = crate::events::EventDispatcher::new();
+            let cfg = InitConfig { subscribe_logs: subscribe, ..InitConfig::default() };
+            let mut machine = RuntimeInitMachine::new(ConnectConfig::new(cfg.clone()), &mut dispatcher);
+            assert!(matches!(machine.poll(&mut client, &mut dispatcher), RuntimeInitPoll::Pending { .. }));
+            let (sliced, high, low) = client.take_send_queues_for_test();
+            assert!(high.is_empty() && low.is_empty());
+            assert_eq!(sliced.len(), 1);
+            // Empty market name/list, ParamsSize=5, u32 presence mask=1, bool.
+            assert_eq!(
+                &sliced[0].data[11..],
+                &[1, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0, u8::from(subscribe)],
+            );
+            assert_eq!(client.subscriptions.subscription_registry.lock().logs_sub, Some(subscribe));
+
+            // Fine before domain_ready does not replay subscriptions. The
+            // final Init resync must still configure this replacement session.
+            client.server_token = 2;
+            client.set_domain_ready(true);
+            send_post_init_resync(&mut client, &mut dispatcher, &cfg, &mut InitResult::default());
+            let (_, high, _) = client.take_send_queues_for_test();
+            let logs: Vec<_> = high.iter()
+                .filter(|item| item.cmd == Command::UI.to_byte() && item.data[0] == 49)
+                .collect();
+            assert_eq!(logs.len(), 1);
+            assert_eq!(logs[0].data[11], u8::from(subscribe));
+        }
     }
 
     #[test]

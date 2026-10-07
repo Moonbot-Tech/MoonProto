@@ -66,8 +66,11 @@ pub struct LiveCandleSubscription {
 /// Returned by [`crate::MoonClient::active_subscriptions`]. Because the active library
 /// replays these after reconnect, they reflect the session's maintained intent,
 /// not just the last packet.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveSubscriptions {
+    /// Desired server log subscription, enabled by default. This is local
+    /// intent, not an acknowledgement from the core.
+    pub server_logs: bool,
     /// Market names with an active orderbook subscription, sorted for stable
     /// display.
     pub orderbooks: Vec<String>,
@@ -90,6 +93,21 @@ pub struct ActiveSubscriptions {
     pub report_replication: Option<crate::state::ReportSyncRequest>,
 }
 
+impl Default for ActiveSubscriptions {
+    fn default() -> Self {
+        Self {
+            server_logs: true,
+            orderbooks: Vec::new(),
+            all_trades: None,
+            mm_orders: false,
+            live_candles: Vec::new(),
+            live_candle_timeframes: Vec::new(),
+            live_candles_kind: None,
+            report_replication: None,
+        }
+    }
+}
+
 /// Subscription registry — what the app asked for, what the library must maintain across the session.
 ///
 /// The transport handshake does not send subscriptions itself: the registry is applied only from
@@ -106,6 +124,9 @@ pub(crate) struct SubscriptionRegistry {
     /// the new server-side client-state starts at false, so the active library must
     /// reproduce the last known intent in the init/API layer.
     pub mm_orders_sub: Option<bool>,
+    /// Explicit log preference from Init or the runtime setter; None leaves
+    /// the core's default enabled state unchanged.
+    pub logs_sub: Option<bool>,
     pub candle_subs: HashMap<String, DeepHistoryKind>,
     pub report_sync: Option<crate::state::ReportSyncRequest>,
     pub(crate) report_sync_expected_epoch: Option<i32>,
@@ -139,6 +160,7 @@ impl SubscriptionRegistry {
                     .all(|subscription| subscription.kind == *kind)
             });
         ActiveSubscriptions {
+            server_logs: self.logs_sub.unwrap_or(true),
             orderbooks,
             all_trades: self.all_trades_intent.subscription(),
             mm_orders: self.mm_orders_sub.unwrap_or(false),

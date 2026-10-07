@@ -145,6 +145,7 @@ pub(crate) fn run_init_sequence(
     }
 
     let timeouts = InitTimeouts::new(cfg.step_timeout);
+    client.subscriptions.subscription_registry.lock().logs_sub = Some(cfg.subscribe_logs);
     let mut result = InitResult::default();
     let mut strategy_schema: Option<PendingStrategySchemaStep> = None;
 

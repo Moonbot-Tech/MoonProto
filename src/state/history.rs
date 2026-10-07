@@ -859,23 +859,24 @@ impl Default for RollingPriceRanges {
 }
 
 impl RollingPriceRanges {
-    pub(crate) fn add_price(&mut self, time: MoonTime, price: f32) {
+    pub(crate) fn add_price(&mut self, time: MoonTime, price: f32) -> bool {
         if time == MoonTime::ZERO || price <= 0.0 || !price.is_finite() {
-            return;
+            return false;
         }
         let time_ms = time.unix_millis();
-        add_price_bucket(
+        let short_changed = add_price_bucket(
             &mut self.short_buckets,
             &mut self.newest_short_bucket_id,
             time_ms.div_euclid(ROLLING_PRICE_SHORT_BUCKET_SECONDS * 1_000),
             price,
         );
-        add_price_bucket(
+        let long_changed = add_price_bucket(
             &mut self.long_buckets,
             &mut self.newest_long_bucket_id,
             time_ms.div_euclid(ROLLING_PRICE_LONG_BUCKET_SECONDS * 1_000),
             price,
         );
+        short_changed || long_changed
     }
 
     pub(crate) fn snapshot(&self, now_time: MoonTime, eps: f64) -> DerivedDeltaSnapshot {
@@ -936,9 +937,9 @@ fn add_price_bucket<const N: usize>(
     newest_bucket_id: &mut i64,
     bucket_id: i64,
     price: f32,
-) {
+) -> bool {
     if *newest_bucket_id != i64::MIN && bucket_id <= *newest_bucket_id - N as i64 {
-        return;
+        return false;
     }
     if bucket_id > *newest_bucket_id {
         *newest_bucket_id = bucket_id;
@@ -951,13 +952,15 @@ fn add_price_bucket<const N: usize>(
             min_price: price,
             max_price: price,
         };
+        true
+    } else if price < bucket.min_price {
+        bucket.min_price = price;
+        true
+    } else if price > bucket.max_price {
+        bucket.max_price = price;
+        true
     } else {
-        if price < bucket.min_price {
-            bucket.min_price = price;
-        }
-        if price > bucket.max_price {
-            bucket.max_price = price;
-        }
+        false
     }
 }
 

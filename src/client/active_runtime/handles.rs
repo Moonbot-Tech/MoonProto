@@ -861,6 +861,14 @@ impl MoonSettings<'_> {
         self.client.set_mm_orders_subscription(subscribe)
     }
 
+    /// Enable or disable server log delivery for this session. The latest
+    /// choice is restored after reconnect; other clients are unaffected.
+    /// Returns when queued, not when applied. Already sent logs may still arrive,
+    /// and older cores that do not support this setting continue sending logs.
+    pub fn set_logs_subscription(&self, subscribe: bool) -> Result<(), MoonClientError> {
+        self.client.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::LogsSubscribe(subscribe)))
+    }
+
     /// Set AutoDetect active/passive-mode state in the core.
     ///
     /// Completion is observed through `SettingsEvent::RuntimeStateUpdated` and

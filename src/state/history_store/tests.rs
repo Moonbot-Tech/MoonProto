@@ -1334,6 +1334,122 @@ fn derived_refresh_work_is_bounded_by_baskets_and_candle_limit() {
 }
 
 #[test]
+fn unchanged_price_keeps_history_without_recomputing_ranges() {
+    let mut store = MarketHistoryStore::new(MarketHistorySizing::Compact.resolve(None));
+    let now = MoonTime::from_unix_millis(1_800_000_000_000);
+    for price in [99.0, 101.0, 100.0] {
+        store.append_last_price(price, now, 99.0, 101.0, true, false);
+    }
+    store.refresh_derived_analytics(now);
+    let before = store.derived_snapshot();
+    assert!(before.last_price_deltas.one_minute > 0.0);
+
+    store.append_last_price(100.0, now, 99.0, 101.0, true, false);
+    store.refresh_derived_analytics(now);
+    assert_eq!(store.readers.last_prices.as_ref().unwrap().bounds().len, 4);
+    assert_eq!(store.derived_snapshot(), before);
+    assert_eq!(store.last_refresh_work, derived::DerivedRefreshWork::default());
+
+    // Expiry still updates analytics without a new price or a dirty flag.
+    let expired = MoonTime::from_unix_millis(now.unix_millis() + 3_600_000);
+    store.refresh_derived_analytics(expired);
+    assert_eq!(store.derived_snapshot().last_price_deltas, DerivedDeltaSnapshot::default());
+    assert_eq!(store.last_refresh_work.last_price_buckets_visited, 120);
+}
+
+#[test]
+fn price_ranges_recover_when_clock_returns_to_a_populated_bucket() {
+    let mut store = MarketHistoryStore::new(MarketHistorySizing::Compact.resolve(None));
+    let now = MoonTime::from_unix_millis(1_800_000_000_000);
+    for price in [99.0, 101.0] {
+        store.append_last_price(price, now, 99.0, 101.0, true, false);
+    }
+    store.refresh_derived_analytics(now);
+    let before = store.derived_snapshot();
+    store.refresh_derived_analytics(MoonTime::from_unix_millis(now.unix_millis() - 120_000));
+    assert_eq!(store.derived_snapshot().last_price_deltas, DerivedDeltaSnapshot::default());
+    store.append_last_price(100.0, now, 99.0, 101.0, true, false);
+    store.refresh_derived_analytics(now);
+    assert_eq!(store.derived_snapshot(), before);
+}
+
+#[test]
+fn price_invalidation_matches_forced_refresh_across_bucket_changes_and_reordering() {
+    let config = MarketHistorySizing::Compact.resolve(None);
+    let mut cached = MarketHistoryStore::new(config);
+    let mut forced = MarketHistoryStore::new(config);
+    let start = 1_800_000_000_000i64;
+    for (offset, price) in [
+        (0, 100.0), (1, 90.0), (2, 110.0), (3, 100.0),
+        (5_000, 100.0), (60_000, 100.0), (60_001, 120.0),
+        (1, 80.0), (300_000, 100.0), (0, 70.0),
+        (3_600_000, 100.0), (0, 50.0), (3_605_000, 100.0),
+    ] {
+        let time = MoonTime::from_unix_millis(start + offset);
+        for store in [&mut cached, &mut forced] {
+            store.append_last_price(price, time, 90.0, 110.0, true, false);
+        }
+        forced.last_price_analytics_dirty = true;
+        cached.refresh_derived_analytics(time);
+        forced.refresh_derived_analytics(time);
+        assert_eq!(cached.derived_snapshot(), forced.derived_snapshot(), "offset={offset}");
+    }
+}
+
+#[test]
+fn batched_price_invalidation_matches_previous_refresh_behavior() {
+    let config = MarketHistorySizing::Compact.resolve(None);
+    let mut cached = MarketHistoryStore::new(config);
+    let mut previous = MarketHistoryStore::new(config);
+    let start = 1_800_000_000_000i64;
+    let mut random = 12345u64;
+    let mut now_ms = start;
+    for step in 0..4_000 {
+        random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let advance = [0, 1, 4_999, 5_000, 60_000, 3_600_000, -120_000][(random >> 32) as usize % 7];
+        now_ms += advance;
+        // Zero to three arrivals before maintenance, including reordered points.
+        for index in 0..random % 4 {
+            let offset = [0, -1, -60_000, -3_600_000][(random >> (index + 8)) as usize % 4];
+            let time = MoonTime::from_unix_millis(now_ms + offset);
+            let price = [90.0, 100.0, 100.0, 110.0][(random >> (index + 16)) as usize % 4];
+            assert_eq!(
+                cached.append_last_price(price, time, 90.0, 110.0, true, false),
+                previous.append_last_price(price, time, 90.0, 110.0, true, false),
+            );
+            // Before the optimization, every retained price invalidated analytics.
+            previous.last_price_analytics_dirty = true;
+        }
+        let now = MoonTime::from_unix_millis(now_ms);
+        cached.refresh_derived_analytics(now);
+        previous.refresh_derived_analytics(now);
+        assert_eq!(cached.derived_snapshot(), previous.derived_snapshot(), "step={step}");
+        assert_eq!(
+            cached.readers.last_prices.as_ref().unwrap().bounds(),
+            previous.readers.last_prices.as_ref().unwrap().bounds(),
+        );
+    }
+}
+
+#[test]
+fn unchanged_price_restores_ranges_after_idle_clock_rollback() {
+    let mut store = MarketHistoryStore::new(MarketHistorySizing::Compact.resolve(None));
+    let now = MoonTime::from_unix_millis(1_800_000_000_000);
+    for price in [99.0, 101.0] {
+        store.append_last_price(price, now, 99.0, 101.0, true, false);
+    }
+    store.refresh_derived_analytics(now);
+    let before = store.derived_snapshot();
+    store.refresh_derived_analytics(MoonTime::from_unix_millis(now.unix_millis() - 3_600_000));
+    assert_eq!(store.derived_snapshot().last_price_deltas, DerivedDeltaSnapshot::default());
+    // Maintenance reaches the populated time bucket before a price arrives.
+    store.refresh_derived_analytics(now);
+    store.append_last_price(100.0, now, 99.0, 101.0, true, false);
+    store.refresh_derived_analytics(now);
+    assert_eq!(store.derived_snapshot(), before);
+}
+
+#[test]
 #[ignore = "diagnostic CPU benchmark; run with --ignored --nocapture"]
 fn derived_refresh_full_rings_cpu_benchmark() {
     use std::hint::black_box;

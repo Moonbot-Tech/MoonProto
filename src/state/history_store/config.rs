@@ -108,6 +108,7 @@ pub enum MarketHistorySizing {
     /// Small capture-station histories: 5,000 rows per trade tape and 1,000
     /// rows per price line, liquidation tape, and mini-candle ring.
     /// No retained MM/5m rings or automatic full-candles requests.
+    /// Uses a 15 ms idle network wait instead of the normal 5 ms.
     Compact,
     /// Compact sizing scaled by `75..=200` percent; `100` equals `Compact`.
     CompactBudgetPercent(u16),

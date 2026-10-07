@@ -294,6 +294,22 @@ rows, and `MoonTime` helpers.
 `ServerLogEvent` contains the server log text and typed time helpers. Use
 `log.time()` / `log.unix_millis()` for UI timestamps.
 
+Server logs are enabled by default. To opt out when connecting, set
+`InitConfig { subscribe_logs: false, ..InitConfig::default() }`. To change
+the subscription later:
+
+```rust
+client.settings().set_logs_subscription(false)?;
+client.settings().set_logs_subscription(true)?;
+```
+
+This controls log delivery from the core to this client; it does not disable
+logging on the core or affect other clients. The library restores the latest
+choice after reconnect. `client.active_subscriptions().server_logs` reports
+the maintained intent, not a server acknowledgement. The setter returns when
+queued; startup logs and already sent logs may still arrive. Older cores that
+do not support this setting continue sending logs.
+
 ## Domain Gate
 
 Before Init opens the general domain gate, ordinary mutable trading packets are

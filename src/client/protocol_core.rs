@@ -42,7 +42,7 @@ impl ProtocolCore<'_> {
                 }
             }
             if !drained_any {
-                self.wait_5ms();
+                self.wait_for_data();
             }
         } else {
             #[cfg(any(test, feature = "diagnostics"))]
@@ -59,7 +59,7 @@ impl ProtocolCore<'_> {
                     protocol_metrics.record_writer_thread_cycles(cpu_cycles);
                 }
             }
-            thread::sleep(Duration::from_millis(DEFAULT_SLEEP_MS));
+            thread::sleep(self.idle_wait_duration());
         }
 
         !self.client.shutdown_requested()

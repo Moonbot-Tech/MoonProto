@@ -186,7 +186,8 @@ pub(super) fn run_base_check_once(
     result: &mut InitResult,
     timeout: Duration,
 ) -> Result<CriticalInitStatus, InitError> {
-    let req = crate::commands::engine_request::base_check();
+    let logs = client.subscriptions.subscription_registry.lock().logs_sub;
+    let req = crate::commands::engine_request::base_check(logs);
     match client.request_engine_response_for_init(dispatcher, &req, timeout) {
         Ok(resp) if resp.success => {
             result.base_check_ok = true;
@@ -506,6 +507,9 @@ pub(crate) fn send_post_init_resync(
         client.strat_schema_request();
     }
     client.ui_settings_request();
+    // A hard session may have been recreated after BaseCheck while Init was
+    // still running, before reconnect replay was enabled.
+    client.set_logs_subscription(cfg.subscribe_logs);
     let registry_mm_orders = client
         .subscriptions
         .subscription_registry

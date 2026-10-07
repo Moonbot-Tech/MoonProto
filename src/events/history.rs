@@ -6,7 +6,7 @@ use crate::client::metrics::{ProfilePhase, ProtocolMetrics};
 use crate::state::markets::CandleDeltaBaseline;
 use crate::time::MILLIS_PER_HOUR;
 #[cfg(any(test, feature = "diagnostics"))]
-use std::time::{Duration, Instant};
+use crate::client::thread_cpu::ProfileElapsed;
 
 impl EventDispatcher {
     pub(crate) fn set_market_history_sizing(&mut self, sizing: MarketHistorySizing) {
@@ -63,7 +63,7 @@ impl EventDispatcher {
         #[cfg(any(test, feature = "diagnostics"))] metrics: Option<&ProtocolMetrics>,
     ) -> Option<crate::state::CandlesSnapshotApplySummary> {
         #[cfg(any(test, feature = "diagnostics"))]
-        let sync_start = Instant::now();
+        let sync_start = crate::client::thread_cpu::ProfileTimer::start();
         self.sync_market_history_storage();
         #[cfg(any(test, feature = "diagnostics"))]
         record_candles_snapshot_profile(
@@ -79,7 +79,7 @@ impl EventDispatcher {
         let received_candles = markets.iter().map(|market| market.candles_5m.len()).sum();
         let now_time = crate::MoonTime::now();
         #[cfg(any(test, feature = "diagnostics"))]
-        let build_rows_start = Instant::now();
+        let build_rows_start = crate::client::thread_cpu::ProfileTimer::start();
         let mut rows = Vec::new();
         let mut baselines = Vec::new();
         rows.try_reserve(markets.len()).ok()?;
@@ -106,7 +106,7 @@ impl EventDispatcher {
             retained_candles,
         );
         #[cfg(any(test, feature = "diagnostics"))]
-        let baselines_start = Instant::now();
+        let baselines_start = crate::client::thread_cpu::ProfileTimer::start();
         self.markets.apply_candles_delta_baselines_precomputed(
             rows.iter()
                 .zip(baselines.iter().copied())
@@ -129,7 +129,7 @@ impl EventDispatcher {
             retained_candles,
         };
         #[cfg(any(test, feature = "diagnostics"))]
-        let queue_start = Instant::now();
+        let queue_start = crate::client::thread_cpu::ProfileTimer::start();
         let queued = rows.is_empty() || handle.apply_candles_snapshot(now_time, rows);
         #[cfg(any(test, feature = "diagnostics"))]
         record_candles_snapshot_profile(
@@ -379,7 +379,7 @@ fn avg_or_zero(sum: f64, count: usize) -> f64 {
 fn record_candles_snapshot_profile(
     metrics: Option<&ProtocolMetrics>,
     phase: ProfilePhase,
-    duration: Duration,
+    duration: ProfileElapsed,
     payload_len: usize,
 ) {
     if let Some(metrics) = metrics {

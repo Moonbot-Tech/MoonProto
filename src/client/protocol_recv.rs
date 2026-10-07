@@ -53,12 +53,19 @@ impl ProtocolCore<'_> {
             // VPN/tunnel egress), breaking legitimate users behind non-trivial
             // networks. Off-path junk is rejected by the MAC; an address filter
             // would not stop a spoofing flooder anyway.
+            #[cfg(any(test, feature = "diagnostics"))]
+            let socket_profile = crate::client::thread_cpu::ProfileTimer::start();
             let recv_result = {
                 let Some(sock) = self.client.transport.socket.as_ref() else {
                     break;
                 };
                 sock.recv_from(&mut buf)
             };
+
+            #[cfg(any(test, feature = "diagnostics"))]
+            self.client.metrics.protocol_metrics.record_profile_phase_labeled(
+                ProfilePhase::SocketRecv, socket_profile.elapsed(), u8::MAX, u8::MAX, 0,
+            );
 
             match recv_result {
                 Ok((n, _)) => {
@@ -122,10 +129,16 @@ impl ProtocolCore<'_> {
         ) else {
             return;
         };
+        #[cfg(any(test, feature = "diagnostics"))]
+        let rearm_profile = crate::client::thread_cpu::ProfileTimer::start();
         if let Err(e) = poller.modify(sock, PollEvent::readable(1)) {
             log::warn!(target: "moonproto::reader", "UDP poller rearm failed: {e}");
             self.client.transport.recv_poller = None;
         }
+        #[cfg(any(test, feature = "diagnostics"))]
+        self.client.metrics.protocol_metrics.record_profile_phase_labeled(
+            ProfilePhase::SocketRearm, rearm_profile.elapsed(), u8::MAX, u8::MAX, 0,
+        );
     }
 
     pub(crate) fn process_datagram(
@@ -149,7 +162,7 @@ impl ProtocolCore<'_> {
         let mut metric_payload_len = datagram.len();
 
         #[cfg(any(test, feature = "diagnostics"))]
-        let unpack_start = Instant::now();
+        let unpack_start = crate::client::thread_cpu::ProfileTimer::start();
         let unpacked = crate::transport::transport_unpack_with_mac(
             &self.client.transport.mac_ctx,
             datagram,
@@ -327,7 +340,7 @@ impl ProtocolCore<'_> {
         protocol_wait: &mut Duration,
     ) -> bool {
         #[cfg(any(test, feature = "diagnostics"))]
-        let route_start = Instant::now();
+        let route_start = crate::client::thread_cpu::ProfileTimer::start();
         #[cfg(any(test, feature = "diagnostics"))]
         let route_wait_before = *protocol_wait;
         let result = self.route_command_inner(
@@ -347,7 +360,7 @@ impl ProtocolCore<'_> {
                 ProfilePhase::RecvRoute,
                 route_start
                     .elapsed()
-                    .saturating_sub(protocol_wait.saturating_sub(route_wait_before)),
+                    .excluding_wait(protocol_wait.saturating_sub(route_wait_before)),
                 raw_cmd,
                 metric_api_method(Command::from_byte(raw_cmd), payload),
                 payload.len(),
@@ -512,7 +525,7 @@ impl ProtocolCore<'_> {
             return;
         }
         #[cfg(any(test, feature = "diagnostics"))]
-        let decode_start = Instant::now();
+        let decode_start = crate::client::thread_cpu::ProfileTimer::start();
         let decoded = Client::decode_command_payload_shared(
             &mut self.client.recv.data_read_state,
             raw_cmd,
@@ -563,7 +576,7 @@ impl ProtocolCore<'_> {
             return;
         }
         #[cfg(any(test, feature = "diagnostics"))]
-        let decode_start = Instant::now();
+        let decode_start = crate::client::thread_cpu::ProfileTimer::start();
         let Some((cmd, payload)) = Client::decode_command_payload_owned(
             &mut self.client.recv.data_read_state,
             raw_cmd,
@@ -764,7 +777,7 @@ impl ProtocolCore<'_> {
         #[cfg(any(test, feature = "diagnostics"))]
         let dispatch_payload_len = payload.len();
         #[cfg(any(test, feature = "diagnostics"))]
-        let dispatch_start = Instant::now();
+        let dispatch_start = crate::client::thread_cpu::ProfileTimer::start();
         self.client_new_data(
             cmd,
             payload,

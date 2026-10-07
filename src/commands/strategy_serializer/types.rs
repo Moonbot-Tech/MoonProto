@@ -181,10 +181,12 @@ pub struct StrategySnapshot {
 /// This is intentionally a dense vector, not a `HashMap`: each strategy usually
 /// has only a small visible field set, and the wire stream is already ordered.
 /// A dense list avoids per-field hashing while keeping ergonomic operations
-/// (`get`, `insert`, `iter`).
+/// (`get`, `insert`, `iter`). Decoded strategies share their name dictionary;
+/// entries keep indexes so receiving a field does not increment a name refcount.
 #[derive(Debug, Clone, Default)]
 pub struct StrategyFields {
-    entries: Vec<(Arc<str>, FieldValue)>,
+    names: Arc<Vec<Arc<str>>>,
+    entries: Vec<(usize, FieldValue)>,
 }
 
 impl PartialEq for StrategyFields {
@@ -203,8 +205,13 @@ impl StrategyFields {
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
+            names: Arc::default(),
             entries: Vec::with_capacity(capacity),
         }
+    }
+
+    pub(super) fn with_dictionary(names: Arc<Vec<Arc<str>>>, capacity: usize) -> Self {
+        Self { names, entries: Vec::with_capacity(capacity) }
     }
 
     pub fn insert<K>(&mut self, key: K, value: FieldValue) -> Option<FieldValue>
@@ -215,26 +222,32 @@ impl StrategyFields {
         if let Some((_, existing)) = self
             .entries
             .iter_mut()
-            .find(|(name, _)| name.as_ref() == key.as_ref())
+            .find(|(index, _)| self.names[*index].as_ref() == key.as_ref())
         {
             return Some(std::mem::replace(existing, value));
         }
-        self.entries.push((key, value));
+        let index = self.names.iter().position(|name| name.as_ref() == key.as_ref())
+            .unwrap_or_else(|| {
+                let names = Arc::make_mut(&mut self.names);
+                names.push(key);
+                names.len() - 1
+            });
+        self.entries.push((index, value));
         None
     }
 
     #[inline]
-    pub(super) fn push_deserialized_field(&mut self, key: Arc<str>, value: FieldValue) {
+    pub(super) fn push_deserialized_field(&mut self, index: usize, value: FieldValue) {
         // Delphi `TStrategySerializer` writes each RTTI field at most once per
         // strategy. The hot reader path can append directly; public `insert`
         // keeps replacement semantics for user-built snapshots.
-        self.entries.push((key, value));
+        self.entries.push((index, value));
     }
 
     pub fn get(&self, key: &str) -> Option<&FieldValue> {
         self.entries
             .iter()
-            .find(|(name, _)| name.as_ref() == key)
+            .find(|(index, _)| self.names[*index].as_ref() == key)
             .map(|(_, value)| value)
     }
 
@@ -264,7 +277,7 @@ impl StrategyFields {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&Arc<str>, &FieldValue)> {
-        self.entries.iter().map(|(name, value)| (name, value))
+        self.entries.iter().map(|(index, value)| (&self.names[*index], value))
     }
 
     pub fn len(&self) -> usize {

@@ -102,10 +102,10 @@ fn parse_strategy_batch_plain_with_schema_field_types(
     let mut pos = 0usize;
     let names = read_dict(data, &mut pos)?;
     let paths = read_dict_arc(data, &mut pos)?;
-    let field_names = names
+    let field_names = Arc::new(names
         .iter()
         .map(|name| Arc::<str>::from(name.as_str()))
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>());
     let reader_fields =
         schema_field_types.map(|field_types| build_reader_fields(&names, field_types));
     let strat_count = read_u16(data, &mut pos)? as usize;
@@ -126,7 +126,7 @@ fn parse_strategy_batch_plain_with_schema_field_types(
     })
 }
 
-fn parse_strategy_batch_plain_for_each_with_schema_field_types<F>(
+pub(crate) fn parse_strategy_batch_plain_for_each_with_schema_field_types<F>(
     data: &[u8],
     schema_field_types: Option<&HashMap<String, u8>>,
     should_skip_old: &mut impl FnMut(u64, i32, u64) -> bool,
@@ -136,7 +136,7 @@ where
     F: FnMut(StrategySnapshot),
 {
     let mut pos = 0usize;
-    let field_names = read_dict_arc(data, &mut pos)?;
+    let field_names = Arc::new(read_dict_arc(data, &mut pos)?);
     let paths = read_dict_arc(data, &mut pos)?;
     let reader_fields =
         schema_field_types.map(|field_types| build_reader_fields_arc(&field_names, field_types));
@@ -260,7 +260,7 @@ fn read_strategy_header(
 fn read_strategy(
     data: &[u8],
     pos: &mut usize,
-    field_names: &[Arc<str>],
+    field_names: &Arc<Vec<Arc<str>>>,
     paths: &[Arc<str>],
     reader_fields: Option<&[Option<u8>]>,
 ) -> Option<StrategySnapshot> {
@@ -274,10 +274,10 @@ fn read_strategy_fields(
     pos: &mut usize,
     header: StrategyHeader,
     field_count: usize,
-    field_names: &[Arc<str>],
+    field_names: &Arc<Vec<Arc<str>>>,
     reader_fields: Option<&[Option<u8>]>,
 ) -> Option<StrategySnapshot> {
-    let mut fields = StrategyFields::with_capacity(field_count);
+    let mut fields = StrategyFields::with_dictionary(Arc::clone(field_names), field_count);
 
     for _ in 0..field_count {
         let field_idx = read_u16(data, pos)? as usize;
@@ -305,8 +305,8 @@ fn read_strategy_fields(
         };
 
         if let Some(v) = value {
-            if let Some(name) = field_names.get(field_idx) {
-                fields.push_deserialized_field(Arc::clone(name), v);
+            if field_idx < field_names.len() {
+                fields.push_deserialized_field(field_idx, v);
             }
             // Otherwise the field is of a known type, but the name is not in the dictionary.
             // Delphi behavior: ReaderProps[idx] = nil → SkipField; at this point we have
@@ -396,14 +396,40 @@ pub(crate) fn try_read_field_value(
     }
 }
 
+#[inline]
 fn read_zero_tail<const N: usize>(data: &[u8], pos: &mut usize) -> [u8; N] {
+    let available = data.len().saturating_sub(*pos);
+    if available >= N {
+        let out = data[*pos..*pos + N].try_into().unwrap();
+        *pos += N;
+        return out;
+    }
     let mut out = [0u8; N];
-    let available = data.len().saturating_sub(*pos).min(N);
     if available > 0 {
         out[..available].copy_from_slice(&data[*pos..*pos + available]);
         *pos += available;
     }
     out
+}
+
+#[test]
+fn fixed_width_reads_preserve_bytes_and_position_for_every_short_tail() {
+    fn check<const N: usize>() {
+        let bytes = [0x80, 0xff, 0, 1, 0x55, 0xaa, 0x7f, 2, 3, 4, 5, 6];
+        for len in 0..=bytes.len() {
+            let data = &bytes[..len];
+            for start in 0..=len + 2 {
+                let expected = std::array::from_fn(|i| data.get(start + i).copied().unwrap_or(0));
+                let mut pos = start;
+                assert_eq!(read_zero_tail::<N>(data, &mut pos), expected);
+                assert_eq!(pos, if start > len { start } else { (start + N).min(len) });
+            }
+        }
+    }
+    check::<1>();
+    check::<2>();
+    check::<4>();
+    check::<8>();
 }
 
 fn skip_field_by_type_id(data: &[u8], pos: &mut usize, type_id: u8) -> Option<()> {

@@ -10,6 +10,119 @@ use std::io;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 
+#[test]
+fn expired_deadline_still_delivers_readiness_and_notify_does_not_latch() -> io::Result<()> {
+    let peer = UdpSocket::bind("127.0.0.1:0")?;
+    let socket = UdpSocket::bind("127.0.0.1:0")?;
+    socket.set_nonblocking(true)?;
+    let poller = Poller::new()?;
+    let mut events = Events::new();
+    // Safety: the socket is removed before either object is dropped.
+    unsafe { poller.add(&socket, Event::readable(1))?; }
+    for byte in 0..20 {
+        peer.send_to(&[byte], socket.local_addr()?)?;
+        // A past deadline is a nonblocking poll, not permission to skip I/O.
+        // IOCP may first process an internal completion, so allow another poll.
+        let deadline = Instant::now() - Duration::from_secs(1);
+        let limit = Instant::now() + Duration::from_secs(1);
+        loop {
+            events.clear();
+            poller.wait_deadline(&mut events, deadline)?;
+            if events.iter().any(|event| event.key == 1 && event.readable) {
+                break;
+            }
+            assert!(Instant::now() < limit, "expired deadline lost queued UDP readiness");
+            std::thread::yield_now();
+        }
+        assert_eq!(drain_udp(&socket)?, vec![vec![byte]]);
+        poller.modify(&socket, Event::readable(1))?;
+        poller.notify()?;
+        events.clear();
+        poller.wait_deadline(&mut events, deadline)?;
+        assert!(events.is_empty());
+        let start = Instant::now();
+        poller.wait(&mut events, Some(Duration::from_millis(2)))?;
+        assert!(events.is_empty());
+        assert!(start.elapsed() >= Duration::from_millis(2), "consumed notify kept the poller awake");
+    }
+    poller.delete(&socket)?;
+    Ok(())
+}
+
+#[test]
+fn notifications_survive_udp_readiness_with_single_event_capacity() -> io::Result<()> {
+    let peer = UdpSocket::bind("127.0.0.1:0")?;
+    let socket = UdpSocket::bind("127.0.0.1:0")?;
+    socket.set_nonblocking(true)?;
+    let poller = Poller::new()?;
+    let mut events = Events::with_capacity(std::num::NonZeroUsize::new(1).unwrap());
+    // Safety: registration is removed before the socket is dropped.
+    unsafe { poller.add(&socket, Event::readable(1))?; }
+
+    for value in 0..100u8 {
+        // Both readiness sources compete for a single event slot. Repeated
+        // notifications may coalesce, but must not stick after being consumed.
+        peer.send_to(&[value], socket.local_addr()?)?;
+        poller.notify()?;
+        poller.notify()?;
+        wait_for_readable(&poller, &mut events, 1, Duration::from_secs(1))?;
+        assert_eq!(drain_udp(&socket)?, vec![vec![value]]);
+        poller.modify(&socket, Event::readable(1))?;
+        // A notification may still occupy the ready list after the UDP event.
+        events.clear();
+        poller.wait(&mut events, Some(Duration::ZERO))?;
+        assert!(events.is_empty());
+        events.clear();
+        let start = Instant::now();
+        poller.wait(&mut events, Some(Duration::from_millis(1)))?;
+        assert!(events.is_empty());
+        assert!(start.elapsed() >= Duration::from_millis(1));
+    }
+    poller.delete(&socket)
+}
+
+#[test]
+fn empty_timeouts_preserve_later_readiness_and_notifications() -> io::Result<()> {
+    let peer = UdpSocket::bind("127.0.0.1:0")?;
+    let socket = UdpSocket::bind("127.0.0.1:0")?;
+    socket.set_nonblocking(true)?;
+    let poller = std::sync::Arc::new(Poller::new()?);
+    let mut events = Events::new();
+    // Safety: registration is removed before the socket is dropped.
+    unsafe { poller.add(&socket, Event::readable(1))?; }
+    for value in 0..10u8 {
+        let timeout = Duration::from_millis(if value % 2 == 0 { 5 } else { 15 });
+        events.clear();
+        let start = Instant::now();
+        poller.wait(&mut events, Some(timeout))?;
+        assert!(events.is_empty());
+        assert!(start.elapsed() >= timeout);
+
+        peer.send_to(&[value], socket.local_addr()?)?;
+        wait_for_readable(&poller, &mut events, 1, Duration::from_secs(1))?;
+        assert_eq!(drain_udp(&socket)?, vec![vec![value]]);
+        poller.modify(&socket, Event::readable(1))?;
+
+        let notifier = std::sync::Arc::clone(&poller);
+        let wake = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            notifier.notify().unwrap();
+        });
+        events.clear();
+        let start = Instant::now();
+        poller.wait(&mut events, Some(Duration::from_secs(2)))?;
+        assert!(start.elapsed() < Duration::from_secs(1));
+        wake.join().unwrap();
+        assert!(events.is_empty());
+    }
+    // An already posted notification must also wake the following wait.
+    poller.notify()?;
+    poller.wait(&mut events, Some(Duration::from_secs(2)))?;
+    assert!(events.is_empty());
+    poller.delete(&socket)?;
+    Ok(())
+}
+
 fn wait_for_readable(
     poller: &Poller,
     events: &mut Events,

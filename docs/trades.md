@@ -591,6 +591,11 @@ clamped to **75..=200%** and scale all these capacities proportionally. Unlike
 `Auto`, Compact does not depend on host RAM or exchange. The normal terminal
 profile and its 75..=800% control are unchanged.
 
+Compact uses a 15 ms idle network wait instead of the normal 5 ms to reduce
+idle wakeups on capture servers. Incoming UDP packets wake the wait early;
+commands queued during an idle wait and periodic checks may wait up to the
+longer interval before the runtime services them.
+
 Compact has no retained MM or 5-minute candle rings and **does not automatically
 request the all-market candles snapshot**, including when the selection changes.
 Use `TradesOnly`; MM data is not needed for this capture workflow. Explicit

@@ -64,6 +64,22 @@ fn install_send_session(client: &mut Client) {
 }
 
 #[test]
+fn idle_wait_changes_only_for_compact_history_profiles() {
+    use crate::state::MarketHistorySizing;
+    for (sizing, millis) in [
+        (MarketHistorySizing::Auto, 5),
+        (MarketHistorySizing::auto_with_budget_percent(75), 5),
+        (MarketHistorySizing::auto_with_budget_percent(800), 5),
+        (MarketHistorySizing::Compact, 15),
+        (MarketHistorySizing::compact_with_budget_percent(75), 15),
+        (MarketHistorySizing::compact_with_budget_percent(200), 15),
+    ] {
+        let mut client = Client::new(dummy_cfg().with_market_history(sizing));
+        assert_eq!(ProtocolCore { client: &mut client }.idle_wait_duration(), Duration::from_millis(millis));
+    }
+}
+
+#[test]
 fn send_phase_runs_with_ready_send_queue() {
     let mut client = Client::new(dummy_cfg());
     client.testing_set_domain_ready(true);
@@ -111,7 +127,7 @@ fn pre_init_raw_client_send_cmd_is_gated_but_init_api_is_allowed() {
     assert!(high.is_empty());
     assert!(low.is_empty());
 
-    let base_check = crate::commands::engine_request::base_check();
+    let base_check = crate::commands::engine_request::base_check(None);
     client.send_api_request(&base_check);
     let (sliced, high, low) = client.take_send_queues_for_test();
     assert_eq!(sliced.len(), 1);

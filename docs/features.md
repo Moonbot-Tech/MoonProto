@@ -102,7 +102,7 @@ See [strategies](strats.md), [UI and settings](ui.md), and [events](events.md).
 | Core diagnostic problems | Confirmed detector findings, including memory, network, and exchange restrictions. | `snapshot.settings().problems`, `SettingsEvent::ProblemConfirmed` / `ProblemsUpdated`, `client.settings().clear_problems()` / `test_problem(...)`; see [problems](problems.md). |
 | News and tags | Retained/live news JSON with same-ID translation updates plus the latest complete tags catalog. | `Event::News` and `snapshot.news()`. |
 | Core Telegram reader | Enable the reader, phone/QR login, codes, 2FA, registration, proxy and logout on the core's shared service. | `client.telegram()`, `SettingsEvent::TelegramUpdated`; see [Telegram](telegram.md). |
-| Server logs | Authenticated core log lines for terminal logs. | `Event::ServerLog`. |
+| Server logs | Authenticated core log lines, enabled by default; per-client opt-out survives reconnect. | `Event::ServerLog`, `InitConfig::subscribe_logs`, `settings().set_logs_subscription(...)`. |
 | Remote administration | Ask the core to run its release/named update flow, switch DEX/Spot selection, or shut down when no active take/sell order exists. | Use the typed methods on `client.settings()`; core shutdown is a one-shot request without an acknowledgement. |
 
 See [balances](balances.md), [Engine API](engine_api.md), [news](news.md), and

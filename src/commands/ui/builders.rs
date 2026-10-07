@@ -143,6 +143,14 @@ pub(crate) fn build_mm_orders_subscribe(uid: u64, subscribe: bool) -> Vec<u8> {
     out
 }
 
+/// CmdId=49 `TLogSubscribeCommand`.
+pub(crate) fn build_logs_subscribe(uid: u64, subscribe: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(12);
+    write_header(&mut out, 49, uid);
+    out.push(u8::from(subscribe));
+    out
+}
+
 /// CmdId=6 `TUpdateVersionCommand`.
 ///
 /// Low-level wire builder. Prefer [`crate::Client::ui_update_version`] when a

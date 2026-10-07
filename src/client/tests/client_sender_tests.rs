@@ -417,7 +417,7 @@ fn sender_retry_left_clamps_zero() {
 #[test]
 fn sender_try_send_api_request_uses_sliced_api_defaults() {
     let (sender, _, send_q, _, _, _) = make_sender();
-    let payload = crate::commands::engine_request::base_check();
+    let payload = crate::commands::engine_request::base_check(None);
 
     sender
         .try_send_api_request(payload.clone())
@@ -469,7 +469,7 @@ fn pre_init_raw_sender_api_allows_only_init_methods() {
     assert_eq!(err, SubscribeError::DomainNotReady);
     assert!(take_send_items(&send_q).is_empty());
 
-    let base_check = crate::commands::engine_request::base_check();
+    let base_check = crate::commands::engine_request::base_check(None);
     sender
         .try_send_api_request(base_check.clone())
         .expect("BaseCheck is an Init primitive and must pass the pre-Init gate");

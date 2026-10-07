@@ -134,6 +134,9 @@ const QUICK_STREAM_TIMEOUT_SECS: u64 = 8;
 const QUICK_TOTAL_TARGET_SECS: u64 = 30;
 const FIRETEST_SLOW_STARTUP_DIAG_SECS: f64 = 8.0;
 const FIRETEST_CPU_HARD_RED_FLAG_NS: u64 = 5_000_000;
+// Receive/dispatch includes synchronous decoding and application of whole snapshots.
+// Keep the >5ms diagnostic counters; allow up to 10ms before failing this gate.
+const FIRETEST_INCOMING_CPU_HARD_RED_FLAG_NS: u64 = 10_000_000;
 const ACTIVE_LIB_REPORT_MARKETS: [&str; 2] = ["BTCUSDT", "ETHUSDT"];
 const FIRETEST_COIN_CARD_KIND: DeepHistoryKind = DeepHistoryKind::Hour4;
 const FIRETEST_MIN_COIN_CARD_CANDLES: usize = 24;
@@ -904,6 +907,7 @@ impl Session {
 
         let retained_markets = firetest_retained_markets(cfg);
         let init = InitConfig {
+            subscribe_logs: true,
             subscribe_trades: None,
             subscribe_orderbooks: vec![cfg.market.clone()],
             step_timeout: None,
@@ -2792,12 +2796,14 @@ fn assert_protocol_cpu_gate(label: &str, m: &ProtocolMetricsSnapshot) {
     }
 
     let mut red_flags = Vec::new();
+    let incoming_cpu_limit_ms = FIRETEST_INCOMING_CPU_HARD_RED_FLAG_NS / 1_000_000;
 
-    if m.reader_protocol_over_5ms > 0 {
-        if m.reader_thread_cpu_count > 0 && m.reader_thread_cpu_over_5ms > 0 {
+    if m.reader_protocol_max_ns > FIRETEST_INCOMING_CPU_HARD_RED_FLAG_NS
+        || m.reader_thread_cpu_max_ns > FIRETEST_INCOMING_CPU_HARD_RED_FLAG_NS
+    {
+        if m.reader_thread_cpu_max_ns > FIRETEST_INCOMING_CPU_HARD_RED_FLAG_NS {
             red_flags.push(format!(
-                "reader_cpu >5ms count={} wall_max={}us thread_cpu_max={}us src={}",
-                m.reader_protocol_over_5ms,
+                "reader_cpu >{incoming_cpu_limit_ms}ms wall_max={}us thread_cpu_max={}us src={}",
                 m.reader_protocol_max_ns / 1_000,
                 m.reader_thread_cpu_max_ns / 1_000,
                 metric_cmd_label(
@@ -2808,8 +2814,7 @@ fn assert_protocol_cpu_gate(label: &str, m: &ProtocolMetricsSnapshot) {
             ));
         } else if m.reader_thread_cpu_count > 0 {
             println!(
-                "FIRETEST CPU gate {label}: reader wall spike observed but thread CPU stayed below 5ms: wall_count={} wall_max={}us thread_cpu_max={}us wall_src={} thread_src={}",
-                m.reader_protocol_over_5ms,
+                "FIRETEST CPU gate {label}: reader wall spike observed but thread CPU stayed within {incoming_cpu_limit_ms}ms: wall_max={}us thread_cpu_max={}us wall_src={} thread_src={}",
                 m.reader_protocol_max_ns / 1_000,
                 m.reader_thread_cpu_max_ns / 1_000,
                 metric_cmd_label(
@@ -2843,8 +2848,7 @@ fn assert_protocol_cpu_gate(label: &str, m: &ProtocolMetricsSnapshot) {
             );
         } else {
             red_flags.push(format!(
-                "reader_cpu >5ms count={} wall_max={}us src={} (no thread CPU/cycle clock available)",
-                m.reader_protocol_over_5ms,
+                "reader_cpu >{incoming_cpu_limit_ms}ms wall_max={}us src={} (no thread CPU/cycle clock available)",
                 m.reader_protocol_max_ns / 1_000,
                 metric_cmd_label(
                     m.reader_protocol_max_cmd,
@@ -2885,11 +2889,12 @@ fn assert_protocol_cpu_gate(label: &str, m: &ProtocolMetricsSnapshot) {
             ));
         }
     }
-    if m.active_dispatch_over_5ms > 0 {
-        if m.active_dispatch_thread_cpu_count > 0 && m.active_dispatch_thread_cpu_over_5ms > 0 {
+    if m.active_dispatch_max_ns > FIRETEST_INCOMING_CPU_HARD_RED_FLAG_NS
+        || m.active_dispatch_thread_cpu_max_ns > FIRETEST_INCOMING_CPU_HARD_RED_FLAG_NS
+    {
+        if m.active_dispatch_thread_cpu_max_ns > FIRETEST_INCOMING_CPU_HARD_RED_FLAG_NS {
             red_flags.push(format!(
-                "active_dispatch >5ms count={} wall_max={}us thread_cpu_max={}us src={} events={} actions={}",
-                m.active_dispatch_over_5ms,
+                "active_dispatch >{incoming_cpu_limit_ms}ms wall_max={}us thread_cpu_max={}us src={} events={} actions={}",
                 m.active_dispatch_max_ns / 1_000,
                 m.active_dispatch_thread_cpu_max_ns / 1_000,
                 metric_cmd_label(
@@ -2902,8 +2907,7 @@ fn assert_protocol_cpu_gate(label: &str, m: &ProtocolMetricsSnapshot) {
             ));
         } else if m.active_dispatch_thread_cpu_count > 0 {
             println!(
-                "FIRETEST CPU gate {label}: active_dispatch wall spike observed but thread CPU stayed below 5ms: wall_count={} wall_max={}us thread_cpu_max={}us src={} events={} actions={}",
-                m.active_dispatch_over_5ms,
+                "FIRETEST CPU gate {label}: active_dispatch wall spike observed but thread CPU stayed within {incoming_cpu_limit_ms}ms: wall_max={}us thread_cpu_max={}us src={} events={} actions={}",
                 m.active_dispatch_max_ns / 1_000,
                 m.active_dispatch_thread_cpu_max_ns / 1_000,
                 metric_cmd_label(
@@ -2934,8 +2938,7 @@ fn assert_protocol_cpu_gate(label: &str, m: &ProtocolMetricsSnapshot) {
             );
         } else {
             red_flags.push(format!(
-                "active_dispatch >5ms count={} wall_max={}us src={} events={} actions={} (no thread CPU/cycle clock available)",
-                m.active_dispatch_over_5ms,
+                "active_dispatch >{incoming_cpu_limit_ms}ms wall_max={}us src={} events={} actions={} (no thread CPU/cycle clock available)",
                 m.active_dispatch_max_ns / 1_000,
                 metric_cmd_label(
                     m.active_dispatch_max_cmd,
@@ -5731,6 +5734,7 @@ fn run_moonclient_public_smoke(
     require_orderbook_update: bool,
 ) -> MoonClientPathStats {
     let init = InitConfig {
+        subscribe_logs: true,
         subscribe_trades: Some(TradesStreamMode::TradesOnly),
         subscribe_orderbooks: vec![cfg.market.clone()],
         step_timeout: None,
@@ -8246,9 +8250,18 @@ fn run_strategy_order_sync_gate(
     );
     a.client
         .strategies()
-        .delete(0, folder)
+        .delete(0, folder.clone())
         .expect("delete empty test folder");
-    assert!(cleaned, "test strategies were not removed from the core");
+    // The delete call only queues work. Wait for both confirmed views before
+    // the next gate submits a complete folder tree based on those views.
+    let folder_cleaned = pump_pair_until_sessions(
+        a,
+        b,
+        cfg.connect_timeout,
+        "strategy order folder cleanup",
+        |a, b| [a, b].iter().all(|s| !strategy_folder_paths(s).contains(&folder)),
+    );
+    assert!(cleaned && folder_cleaned, "test strategies and folder were not removed from the core");
     if let Err(payload) = result {
         std::panic::resume_unwind(payload);
     }

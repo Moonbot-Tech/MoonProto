@@ -64,7 +64,7 @@ pub(super) fn poll_server_info(
         return false;
     }
 
-    let payload = crate::commands::engine_request::base_check();
+    let payload = crate::commands::engine_request::base_check(None);
     pending.server_info = Some(PendingServerInfo {
         peer_app_token: client.peer_app_token,
         request_uid: engine_request_uid(&payload).unwrap(),

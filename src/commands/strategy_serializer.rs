@@ -4,8 +4,8 @@
 //!
 //! It parses RTTI-driven binary strategy snapshots from `TStratSnapshot.data`.
 //! The Delphi server iterates public `TStrategy` fields through RTTI. Rust does
-//! not have that RTTI, so it stores fields as `StrategyFields`: a compact list
-//! of `(FieldName, FieldValue)` pairs with name lookup.
+//! not have that RTTI, so `StrategyFields` keeps a shared name dictionary and
+//! a compact list of indexed values, exposed through name-based accessors.
 //!
 //! Typed writing and Delphi `ReadField` TypeID checks use the live
 //! `TStratSchema` fetched during Init, not a stale hardcoded copy of
@@ -98,6 +98,8 @@ pub(crate) use self::reader::{
 };
 #[cfg(test)]
 pub(crate) use self::reader::{parse_strategy_batch_plain, parse_strategy_batch_plain_with_schema};
+#[cfg(test)]
+pub(crate) use self::reader::parse_strategy_batch_plain_for_each_with_schema_field_types;
 pub use self::types::field_names;
 pub(crate) use self::types::strategy_last_date_to_moon_time;
 pub use self::types::{

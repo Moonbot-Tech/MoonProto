@@ -408,7 +408,8 @@ impl ClientConfig {
     /// first use. `auto_with_budget_percent(75..=800)` is the normal user
     /// control; `100` is the production baseline.
     /// `Compact` is for capture stations: small rings, no automatic full-candle
-    /// downloads. `compact_with_budget_percent(75..=200)` scales that profile.
+    /// downloads, and a 15 ms idle network wait instead of the normal 5 ms.
+    /// Incoming packets wake the wait early. `compact_with_budget_percent(75..=200)` scales that profile.
     pub fn with_market_history(mut self, market_history: impl Into<MarketHistorySizing>) -> Self {
         self.market_history = market_history.into();
         self

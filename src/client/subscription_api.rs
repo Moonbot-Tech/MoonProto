@@ -210,6 +210,16 @@ impl Client {
         self.send_typed_domain_cmd(raw, Command::UI);
     }
 
+    pub(crate) fn set_logs_subscription(&mut self, subscribe: bool) {
+        self.subscriptions.subscription_registry.lock().logs_sub = Some(subscribe);
+        self.send_logs_subscribe_cmd(subscribe);
+    }
+
+    pub(crate) fn send_logs_subscribe_cmd(&self, subscribe: bool) {
+        let raw = crate::commands::ui::build_logs_subscribe(rand::random(), subscribe);
+        self.send_typed_domain_cmd(raw, Command::UI);
+    }
+
     pub(crate) fn domain_restore_needs_indexes(&self) -> bool {
         self.subscriptions.domain_restore.fetch_indexes
             || self.subscriptions.subscription_summary.trades_subscribed()
@@ -272,11 +282,12 @@ impl Client {
         delay_orderbooks: bool,
         delay_trades: bool,
     ) {
-        let (all_trades_intent, mm_orders_sub, orderbook_subs, candle_subs) = {
+        let (all_trades_intent, mm_orders_sub, logs_sub, orderbook_subs, candle_subs) = {
             let registry = self.subscriptions.subscription_registry.lock();
             (
                 registry.all_trades_intent,
                 registry.mm_orders_sub,
+                registry.logs_sub,
                 registry.orderbook_subs.iter().cloned().collect::<Vec<_>>(),
                 registry
                     .candle_subs
@@ -286,6 +297,9 @@ impl Client {
             )
         };
 
+        if let Some(subscribe) = logs_sub {
+            self.send_logs_subscribe_cmd(subscribe);
+        }
         match all_trades_intent {
             AllTradesIntent::Subscribed(sub) if !delay_trades => {
                 let want_mm = sub.want_mm;

@@ -4,7 +4,87 @@
 //! includes scheduler preemption. FireTest uses this helper beside wall timings
 //! to tell "the code spent CPU" from "the OS paused this thread".
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// OS-visible roles let an external process sampler attribute worker CPU.
+pub(crate) fn set_diagnostic_thread_name(name: &str) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadDescription};
+        let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            SetThreadDescription(GetCurrentThread(), name.as_ptr());
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut short_name = [0u8; 16];
+        let len = name.len().min(15);
+        short_name[..len].copy_from_slice(&name.as_bytes()[..len]);
+        unsafe { libc::pthread_setname_np(libc::pthread_self(), short_name.as_ptr().cast()); }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = name;
+}
+
+/// Paired wall/CPU sample. Nested phases are inclusive and must not be summed.
+pub(crate) struct ProfileTimer {
+    wall: Instant,
+    cpu: Option<ThreadCpuTimer>,
+}
+
+pub(crate) struct ProfileElapsed {
+    pub(crate) wall: Duration,
+    pub(crate) cpu: ThreadCpuElapsed,
+}
+
+impl ProfileElapsed {
+    pub(crate) fn excluding_wait(mut self, wait: Duration) -> Self {
+        self.wall = self.wall.saturating_sub(wait);
+        self
+    }
+}
+
+impl ProfileTimer {
+    pub(crate) fn start() -> Self {
+        // Randomized 1/64 sampling avoids a pair of OS calls for every tiny
+        // phase on every idle tick. A fixed periodic sample would alias phases.
+        // Distinct thread seeds keep identical clients from sampling the same
+        // positions in a broadcast stream.
+        static NEXT_SEED: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0x91a5_2f47_d638_ce0b);
+        thread_local! {
+            static SAMPLE: std::cell::Cell<u64> = std::cell::Cell::new(
+                NEXT_SEED.fetch_add(0x9e37_79b9_7f4a_7c15, std::sync::atomic::Ordering::Relaxed));
+        }
+        let sample = SAMPLE.with(|state| {
+            let next = state
+                .get()
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1);
+            state.set(next);
+            next >> 58 == 0
+        });
+        Self {
+            wall: Instant::now(),
+            cpu: sample.then(ThreadCpuTimer::start),
+        }
+    }
+
+    pub(crate) fn elapsed(self) -> ProfileElapsed {
+        let cpu = self
+            .cpu
+            .map(ThreadCpuTimer::elapsed)
+            .unwrap_or(ThreadCpuElapsed {
+                time: None,
+                cycles: None,
+            });
+        ProfileElapsed {
+            wall: self.wall.elapsed(),
+            cpu,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ThreadCpuTimer {
