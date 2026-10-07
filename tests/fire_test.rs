@@ -8047,7 +8047,7 @@ fn run_strategy_folder_sync_gate(
             }
         ));
 
-        let mut c = Session::connect("Folders-cold", cfg, keys, None);
+        let mut c = connect_strategy_observer("Folders-cold", cfg, keys, a, b);
         assert!(pump_pair_until_sessions(
             a,
             &mut c,
@@ -8077,7 +8077,7 @@ fn run_strategy_folder_sync_gate(
                 })
             }
         ));
-        let mut c = Session::connect("Folders-after-delete", cfg, keys, None);
+        let mut c = connect_strategy_observer("Folders-after-delete", cfg, keys, a, b);
         assert!(pump_pair_until_sessions(
             a,
             &mut c,
@@ -8138,6 +8138,28 @@ fn strategy_order(session: &Session) -> Vec<u64> {
         .strategy_snapshots()
         .map(|s| s.strategy_id)
         .collect()
+}
+
+fn connect_strategy_observer(
+    label: &str,
+    cfg: &FireConfig,
+    keys: ImportedKeys,
+    a: &mut Session,
+    b: &mut Session,
+) -> Session {
+    let before = [a.snapshot().strategy_snapshot_events, b.snapshot().strategy_snapshot_events];
+    let observer = Session::connect(label, cfg, keys, None);
+    // An empty client's startup sync broadcasts existing strategies to all peers.
+    // Its own Ready/order view does not prove that A/B received that broadcast.
+    // Drain it before later edits/deletes, which could otherwise be overtaken.
+    assert!(pump_pair_until(
+        a,
+        b,
+        cfg.connect_timeout,
+        "observer startup strategy broadcast",
+        |a, b| a.strategy_snapshot_events > before[0] && b.strategy_snapshot_events > before[1],
+    ));
+    observer
 }
 
 fn run_strategy_order_sync_gate(
@@ -8220,7 +8242,7 @@ fn run_strategy_order_sync_gate(
         let expected = strategy_order(a);
         // Unknown order dates must be repaired by canonical Full even without content deltas.
         for label in ["Order-cold", "Order-reconnected"] {
-            let mut c = Session::connect(label, cfg, keys, None);
+            let mut c = connect_strategy_observer(label, cfg, keys, a, b);
             assert!(pump_pair_until_sessions(
                 a,
                 &mut c,
