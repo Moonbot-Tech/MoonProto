@@ -446,11 +446,10 @@ semantics; they do not describe individual partial fills.
 
 **Clock:** all report date columns, including `BuySetDateMs`, use the core's report clock, with no timezone
 normalization during replication. They encode the core's local date/time
-relative to the Unix epoch, not necessarily UTC. Reuse the same core-timezone
-conversion as for the existing report dates, exactly once. With a UTC-configured
-core, the millisecond values can be used directly as Unix UTC milliseconds.
-Otherwise, convert using the core's timezone before constructing a `MoonTime`
-or placing a marker on a UTC chart; do not use the terminal's timezone instead.
+relative to the Unix epoch, not necessarily UTC. Use
+[`client.server_clock()`](time.md#core-clock-and-report-dates) to convert them
+exactly once to UTC `MoonTime`. It uses Ping and works with server logs disabled;
+do not infer the offset from log text or the terminal's timezone.
 
 Resolve each optional column when the schema arrives and cache its index:
 
@@ -459,11 +458,27 @@ let buy_date_ms_index = schema
     .field_by_name("BuyDateMs")
     .filter(|field| field.kind == moonproto::ReportFieldKind::Integer)
     .map(|field| field.index);
+let buy_date_index = schema
+    .field_by_name("BuyDate")
+    .filter(|field| field.kind == moonproto::ReportFieldKind::Integer)
+    .map(|field| field.index);
+
+// Once per page/batch. None until the first usable Ping; keep raw rows and
+// defer UTC-dependent work until a clock is available.
+let clock = client.server_clock();
 
 // Per row: the value is still in the core's report clock.
 let buy_date_ms = buy_date_ms_index.and_then(|index| match row.value(index) {
     Some(moonproto::ReportValue::Integer(value)) => Some(*value),
     _ => None,
+});
+let buy_date = buy_date_index.and_then(|index| match row.value(index) {
+    Some(moonproto::ReportValue::Integer(value)) => Some(*value),
+    _ => None,
+});
+let buy_utc = clock.and_then(|clock| match buy_date_ms {
+    Some(millis) => clock.report_millis_to_utc(millis),
+    None => buy_date.and_then(|seconds| clock.report_seconds_to_utc(seconds)),
 });
 ```
 
@@ -475,6 +490,10 @@ millisecond value; otherwise use the corresponding seconds value as a
 second-resolution fallback, not as a millisecond-accurate execution time.
 Handle each column independently, and never interpret `CloseDateMs=0` as an
 epoch-date marker.
+
+The current offset includes clock error and delivery latency and does not
+reconstruct historical daylight-saving/timezone changes. Store raw replicated
+dates unchanged; the helpers produce a UTC view without rewriting report rows.
 
 ## Reconnect And Checkpoint
 

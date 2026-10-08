@@ -197,6 +197,8 @@ impl HelloWaitState {
 
 #[derive(Clone)]
 pub(crate) struct ClientSharedState {
+    /// Public clock estimate in milliseconds; MIN means no usable Ping sample.
+    pub(crate) server_time_delta_ms: Arc<std::sync::atomic::AtomicI64>,
     pub(crate) subscription_registry: Arc<Mutex<SubscriptionRegistry>>,
     pub(crate) subscription_summary: Arc<SubscriptionRegistrySummary>,
     pub(crate) subscription_trade_storage_intent:
@@ -212,6 +214,7 @@ pub(crate) struct ClientSharedState {
 impl ClientSharedState {
     pub(crate) fn new() -> Self {
         Self {
+            server_time_delta_ms: Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN)),
             subscription_registry: Arc::new(Mutex::new(SubscriptionRegistry::default())),
             subscription_summary: Arc::new(SubscriptionRegistrySummary::default()),
             subscription_trade_storage_intent: Arc::new(parking_lot::RwLock::new(None)),
@@ -450,6 +453,8 @@ pub(crate) struct Client {
     /// off-by-50-1000ms timestamps in orders (the last Client overwrites the
     /// delta of all the others).
     server_time_delta_handle: Arc<std::sync::atomic::AtomicU64>,
+    /// Public read model; kept separate from the protocol's day-count value.
+    server_time_delta_ms: Arc<std::sync::atomic::AtomicI64>,
     // `mac_ctx`, `transport_mode_state`, and `send_buf` now live on
     // [`Self::transport`]; see [`ClientTransport`].
 }
@@ -547,6 +552,7 @@ impl Client {
     }
 
     pub(crate) fn new_with_shared(cfg: ClientConfig, shared: ClientSharedState) -> Self {
+        shared.server_time_delta_ms.store(i64::MIN, Ordering::Relaxed);
         // Delphi queues are ordinary grow-only TList/TDictionary structures with no
         // fixed capacity cap. Keep Rust queues unbounded too: accepted UDP packets
         // and user commands must not disappear because a local channel filled up.
@@ -671,6 +677,7 @@ impl Client {
             ),
             _ntp_process_guard: ntp_process_guard,
             server_time_delta_handle: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            server_time_delta_ms: shared.server_time_delta_ms,
             identity: SessionIdentity::new(),
             refresh_clocks: RefreshClocks::new(Arc::clone(&shared.server_update_sent)),
         }

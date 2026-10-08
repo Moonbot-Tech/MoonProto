@@ -132,6 +132,11 @@ impl Client {
             std::sync::atomic::Ordering::Relaxed,
         );
         set_server_time_delta_global(server_time_delta);
+        self.server_time_delta_ms.store(
+            crate::ServerClock::from_delta_days(server_time_delta)
+                .map_or(i64::MIN, |clock| clock.server_time_delta_ms()),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.net_lag_ping = ((corrected_now_dt - server_time) * 86400000.0).abs() as i64;
 
         // SendPing(var APing): mutate the same Ping struct, then append our ACK half.

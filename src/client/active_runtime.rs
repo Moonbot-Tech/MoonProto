@@ -42,6 +42,7 @@ pub const DIAG_MARKET_HISTORY_FILL_SPAN_MS: i64 = 3_600_000;
 /// alive, and exposes read snapshots plus user-intent commands. Applications do
 /// not choose a protocol-loop duration.
 pub struct MoonClient {
+    server_time_delta_ms: Arc<std::sync::atomic::AtomicI64>,
     tx: mpsc::Sender<RuntimeCommand>,
     shutdown: Arc<AtomicBool>,
     event_queue: Option<Arc<MoonEventQueue>>,
@@ -177,6 +178,7 @@ impl MoonClient {
         let subscription_registry = Arc::clone(&shared_state.subscription_registry);
 
         Ok(Self {
+            server_time_delta_ms: Arc::clone(&shared_state.server_time_delta_ms),
             tx,
             shutdown,
             event_queue,
@@ -217,6 +219,28 @@ impl MoonClient {
     /// latest published snapshot. `None` before the client authenticates.
     pub fn auth_info(&self) -> Option<crate::commands::engine_api::AuthCheckResponse> {
         self.snapshot().and_then(|s| s.auth_info().cloned())
+    }
+
+    /// Latest per-client core clock minus OS UTC clock, in milliseconds.
+    ///
+    /// `None` before the first usable Ping. Zero is a valid measured offset.
+    /// Independent of log subscription and snapshot publication. See
+    /// [`Self::server_clock`] for ready-to-use report timestamp conversion.
+    pub fn server_time_delta_ms(&self) -> Option<i64> {
+        let delta = self.server_time_delta_ms.load(Ordering::Relaxed);
+        (delta != i64::MIN).then_some(delta)
+    }
+
+    /// Capture this client's latest clock estimate for converting report dates.
+    ///
+    /// Refreshed on each received Ping (normally every 0.3--1 seconds), even
+    /// with `InitConfig::subscribe_logs = false`. No snapshot clone or lock.
+    /// During a reconnect the last sample remains available until another Ping;
+    /// a rebuilt runtime owner resets it to `None`, as does runtime termination.
+    /// This uses the client's OS clock without the transport NTP correction.
+    /// Current offsets do not reconstruct historical timezone/DST changes.
+    pub fn server_clock(&self) -> Option<crate::ServerClock> {
+        self.server_time_delta_ms().map(|delta_ms| crate::ServerClock { delta_ms })
     }
 
     /// Check whether legacy route-bound actions have the exchange/base fields
@@ -1133,6 +1157,7 @@ fn supervise_runtime_loop(
     }
 
     *snapshot.write() = None;
+    shared_state.server_time_delta_ms.store(i64::MIN, Ordering::Relaxed);
     if runtime_shutdown.load(Ordering::Relaxed) {
         startup_status.write().state = StartupState::Disconnected;
     }
@@ -1176,9 +1201,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn public_clock_follows_each_clients_ping_without_logs_or_snapshots() {
+        fn pair() -> (Client, MoonClient, ClientSharedState) {
+            let shared = ClientSharedState::new();
+            let mut owner = Client::new_with_shared(
+                ClientConfig::new("127.0.0.1", 9, [0; 16], [0; 16]).without_ntp(), shared.clone(),
+            );
+            owner.set_logs_subscription(false);
+            let (tx, _) = mpsc::channel();
+            let public = MoonClient {
+                server_time_delta_ms: Arc::clone(&shared.server_time_delta_ms),
+                tx,
+                shutdown: Default::default(),
+                event_queue: None,
+                snapshot: Default::default(),
+                startup_status: Default::default(),
+                err_emu_diagnostics: Default::default(),
+                protocol_metrics: Default::default(),
+                subscription_registry: Arc::clone(&shared.subscription_registry),
+                join: Default::default(),
+                lifecycle_join: Default::default(),
+            };
+            (owner, public, shared)
+        }
+        fn ping(owner: &mut Client, delta_ms: i64) {
+            let raw_now = 46_000.0;
+            let mut payload = vec![0; control::PING_SIZE];
+            let initial = raw_now + delta_ms as f64 / crate::time::MILLISECONDS_PER_DAY;
+            payload[8..16].copy_from_slice(&initial.to_le_bytes());
+            // Transport NTP correction must not change the report clock.
+            assert!(owner.apply_ping_and_build_response(&payload, raw_now, raw_now + 1.0, 0, 0).is_some());
+        }
+
+        let (mut owner_a, a, shared_a) = pair();
+        let (mut owner_b, b, _) = pair();
+        assert_eq!(a.server_time_delta_ms(), None);
+        assert_eq!(a.server_clock(), None);
+        assert!(!a.active_subscriptions().server_logs);
+        ping(&mut owner_a, 10_800_125);
+        ping(&mut owner_b, -18_000_250);
+        assert_eq!(a.server_time_delta_ms(), Some(10_800_125));
+        assert_eq!(b.server_time_delta_ms(), Some(-18_000_250));
+        assert!(a.snapshot().is_none());
+        let page_clock = a.server_clock().unwrap();
+        let raw_report_ms = 1_800_010_800_248;
+        assert_eq!(page_clock.report_millis_to_utc(raw_report_ms).unwrap().unix_millis(), 1_800_000_000_123);
+
+        // A clock jump is visible on the next Ping, without re-initialization.
+        ping(&mut owner_a, 14_400_125);
+        assert_eq!(a.server_time_delta_ms(), Some(14_400_125));
+        assert_eq!(page_clock.server_time_delta_ms(), 10_800_125);
+        assert_eq!(b.server_time_delta_ms(), Some(-18_000_250));
+        ping(&mut owner_a, 0);
+        assert_eq!(a.server_time_delta_ms(), Some(0));
+        assert!(owner_a.apply_ping_and_build_response(&[], 0.0, 0.0, 0, 0).is_none());
+        assert_eq!(a.server_time_delta_ms(), Some(0));
+
+        // The public handle must follow a rebuilt owner, not its dropped source.
+        let cfg = owner_a.cfg.clone();
+        drop(owner_a);
+        let mut rebuilt = Client::new_with_shared(cfg, shared_a);
+        assert_eq!(a.server_clock(), None);
+        ping(&mut rebuilt, -3_600_000);
+        assert_eq!(a.server_time_delta_ms(), Some(-3_600_000));
+    }
+
+    #[test]
     fn chart_public_api_can_follow_subscription_before_any_snapshot() {
         let (tx, rx) = mpsc::channel();
         let client = MoonClient {
+            server_time_delta_ms: Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN)),
             tx,
             shutdown: Default::default(),
             event_queue: None,
@@ -1201,6 +1293,7 @@ mod tests {
     fn strategy_public_api_applies_to_orders_only_when_explicitly_requested() {
         let (tx, rx) = mpsc::channel();
         let client = MoonClient {
+            server_time_delta_ms: Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN)),
             tx,
             shutdown: Default::default(),
             event_queue: None,

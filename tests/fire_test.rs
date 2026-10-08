@@ -5734,7 +5734,7 @@ fn run_moonclient_public_smoke(
     require_orderbook_update: bool,
 ) -> MoonClientPathStats {
     let init = InitConfig {
-        subscribe_logs: true,
+        subscribe_logs: false,
         subscribe_trades: Some(TradesStreamMode::TradesOnly),
         subscribe_orderbooks: vec![cfg.market.clone()],
         step_timeout: None,
@@ -5776,6 +5776,20 @@ fn run_moonclient_public_smoke(
         std::thread::sleep(PUMP_SLICE);
     }
     record_public_client_tick(&client, &mut stats, cfg, start);
+
+    let clock_deadline = Instant::now() + cfg.wait;
+    while client.server_clock().is_none() && Instant::now() < clock_deadline {
+        record_public_client_tick(&client, &mut stats, cfg, start);
+        std::thread::sleep(PUMP_SLICE);
+    }
+    let clock = client.server_clock().expect("public clock must arrive without a log subscription");
+    assert!(!client.active_subscriptions().server_logs);
+    assert_eq!(clock.report_millis_to_utc(0), None);
+    let raw_report_ms = 1_800_000_000_123i64;
+    assert_eq!(clock.report_millis_to_utc(raw_report_ms).unwrap().unix_millis(),
+        raw_report_ms - clock.server_time_delta_ms());
+    println!("OK: FIRETEST {label}: report clock available with logs disabled, delta_ms={}",
+        clock.server_time_delta_ms());
 
     let runtime_deadline = Instant::now() + cfg.wait;
     while stats.runtime_state.is_none() && Instant::now() < runtime_deadline {

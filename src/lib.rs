@@ -247,5 +247,5 @@ pub use state::{
 #[cfg(any(test, feature = "diagnostics"))]
 #[doc(hidden)]
 pub use time::DelphiTime;
-pub use time::MoonTime;
+pub use time::{MoonTime, ServerClock};
 pub use transport::MoonKey;

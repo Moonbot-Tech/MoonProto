@@ -110,6 +110,53 @@ fn finite_f64_to_i64(value: f64) -> Option<i64> {
         .then_some(value as i64)
 }
 
+/// One client's latest core-clock estimate, captured from a received Ping.
+///
+/// Obtain it with [`crate::MoonClient::server_clock`]. Copy one value per report
+/// page to convert all rows with the same offset. Logs are not required.
+/// This is a clock difference, including clock error and delivery latency,
+/// not a timezone identifier or a historical daylight-saving-time rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerClock {
+    pub(crate) delta_ms: i64,
+}
+
+impl ServerClock {
+    /// Core local clock minus the client's OS UTC clock, rounded to milliseconds.
+    /// A positive value means that the core clock is ahead; subtract it to get UTC.
+    pub fn server_time_delta_ms(self) -> i64 {
+        self.delta_ms
+    }
+
+    /// Convert a raw report millisecond date to UTC.
+    ///
+    /// Use for `BuyDateMs`, `SellSetDateMs`, `CloseDateMs`, and `BuySetDateMs`.
+    /// Zero means no date and returns `None`; arithmetic overflow also returns
+    /// `None`. Do not apply this to live order, trade, or candle timestamps,
+    /// which the library has already normalized.
+    pub fn report_millis_to_utc(self, millis: i64) -> Option<MoonTime> {
+        if millis == 0 {
+            return None;
+        }
+        millis.checked_sub(self.delta_ms).map(MoonTime::from_unix_millis)
+    }
+
+    /// Convert a raw whole-second report date (`BuyDate`, `SellSetDate`,
+    /// `CloseDate`) to UTC. Use only when the corresponding millisecond field
+    /// is absent. Zero and arithmetic overflow return `None`.
+    pub fn report_seconds_to_utc(self, seconds: i64) -> Option<MoonTime> {
+        self.report_millis_to_utc(seconds.checked_mul(MILLIS_PER_SECOND)?)
+    }
+
+    pub(crate) fn from_delta_days(days: f64) -> Option<Self> {
+        let millis = (days * MILLISECONDS_PER_DAY).round();
+        // MIN is reserved for the shared "no Ping yet" value; MAX rounds up
+        // to 2^63 as f64, so neither floating-point boundary is representable.
+        (millis.is_finite() && millis > i64::MIN as f64 && millis < i64::MAX as f64)
+            .then_some(Self { delta_ms: millis as i64 })
+    }
+}
+
 /// MoonBot wire time value: days since `1899-12-30`.
 ///
 /// This type exists only for protocol diagnostics and tests. Normal builds keep
@@ -208,6 +255,34 @@ impl From<DelphiTime> for f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn report_clock_converts_both_units_and_preserves_missing_dates() {
+        let utc_ms = 1_800_000_000_123i64;
+        for delta_ms in [0, 10_800_000, -18_000_000, 20_700_250] {
+            let clock = ServerClock { delta_ms };
+            assert_eq!(clock.report_millis_to_utc(utc_ms + delta_ms), Some(MoonTime::from_unix_millis(utc_ms)));
+            let seconds = 1_800_000_000;
+            assert_eq!(clock.report_seconds_to_utc(seconds), Some(MoonTime::from_unix_millis(seconds * 1000 - delta_ms)));
+            assert_eq!(clock.report_millis_to_utc(0), None);
+            assert_eq!(clock.report_seconds_to_utc(0), None);
+            assert_eq!(clock.report_seconds_to_utc(i64::MAX), None);
+            assert_eq!(clock.report_seconds_to_utc(i64::MIN), None);
+        }
+        assert_eq!(ServerClock { delta_ms: 1 }.report_millis_to_utc(i64::MIN), None);
+        assert_eq!(ServerClock { delta_ms: -1 }.report_millis_to_utc(i64::MAX), None);
+    }
+
+    #[test]
+    fn server_clock_rounds_milliseconds_and_rejects_unrepresentable_samples() {
+        for millis in [0.0, 0.6, -0.6, 10_800_000.4, -18_000_000.6] {
+            let clock = ServerClock::from_delta_days(millis / MILLISECONDS_PER_DAY).unwrap();
+            assert_eq!(clock.server_time_delta_ms(), millis.round() as i64);
+        }
+        for days in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX, -f64::MAX] {
+            assert_eq!(ServerClock::from_delta_days(days), None);
+        }
+    }
 
     #[test]
     fn unix_epoch_roundtrip() {

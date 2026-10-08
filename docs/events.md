@@ -310,6 +310,10 @@ the maintained intent, not a server acknowledgement. The setter returns when
 queued; startup logs and already sent logs may still arrive. Older cores that
 do not support this setting continue sending logs.
 
+Disabling logs does not disable clock synchronization. Use
+[`client.server_clock()`](time.md#core-clock-and-report-dates) for report-to-UTC
+conversion; Ping updates it independently of log delivery.
+
 ## Domain Gate
 
 Before Init opens the general domain gate, ordinary mutable trading packets are
