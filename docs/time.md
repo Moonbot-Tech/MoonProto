@@ -9,7 +9,8 @@ the wire. That is converted at packet boundaries. Application code should not
 store or compare raw wire-day floats.
 
 Report replication preserves the core database's local-clock date integers.
-Convert them with `ServerClock` as described below before using them on UTC axes.
+Choose timezone-only conversion or full clock-difference conversion below before
+using them on UTC axes.
 
 ```rust
 use moonproto::MoonTime;
@@ -33,7 +34,47 @@ let trace_ms = chart_point.time().unix_millis();
 Diagnostic builds keep hidden wire-time helpers for byte-level protocol tests.
 They are not the normal terminal API.
 
+## Core UTC Offset
+
+`client.server_utc_offset_minutes()` estimates the core's current timezone offset
+from UTC in signed minutes, rounded to the nearest 15 minutes. Positive means
+east of UTC: `Some(120)` means UTC+02:00, `Some(-300)` means UTC-05:00, and
+`Some(345)` means UTC+05:45. `None` means no usable Ping yet; `Some(0)` is UTC.
+
+The getter rounds the existing core-local-minus-station-UTC clock difference:
+
+```text
+offset_minutes = round(server_time_delta_ms / 900000) * 15
+UTC timestamp = core-local timestamp - offset_minutes * 60000  // milliseconds
+UTC timestamp = core-local timestamp - offset_minutes * 60     // seconds
+```
+
+For example, core time 14:00:05 against station UTC 12:00:01 gives +120 minutes.
+Converting core-local 14:00:05 gives 12:00:05 UTC: the four-second clock error is
+deliberately not corrected. Preserve missing dates and zero date sentinels.
+
+Read the offset once per batch. The latest Ping is sufficient, including repeated
+equal values: do not wait for the number to change, count distinct Pings, or run
+an agreement window. Polling may compare the rounded offset with the previously
+applied offset to update stored conversion state only when the offset changes.
+This works without server logs, candle requests, or a diagnostics feature.
+
+Each client's existing clock source updates on every usable Ping; a timezone
+change is reflected by the next received Ping. The last value survives ordinary
+reconnect and clears when the runtime owner is rebuilt or stops. No additional
+sampling state or protocol fields are involved.
+
+This is an estimate, not an explicitly reported timezone ID. It assumes offsets
+on a 15-minute grid and combined clock error/network delay below 7.5 minutes;
+halfway values round away from zero. It does not correct clock accuracy or
+reconstruct historical timezone/DST changes. The station's local timezone is
+irrelevant: the source uses its OS UTC clock.
+
 ## Core Clock And Report Dates
+
+Use `server_utc_offset_minutes()` above when only the timezone should change.
+The existing APIs below retain their full clock-difference semantics, including
+clock error and packet delivery latency; they do not apply 15-minute rounding.
 
 `client.server_time_delta_ms()` returns the latest core-local-minus-client-UTC
 clock difference, rounded to signed milliseconds. `None` means no usable Ping

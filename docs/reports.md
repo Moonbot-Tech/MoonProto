@@ -446,7 +446,12 @@ semantics; they do not describe individual partial fills.
 
 **Clock:** all report date columns, including `BuySetDateMs`, use the core's report clock, with no timezone
 normalization during replication. They encode the core's local date/time
-relative to the Unix epoch, not necessarily UTC. Use
+relative to the Unix epoch, not necessarily UTC. For timezone-only conversion,
+read [`client.server_utc_offset_minutes()`](time.md#core-utc-offset) once per batch
+and subtract that many minutes. It rounds to 15 minutes and does not correct
+clock error. Preserve missing/zero dates and do not convert normalized values twice.
+
+For full clock-difference correction instead, use
 [`client.server_clock()`](time.md#core-clock-and-report-dates) to convert them
 exactly once to UTC `MoonTime`. It uses Ping and works with server logs disabled;
 do not infer the offset from log text or the terminal's timezone.

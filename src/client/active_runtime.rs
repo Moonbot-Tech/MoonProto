@@ -224,11 +224,28 @@ impl MoonClient {
     /// Latest per-client core clock minus OS UTC clock, in milliseconds.
     ///
     /// `None` before the first usable Ping. Zero is a valid measured offset.
-    /// Independent of log subscription and snapshot publication. See
-    /// [`Self::server_clock`] for ready-to-use report timestamp conversion.
+    /// Independent of log subscription and snapshot publication. Use
+    /// [`Self::server_utc_offset_minutes`] for a rounded timezone estimate, or
+    /// [`Self::server_clock`] for conversion using the full clock difference.
     pub fn server_time_delta_ms(&self) -> Option<i64> {
         let delta = self.server_time_delta_ms.load(Ordering::Relaxed);
         (delta != i64::MIN).then_some(delta)
+    }
+
+    /// Estimated core UTC offset in minutes, rounded to the nearest 15 minutes.
+    ///
+    /// Positive means east of UTC: `Some(120)` means UTC+02:00. Subtract the
+    /// offset from core-local timestamps to convert their timezone to UTC.
+    /// Uses the latest [`Self::server_time_delta_ms`]; `None` means no usable
+    /// Ping yet, while `Some(0)` is a valid UTC offset. Equal readings remain
+    /// usable: no sample counter or repeated-Ping confirmation is needed.
+    ///
+    /// This estimates the timezone, not clock accuracy or historical DST rules.
+    /// It assumes quarter-hour zones and combined clock error/delivery delay
+    /// below 7.5 minutes. Halfway values round away from zero. A new Ping updates
+    /// the estimate; reconnect/reset behavior matches [`Self::server_clock`].
+    pub fn server_utc_offset_minutes(&self) -> Option<i64> {
+        self.server_time_delta_ms().map(|delta_ms| (delta_ms as f64 / 900_000.0).round() as i64 * 15)
     }
 
     /// Capture this client's latest clock estimate for converting report dates.
@@ -238,6 +255,8 @@ impl MoonClient {
     /// During a reconnect the last sample remains available until another Ping;
     /// a rebuilt runtime owner resets it to `None`, as does runtime termination.
     /// This uses the client's OS clock without the transport NTP correction.
+    /// It includes clock error and delivery latency; for timezone-only conversion
+    /// use [`Self::server_utc_offset_minutes`] instead.
     /// Current offsets do not reconstruct historical timezone/DST changes.
     pub fn server_clock(&self) -> Option<crate::ServerClock> {
         self.server_time_delta_ms().map(|delta_ms| crate::ServerClock { delta_ms })
@@ -1237,11 +1256,14 @@ mod tests {
         let (mut owner_b, b, _) = pair();
         assert_eq!(a.server_time_delta_ms(), None);
         assert_eq!(a.server_clock(), None);
+        assert_eq!(a.server_utc_offset_minutes(), None);
         assert!(!a.active_subscriptions().server_logs);
         ping(&mut owner_a, 10_800_125);
         ping(&mut owner_b, -18_000_250);
         assert_eq!(a.server_time_delta_ms(), Some(10_800_125));
         assert_eq!(b.server_time_delta_ms(), Some(-18_000_250));
+        assert_eq!(a.server_utc_offset_minutes(), Some(180));
+        assert_eq!(b.server_utc_offset_minutes(), Some(-300));
         assert!(a.snapshot().is_none());
         let page_clock = a.server_clock().unwrap();
         let raw_report_ms = 1_800_010_800_248;
@@ -1250,20 +1272,40 @@ mod tests {
         // A clock jump is visible on the next Ping, without re-initialization.
         ping(&mut owner_a, 14_400_125);
         assert_eq!(a.server_time_delta_ms(), Some(14_400_125));
+        assert_eq!(a.server_utc_offset_minutes(), Some(240));
         assert_eq!(page_clock.server_time_delta_ms(), 10_800_125);
         assert_eq!(b.server_time_delta_ms(), Some(-18_000_250));
         ping(&mut owner_a, 0);
         assert_eq!(a.server_time_delta_ms(), Some(0));
+        assert_eq!(a.server_utc_offset_minutes(), Some(0));
         assert!(owner_a.apply_ping_and_build_response(&[], 0.0, 0.0, 0, 0).is_none());
         assert_eq!(a.server_time_delta_ms(), Some(0));
+
+        for (delta_ms, minutes) in [
+            (7_204_000, 120), (-7_204_000, -120),
+            (19_800_040, 330), (20_699_960, 345), (-12_600_040, -210),
+            (449_999, 0), (-449_999, 0),
+            (450_000, 15), (-450_000, -15), (450_001, 15), (-450_001, -15),
+        ] {
+            // Fresh equal Pings and repeated reads all give the same usable offset.
+            for _ in 0..2 {
+                ping(&mut owner_a, delta_ms);
+                assert_eq!(a.server_utc_offset_minutes(), Some(minutes), "delta={delta_ms}");
+                assert_eq!(a.server_utc_offset_minutes(), Some(minutes));
+                assert_eq!(a.server_time_delta_ms(), Some(delta_ms));
+            }
+        }
+        assert_eq!(b.server_utc_offset_minutes(), Some(-300));
 
         // The public handle must follow a rebuilt owner, not its dropped source.
         let cfg = owner_a.cfg.clone();
         drop(owner_a);
         let mut rebuilt = Client::new_with_shared(cfg, shared_a);
         assert_eq!(a.server_clock(), None);
+        assert_eq!(a.server_utc_offset_minutes(), None);
         ping(&mut rebuilt, -3_600_000);
         assert_eq!(a.server_time_delta_ms(), Some(-3_600_000));
+        assert_eq!(a.server_utc_offset_minutes(), Some(-60));
     }
 
     #[test]

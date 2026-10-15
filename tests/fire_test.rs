@@ -5783,6 +5783,8 @@ fn run_moonclient_public_smoke(
         std::thread::sleep(PUMP_SLICE);
     }
     let clock = client.server_clock().expect("public clock must arrive without a log subscription");
+    let utc_offset = client.server_utc_offset_minutes().expect("UTC offset must arrive without logs");
+    assert_eq!(utc_offset % 15, 0);
     assert!(!client.active_subscriptions().server_logs);
     assert_eq!(clock.report_millis_to_utc(0), None);
     let raw_report_ms = 1_800_000_000_123i64;

@@ -29,6 +29,7 @@ fn report_clock_is_public_without_diagnostics_and_waits_for_ping() {
         ConnectConfig::new(InitConfig { subscribe_logs: false, ..InitConfig::default() }),
     ).unwrap();
     assert_eq!(client.server_time_delta_ms(), None);
+    assert_eq!(client.server_utc_offset_minutes(), None);
     let clock: Option<moonproto::ServerClock> = client.server_clock();
     assert_eq!(clock, None);
     // Type-check the public conversion surface in a normal downstream build.
@@ -39,6 +40,7 @@ fn report_clock_is_public_without_diagnostics_and_waits_for_ping() {
     client.disconnect().unwrap();
     client.wait_finished().unwrap();
     assert_eq!(client.server_clock(), None);
+    assert_eq!(client.server_utc_offset_minutes(), None);
 }
 
 #[test]
