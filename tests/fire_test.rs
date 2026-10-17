@@ -33,7 +33,9 @@
 //!   CPU summary.
 //! - `MOONPROTO_FIRETEST_PROFILE=full` or unset — the complete destructive
 //!   public `MoonClient` health/stress scenario below. Requires
-//!   `allow_mutation=true`.
+//!   `allow_mutation=true`. Includes session-profit full/diff synchronization,
+//!   single/all-market session resets, and a late subscriber. The focused
+//!   `fire_test_session_profit_sync` case runs those checks independently.
 //!
 //! FireTest checks live full-parse health for all real server packets. Crafted
 //! malformed parser semantics (Delphi `Read` zero-tail vs `ReadBuffer`
@@ -544,6 +546,7 @@ struct SessionStats {
     balance_snapshot_events: u64,
     balance_incremental_events: u64,
     session_profit_events: u64,
+    session_profit_update_events: u64,
     session_profit_nonzero_count: usize,
     transfer_asset_events: u64,
     transfer_asset_updated_mask: u8,
@@ -635,6 +638,7 @@ impl Clone for SessionStats {
             balance_snapshot_events: self.balance_snapshot_events,
             balance_incremental_events: self.balance_incremental_events,
             session_profit_events: self.session_profit_events,
+            session_profit_update_events: self.session_profit_update_events,
             session_profit_nonzero_count: self.session_profit_nonzero_count,
             transfer_asset_events: self.transfer_asset_events,
             transfer_asset_updated_mask: self.transfer_asset_updated_mask,
@@ -701,7 +705,7 @@ impl SessionStats {
                 )
             });
         let base = format!(
-            "connected_now={} fresh={} again={} reconnecting={} disconnected={} server_events={} engine={} raw={} logs={} settings={} lev_manage_events={} runtime_state_events={} runtime_state={:?} kernel_license_events={} kernel_license={:?} profit_state_events={} profit_state={:?} hl_limit_events={} hl_requests_left={:?} strats={} strat_snapshots={} schema_events={} schema_kinds={} schema_fields={} strat_runtime_events={} strategies_running={:?} strategy_rows={} markets={} trades={} target_trade_packets={} books={} target_book_full={} target_book_update={} market_probe=[{}] order_events={} balances={} session_profit_events={} session_profit_nonzero={} transfer_assets={} mask={:#05b} failures={} coin_card_events={} updates={} failures={} last_count={} parse_failed={}{} candles={} retained_candles_5m={} newest_age_s={:?}",
+            "connected_now={} fresh={} again={} reconnecting={} disconnected={} server_events={} engine={} raw={} logs={} settings={} lev_manage_events={} runtime_state_events={} runtime_state={:?} kernel_license_events={} kernel_license={:?} profit_state_events={} profit_state={:?} hl_limit_events={} hl_requests_left={:?} strats={} strat_snapshots={} schema_events={} schema_kinds={} schema_fields={} strat_runtime_events={} strategies_running={:?} strategy_rows={} markets={} trades={} target_trade_packets={} books={} target_book_full={} target_book_update={} market_probe=[{}] order_events={} balances={} session_profit_events={} session_profit_last_full_nonzero={} transfer_assets={} mask={:#05b} failures={} coin_card_events={} updates={} failures={} last_count={} parse_failed={}{} candles={} retained_candles_5m={} newest_age_s={:?}",
             self.connected_now,
             self.connected_fresh,
             self.connected_again,
@@ -2648,6 +2652,7 @@ fn runtime_command_metric_label(kind: u8) -> &'static str {
         88 => "Trade.SellOrder",
         89 => "Trade.MarketSplitPosition",
         90 => "Trade.Penalty",
+        95 => "Ui.ResetSession",
         _ => "Unknown",
     }
 }
@@ -3032,6 +3037,10 @@ fn record_event(
                 BalanceEvent::SessionProfitsApplied { nonzero_count, .. } => {
                     st.session_profit_events += 1;
                     st.session_profit_nonzero_count = *nonzero_count;
+                }
+                BalanceEvent::SessionProfitsUpdated { .. } => {
+                    st.session_profit_events += 1;
+                    st.session_profit_update_events += 1;
                 }
                 BalanceEvent::Ignored { .. }
                 | BalanceEvent::EpochStale { .. }
@@ -4339,6 +4348,106 @@ fn session_profit_snapshot_counts(snapshot: &MoonStateSnapshot) -> (usize, usize
     (markets, known, nonzero)
 }
 
+// This gate uses only emulator trades; session counters are deliberately reset on the test core.
+fn run_session_profit_sync_gate(cfg: &FireConfig, keys: ImportedKeys) {
+    let mut other_cfg = cfg.clone();
+    other_cfg.market = if cfg.market == "ETHUSDT" { "BTCUSDT" } else { "ETHUSDT" }.into();
+    let mut a = Session::connect("Sessions-A", cfg, keys, None);
+    let mut b = Session::connect("Sessions-B", &other_cfg, keys, None);
+    assert!(pump_pair_until(
+        &mut a,
+        &mut b,
+        cfg.wait,
+        "session initial snapshots",
+        |a, b| a.session_profit_events > 0 && b.session_profit_events > 0
+    ));
+    let profit = |s: &Session, name: &str| s.state_snapshot().markets().get(name).unwrap().session_profit();
+    let restore_emu = ensure_server_emulator_mode(cfg, &mut a, &mut b);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        a.client.settings().reset_sessions(None, false).unwrap();
+        assert!(pump_pair_until_sessions(
+            &mut a,
+            &mut b,
+            cfg.wait,
+            "reset all sessions",
+            |a, b| session_profit_snapshot_counts(a.state_snapshot().as_ref()).2 == 0
+                && session_profit_snapshot_counts(b.state_snapshot().as_ref()).2 == 0
+        ));
+        // Create a non-zero baseline on one market, then change a second market.
+        // Two non-zero rows versus one changed row forces the core to send an incremental update.
+        run_order_lifecycle_gate_body(cfg, &mut a, &mut b);
+        assert!(pump_pair_until_sessions(
+            &mut a,
+            &mut b,
+            cfg.wait,
+            "first session profit",
+            |a, b| profit(a, &cfg.market).is_some_and(|v| v != 0.0) && profit(a, &cfg.market) == profit(b, &cfg.market)
+        ));
+        let before_a = a.snapshot().session_profit_update_events;
+        let before_b = b.snapshot().session_profit_update_events;
+        run_order_lifecycle_gate_body(&other_cfg, &mut b, &mut a);
+        assert!(pump_pair_until_sessions(
+            &mut a,
+            &mut b,
+            cfg.wait,
+            "session diff broadcast",
+            |a, b| a.snapshot().session_profit_update_events > before_a
+                && b.snapshot().session_profit_update_events > before_b
+                && profit(a, &other_cfg.market).is_some_and(|v| v != 0.0)
+                && profit(a, &other_cfg.market) == profit(b, &other_cfg.market)
+        ));
+        let keep = profit(&a, &other_cfg.market);
+        a.client.settings().reset_sessions(Some(&cfg.market), false).unwrap();
+        assert!(pump_pair_until_sessions(
+            &mut a,
+            &mut b,
+            cfg.wait,
+            "single session reset broadcast",
+            |a, b| profit(a, &cfg.market) == Some(0.0)
+                && profit(b, &cfg.market) == Some(0.0)
+                && profit(a, &other_cfg.market) == keep
+                && profit(b, &other_cfg.market) == keep
+        ));
+        // A fresh subscriber must receive the current snapshot without advancing the shared sequence.
+        let mut c = Session::connect("Sessions-late", cfg, keys, None);
+        assert!(pump_pair_until_sessions(
+            &mut c,
+            &mut a,
+            cfg.wait,
+            "late session subscriber",
+            |c, a| c.snapshot().session_profit_events > 0
+                && profit(c, &other_cfg.market) == profit(a, &other_cfg.market)
+        ));
+        a.client.settings().reset_sessions(None, true).unwrap();
+        assert!(pump_pair_until_sessions(
+            &mut a,
+            &mut b,
+            cfg.wait,
+            "empty session snapshot",
+            |a, b| session_profit_snapshot_counts(a.state_snapshot().as_ref()).2 == 0
+                && session_profit_snapshot_counts(b.state_snapshot().as_ref()).2 == 0
+        ));
+        println!("OK: session profits: full, incremental, cross-client single/all reset, late subscriber");
+    }));
+    a.end_order_state_capture();
+    b.end_order_state_capture();
+    restore_server_emulator_mode(cfg, &mut a, &mut b, restore_emu);
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[test]
+#[ignore = "live test core required; resets sessions and creates emulator trades"]
+fn fire_test_session_profit_sync() {
+    let _live_test_lock = firetest_live_test_lock();
+    let cfg = FireConfig::load_required();
+    assert!(cfg.allow_mutation, "session sync test requires allow_mutation=true");
+    let keys = parse_key_info(&cfg.key_b64).expect("invalid MoonProto key").keys;
+    let _err_emu = ErrEmuGuard::set(0);
+    run_session_profit_sync_gate(&cfg, keys);
+}
+
 fn run_session_profit_and_hl_limit_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
     assert!(
         pump_pair_until(a, b, cfg.wait, "session profit state", |a, b| a
@@ -4379,11 +4488,6 @@ fn run_session_profit_and_hl_limit_gate(cfg: &FireConfig, a: &mut Session, b: &m
         assert!(
             markets > 0 && known == markets,
             "FireTest {}: session-profit full snapshot covers {known}/{markets} markets",
-            stats.label
-        );
-        assert_eq!(
-            nonzero, stats.session_profit_nonzero_count,
-            "FireTest {}: session-profit event/state nonzero count mismatch",
             stats.label
         );
 
@@ -5424,6 +5528,9 @@ impl MoonClientPathStats {
                 self.session_profit_events += 1;
                 self.session_profit_nonzero_count = *nonzero_count;
             }
+            Event::Balance(BalanceEvent::SessionProfitsUpdated { .. }) => {
+                self.session_profit_events += 1;
+            }
             Event::Settings(SettingsEvent::RuntimeStateUpdated) => {
                 self.runtime_state_events += 1;
             }
@@ -5687,7 +5794,7 @@ impl MoonClientPathStats {
             self.market_invariant_error.as_deref().unwrap_or("none")
         );
         format!(
-            "{base} kernel_license={:?} kernel_health_events={} kernel_health={:?} hl_limit_events={} hl_requests_left={:?} session_profit_events={} session_profit_nonzero={} session_profit_known={}/{} news_history_events={} news_history_count={} news_history_tags={} news_retained={} news_tags_present={}",
+            "{base} kernel_license={:?} kernel_health_events={} kernel_health={:?} hl_limit_events={} hl_requests_left={:?} session_profit_events={} session_profit_last_full_nonzero={} session_profit_known={}/{} news_history_events={} news_history_count={} news_history_tags={} news_retained={} news_tags_present={}",
             self.kernel_license_state,
             self.kernel_health_events,
             self.kernel_health,
@@ -9992,6 +10099,7 @@ fn fire_test_active_library_health() {
 
     run_report_database_gate(&cfg, keys, &mut a);
     run_order_lifecycle_gate(&cfg, &mut a, &mut b);
+    run_session_profit_sync_gate(&cfg, keys);
     run_real_order_cancel_gate(&cfg, &mut a, &mut b);
     run_strategy_order_sync_gate(&cfg, keys, &mut a, &mut b);
 

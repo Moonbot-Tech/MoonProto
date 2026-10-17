@@ -1130,7 +1130,20 @@ impl MoonSettings<'_> {
         )
     }
 
-    /// Reset the current-session or all-time profit counter on the server.
+    /// Reset per-market and strategy session counters on the core.
+    ///
+    /// Pass `Some("BTCUSDT")` for one market or `None` for all markets.
+    /// `clear_hourly` also resets the hourly screenshot sessions. Retained market
+    /// values change only after the core broadcasts its authoritative state.
+    /// This is separate from the account profit counters reset by `reset_profit`.
+    pub fn reset_sessions(&self, market_name: Option<&str>, clear_hourly: bool) -> Result<(), MoonClientError> {
+        self.client.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::ResetSession {
+            market_name: market_name.unwrap_or_default().to_owned(),
+            clear_hourly,
+        }))
+    }
+
+    /// Reset the current-session or all-time account profit counter on the server.
     pub fn reset_profit(
         &self,
         kind: crate::commands::ui::ResetProfitKind,

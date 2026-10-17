@@ -645,6 +645,10 @@ fn handle_ui_command(
             client.ui_trigger_manage(action, all_markets, &markets, &keys);
             false
         }
+        UiRuntimeCommand::ResetSession { market_name, clear_hourly } => {
+            client.ui_reset_session(&market_name, clear_hourly);
+            false
+        }
         UiRuntimeCommand::ResetProfit(kind) => {
             client.ui_reset_profit(kind);
             false

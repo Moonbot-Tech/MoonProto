@@ -251,6 +251,15 @@ pub(crate) fn build_reset_profit(uid: u64, reset_kind: u8) -> Vec<u8> {
     out
 }
 
+/// Reset one market's sessions, or all markets when the name is empty.
+pub(crate) fn build_reset_session(uid: u64, market_name: &str, clear_hourly: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(14 + market_name.len());
+    write_header(&mut out, 50, uid);
+    write_string(&mut out, market_name);
+    out.push(u8::from(clear_hourly));
+    out
+}
+
 /// CmdId=12 `TArbActivateNotify`.
 #[doc(hidden)]
 pub(crate) fn build_arb_activate_notify(uid: u64, arb_valid: f64) -> Vec<u8> {

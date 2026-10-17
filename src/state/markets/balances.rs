@@ -35,47 +35,80 @@ impl MarketsState {
         }
     }
 
-    pub(crate) fn apply_session_profit_snapshot(
+    // Mirrors OnSessionProfitState: validate the complete packet before changing any market.
+    pub(crate) fn apply_session_profit_state(
         &mut self,
         upd: &MarketSessionProfitUpdate,
-    ) -> Option<BalanceEvent> {
-        if !self.indexes_synchronized {
-            log::warn!(
-                target: "moonproto::balance",
-                "session-profit snapshot dropped while market indexes are stale"
-            );
-            return None;
+        full: bool,
+        server_token: u64,
+    ) -> Result<Option<BalanceEvent>, ()> {
+        if server_token == 0 || !self.indexes_synchronized {
+            return Ok(None);
+        }
+        let same_server = server_token == self.session_profit_server_token;
+        let last = self.last_session_profit_epoch.unwrap_or_default();
+        if same_server
+            && ((upd.epoch != last && !epoch_is_ok(last, upd.epoch))
+                || (upd.epoch == last && (self.session_profit_ready || !full)))
+        {
+            return Ok(stale_session_profit_event(upd.epoch, last));
+        }
+        if (!full && (!same_server || !self.session_profit_ready || upd.epoch.wrapping_sub(last) != 1))
+            || upd.items.iter().any(|item| !self.has_server_market_index(item.market_index))
+        {
+            self.session_profit_ready = false;
+            return Err(());
         }
 
-        if let Some(last) = self.last_session_profit_epoch {
-            if !epoch_is_ok(last, upd.epoch) {
-                return stale_session_profit_event(upd.epoch, last);
+        if full {
+            for handle in self.markets.iter() {
+                handle.with_mut(|market| market.session_profit = Some(0.0));
             }
         }
-
-        for handle in self.markets.iter() {
-            handle.with_mut(|market| market.session_profit = Some(0.0));
-        }
-
-        let mut nonzero_count = 0;
         for item in &upd.items {
-            let Some(handle) = self.market_by_index(item.market_index) else {
-                continue;
-            };
+            let handle = self.market_by_index(item.market_index).expect("validated session market index");
             handle.with_mut(|market| market.session_profit = Some(item.session_profit));
-            nonzero_count += 1;
         }
-
         self.last_session_profit_epoch = Some(upd.epoch);
-        Some(BalanceEvent::SessionProfitsApplied {
-            nonzero_count,
-            #[cfg(any(test, feature = "diagnostics"))]
-            epoch: upd.epoch,
-        })
+        self.session_profit_server_token = server_token;
+        self.session_profit_ready = true;
+        self.session_profit_request_time = 0;
+        Ok(Some(if full {
+            BalanceEvent::SessionProfitsApplied {
+                nonzero_count: upd.items.len(),
+                #[cfg(any(test, feature = "diagnostics"))]
+                epoch: upd.epoch,
+            }
+        } else {
+            BalanceEvent::SessionProfitsUpdated {
+                count: upd.items.len(),
+                #[cfg(any(test, feature = "diagnostics"))]
+                epoch: upd.epoch,
+            }
+        }))
+    }
+
+    pub(crate) fn session_profits_need_snapshot(&self, epoch: u16, server_token: u64) -> bool {
+        self.indexes_synchronized
+            && (!self.session_profit_ready
+                || self.session_profit_server_token != server_token
+                || epoch_is_ok(self.last_session_profit_epoch.unwrap_or_default(), epoch))
+    }
+
+    // Mirrors RequestSessionProfits, including rollback-safe five-second retry spacing.
+    pub(crate) fn request_session_profits(&mut self, now_ms: i64) -> bool {
+        if self.session_profit_request_time != 0 && now_ms.abs_diff(self.session_profit_request_time) < 5000 {
+            return false;
+        }
+        self.session_profit_request_time = now_ms;
+        true
     }
 
     pub(crate) fn clear_session_profits_for_new_world(&mut self) {
         self.last_session_profit_epoch = None;
+        self.session_profit_server_token = 0;
+        self.session_profit_ready = false;
+        self.session_profit_request_time = 0;
         for handle in self.markets.iter() {
             handle.with_mut(|market| market.session_profit = None);
         }

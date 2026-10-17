@@ -67,16 +67,14 @@ pub(crate) struct BalanceUpdate {
     pub items: Vec<BalanceItem>,
 }
 
-/// One non-zero row from the authoritative per-market session-profit snapshot.
+/// One absolute per-market session-profit value, including zero in updates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MarketSessionProfitItem {
     pub market_index: u16,
     pub session_profit: f64,
 }
 
-/// Full sparse per-market session-profit snapshot.
-///
-/// Markets absent from `items` have zero session profit.
+/// Full sparse snapshot or changed absolute values, depending on command kind.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MarketSessionProfitUpdate {
     pub epoch: u16,
@@ -103,24 +101,35 @@ pub(crate) fn build_request_balance_refresh(uid: u64) -> Vec<u8> {
     out
 }
 
+/// Request the current session-profit snapshot without refreshing balances.
+pub(crate) fn build_request_session_profits(uid: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(11);
+    out.push(10);
+    out.extend_from_slice(&CURRENT_PROTO_CMD_VER.to_le_bytes());
+    out.extend_from_slice(&uid.to_le_bytes());
+    out
+}
+
 /// Balance CmdId=8: the client requests repair without an exchange refresh.
 pub(crate) fn build_balance_digest(uid: u64, epoch: u16, digest: u64) -> Vec<u8> {
-    let mut out = Vec::with_capacity(21);
+    let mut out = Vec::with_capacity(23);
     out.push(8);
     out.extend_from_slice(&CURRENT_PROTO_CMD_VER.to_le_bytes());
     out.extend_from_slice(&uid.to_le_bytes());
     out.extend_from_slice(&epoch.to_le_bytes());
     out.extend_from_slice(&digest.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes()); // Client repair carries no server session epoch.
     out
 }
 
 /// Read the epoch and digest after the standard command header.
-pub(crate) fn parse_balance_digest(data: &[u8]) -> (u16, u64) {
+pub(crate) fn parse_balance_digest(data: &[u8]) -> (u16, u64, Option<u16>) {
     let mut pos = 0;
-    (
-        read_u16_zero_tail(data, &mut pos),
-        read_u64_zero_tail(data, &mut pos),
-    )
+    let epoch = read_u16_zero_tail(data, &mut pos);
+    let digest = read_u64_zero_tail(data, &mut pos);
+    let session_epoch = (data.len().saturating_sub(pos) >= 2)
+        .then(|| read_u16_zero_tail(data, &mut pos));
+    (epoch, digest, session_epoch)
 }
 
 // =============================================================================
@@ -198,7 +207,7 @@ pub(crate) fn parse_balance(cmd_id: u8, data: &[u8]) -> Option<BalanceUpdate> {
     Some(result)
 }
 
-/// Parse `TMarketSessionProfitStateCommand` (Balance CmdId=7).
+/// Parse a full session snapshot or incremental update (same row layout).
 ///
 /// `data` starts after the common command header and contains:
 /// `epoch:u16 + count:i32 + count * (market_index:u16 + profit:f64)`.
@@ -389,29 +398,24 @@ mod tests {
     #[test]
     fn balance_digest_wire_layout_and_short_reads() {
         let payload = build_balance_digest(0x0102_0304_0506_0708, 0x1122, 0x8899_AABB_CCDD_EEFF);
-        assert_eq!(payload.len(), 21);
+        assert_eq!(payload.len(), 23);
         assert_eq!(payload[0], 8);
         assert_eq!(payload[1..3], CURRENT_PROTO_CMD_VER.to_le_bytes());
-        assert_eq!(
-            payload[3..],
-            [8, 7, 6, 5, 4, 3, 2, 1, 0x22, 0x11, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88]
-        );
-        assert_eq!(
-            parse_balance_digest(&payload[11..]),
-            (0x1122, 0x8899_AABB_CCDD_EEFF)
-        );
-        assert_eq!(parse_balance_digest(&[]), (0, 0));
-        assert_eq!(parse_balance_digest(&[0x22]), (0x22, 0));
-        assert_eq!(
-            parse_balance_digest(&[0x22, 0x11, 0xff, 0xee]),
-            (0x1122, 0xeeff)
-        );
-        let mut extended = payload[11..].to_vec();
-        extended.extend_from_slice(&[1, 2]);
-        assert_eq!(
-            parse_balance_digest(&extended),
-            (0x1122, 0x8899_AABB_CCDD_EEFF)
-        );
+        assert_eq!(payload[3..], [8, 7, 6, 5, 4, 3, 2, 1, 0x22, 0x11, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0, 0]);
+        assert_eq!(parse_balance_digest(&payload[11..]), (0x1122, 0x8899_AABB_CCDD_EEFF, Some(0)));
+        assert_eq!(parse_balance_digest(&[]), (0, 0, None));
+        assert_eq!(parse_balance_digest(&[0x22]), (0x22, 0, None));
+        assert_eq!(parse_balance_digest(&[0x22, 0x11, 0xff, 0xee]), (0x1122, 0xeeff, None));
+        // Old cores have no tail; an incomplete epoch is not accepted as present.
+        assert_eq!(parse_balance_digest(&payload[11..21]).2, None);
+        assert_eq!(parse_balance_digest(&payload[11..22]).2, None);
+        let mut extended = payload[11..21].to_vec();
+        extended.extend_from_slice(&[1, 2, 3]);
+        assert_eq!(parse_balance_digest(&extended), (0x1122, 0x8899_AABB_CCDD_EEFF, Some(513)));
+        let request = build_request_session_profits(9);
+        assert_eq!(request[0], 10);
+        assert_eq!(request.len(), 11);
+        assert_eq!(&request[3..], &9u64.to_le_bytes());
     }
 
     #[test]

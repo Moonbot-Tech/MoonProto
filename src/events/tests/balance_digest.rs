@@ -1,7 +1,14 @@
 use super::*;
 use crate::client::{Client, SendItem, SendPriority};
-use crate::commands::balance::{build_balance_digest, parse_balance_digest};
+use crate::commands::balance::parse_balance_digest;
 use crate::state::balances::balance_hash_mix;
+
+// Keep the balance-only scenarios compatible with old cores, without the optional session tail.
+fn build_balance_digest(uid: u64, epoch: u16, digest: u64) -> Vec<u8> {
+    let mut packet = crate::commands::balance::build_balance_digest(uid, epoch, digest);
+    packet.truncate(21);
+    packet
+}
 
 fn balance_rows(cmd: u8, epoch: u16, rows: &[(&str, u64, f64)]) -> Vec<u8> {
     let mut payload = balance_payload_with_items(cmd, epoch as u64, epoch, &[]);
@@ -95,7 +102,7 @@ fn balance_digest_repairs_dropped_update_for_one_client_without_exchange_request
     assert!(request.encrypted);
     assert_eq!(request.max_retries, 3);
     assert!(request.u_key.is_none());
-    assert_eq!(parse_balance_digest(&request.data[11..]), (0, old_digest));
+    assert_eq!(parse_balance_digest(&request.data[11..]), (0, old_digest, Some(0)));
     assert!(
         receive(&mut db, &b, &packet).1.is_empty(),
         "duplicate digest"

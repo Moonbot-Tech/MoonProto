@@ -66,6 +66,7 @@ pub(crate) enum ActiveAction {
     RequestMarketsList,
     RequestUpdateMarketsList,
     RequestStrategySchema,
+    RequestSessionProfits,
     BalanceDigest {
         digest: u64,
     },
@@ -459,7 +460,9 @@ fn is_pre_init_domain_command(cmd: Command) -> bool {
 }
 
 fn is_pre_init_state_payload(cmd: Command, payload: &[u8]) -> bool {
-    matches!(
+    // The core sends the initial session snapshot as soon as market updates are subscribed.
+    // Its own index/peer gate remains in the session apply path, independent of later init steps.
+    matches!(cmd, Command::Balance if matches!(payload.first(), Some(7 | 9))) || matches!(
         cmd,
         Command::Strat
             if crate::commands::strat::is_schema_payload(payload)

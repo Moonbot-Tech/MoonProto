@@ -79,7 +79,10 @@ For chart overlays that only need position fields, `MarketHandle::balance_positi
 returns a small copy without cloning the whole market object.
 `MarketHandle::session_profit()` reads the independent per-market session
 counter in core base currency. `snapshot.session_profit_for(&market)` converts
-the same retained value to USD for the chart header.
+the same retained value to USD for the chart header. Full snapshots and incremental
+changes are applied automatically, including recovery after a missed update.
+Use `client.settings().reset_sessions(Some(market.name()), false)` to reset
+this market on the core; see [session profits](balances.md#per-market-session-profit).
 For the "unprotected position" warning, use
 `snapshot.position_protection_for(&market)`: the library counts active
 non-emulator `SellSet` close orders by side, and the UI only decides how to

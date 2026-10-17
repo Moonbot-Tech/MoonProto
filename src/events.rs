@@ -866,7 +866,7 @@ impl EventDispatcher {
                 out,
             ),
             Command::Balance => {
-                self.client_new_data_balance(payload, history_now_time_days, out, actions)
+                self.client_new_data_balance(payload, now_ms, history_now_time_days, out, actions)
             }
             Command::Strat => self.client_new_data_strat(payload, out),
             Command::UI => self.client_new_data_ui(payload, out),

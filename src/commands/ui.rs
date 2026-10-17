@@ -76,7 +76,7 @@ pub(crate) use builders::{
     build_alert_object, build_alert_snapshot_request, build_arb_activate_notify, build_auto_detect,
     build_chart_text_state, build_client_settings, build_emu_trades,
     build_kernel_license_state_request, build_lev_manage, build_logs_subscribe, build_mm_orders_subscribe,
-    build_orders_history_request, build_problems_clear, build_problems_test, build_reset_profit,
+    build_orders_history_request, build_problems_clear, build_problems_test, build_reset_profit, build_reset_session,
     build_restart_now, build_settings_request, build_shared_config_blob,
     build_shared_config_request, build_shutdown, build_strat_start_stop, build_strat_start_stop_v2,
     build_switch_dex, build_switch_spot, build_trigger_manage, build_update_version,

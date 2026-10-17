@@ -813,6 +813,7 @@ pub(crate) const UI_COMMANDS: &[CommandDescriptor] = &[
         ukey = UKeyRule::Singleton(1),
         direction = Outbound
     ),
+    cmd_desc!(Command::UI, 50, "TResetSessionCommand", base = Base, priority = High, direction = Outbound),
 ];
 
 pub(crate) const STRAT_COMMANDS: &[CommandDescriptor] = &[
@@ -991,6 +992,14 @@ pub(crate) const BALANCE_COMMANDS: &[CommandDescriptor] = &[
         priority = High,
         direction = Both
     ),
+    cmd_desc!(
+        Command::Balance, 9, "TMarketSessionProfitUpdateCommand",
+        base = Base, priority = Sliced, direction = Inbound
+    ),
+    cmd_desc!(
+        Command::Balance, 10, "TMarketSessionProfitRequestCommand",
+        base = Base, priority = High, direction = Outbound
+    ),
 ];
 
 pub(crate) const API_COMMANDS: &[CommandDescriptor] = &[
@@ -1140,9 +1149,9 @@ mod tests {
     #[test]
     fn descriptor_map_covers_known_typed_domains() {
         assert_eq!(ORDER_COMMANDS.len(), 26);
-        assert_eq!(UI_COMMANDS.len(), 50);
+        assert_eq!(UI_COMMANDS.len(), 51);
         assert_eq!(STRAT_COMMANDS.len(), 11);
-        assert_eq!(BALANCE_COMMANDS.len(), 9);
+        assert_eq!(BALANCE_COMMANDS.len(), 11);
         assert_eq!(API_COMMANDS.len(), 5);
     }
 
@@ -1184,6 +1193,18 @@ mod tests {
         assert_eq!(session_profit.max_retries, 6);
         assert_eq!(session_profit.unique_kind, UK_MARKET_SESSION_PROFIT);
         assert_eq!(session_profit.ukey, UKeyRule::Singleton(1));
+
+        let update = find_descriptor(Command::Balance, 9).unwrap();
+        assert_eq!(update.priority, CommandPriority::Sliced);
+        assert_eq!(update.max_retries, 6);
+        assert_eq!(update.unique_kind, UK_NONE); // Diffs must never supersede one another.
+        let request = find_descriptor(Command::Balance, 10).unwrap();
+        assert_eq!(request.priority, CommandPriority::High);
+        assert_eq!(request.max_retries, 3);
+        assert_eq!(request.direction, CommandDirection::Outbound);
+        let reset = find_descriptor(Command::UI, 50).unwrap();
+        assert_eq!(reset.priority, CommandPriority::High);
+        assert_eq!(reset.unique_kind, UK_NONE);
 
         let digest = find_descriptor(Command::Balance, 8).unwrap();
         assert_eq!(digest.priority, CommandPriority::High);

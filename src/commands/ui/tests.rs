@@ -1321,3 +1321,12 @@ fn shared_config_request_header_only() {
     assert_eq!(raw.len(), 11);
     assert_eq!(raw[0], CMD_SHARED_CONFIG_REQUEST);
 }
+
+#[test]
+fn reset_sessions_encodes_market_name_and_hourly_flag() {
+    let packet = build_reset_session(8, "BTCUSDT", true);
+    assert_eq!(packet[0], 50);
+    assert_eq!(&packet[3..11], &8u64.to_le_bytes());
+    assert_eq!(&packet[11..], b"\x07\x00BTCUSDT\x01");
+    assert_eq!(&build_reset_session(9, "", false)[11..], &[0, 0, 0]);
+}

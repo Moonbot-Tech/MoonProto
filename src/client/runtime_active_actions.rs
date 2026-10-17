@@ -5,10 +5,11 @@ impl Client {
     where
         I: IntoIterator<Item = crate::events::ActiveAction>,
     {
-        if !self.domain_ready_for_typed_send() {
-            return;
-        }
+        let domain_ready = self.domain_ready_for_typed_send();
         for action in actions {
+            if !domain_ready && !matches!(action, crate::events::ActiveAction::RequestSessionProfits) {
+                continue;
+            }
             match action {
                 crate::events::ActiveAction::RequestMarketsList => {
                     self.send_api_request(&crate::commands::engine_request::get_markets_list());
@@ -18,6 +19,9 @@ impl Client {
                 }
                 crate::events::ActiveAction::RequestStrategySchema => {
                     self.strat_schema_request();
+                }
+                crate::events::ActiveAction::RequestSessionProfits => {
+                    self.balance_request_session_profits();
                 }
                 crate::events::ActiveAction::BalanceDigest { digest } => {
                     self.balance_send_digest(digest);

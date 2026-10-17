@@ -86,6 +86,14 @@ pub enum BalanceEvent {
         #[doc(hidden)]
         epoch: u16,
     },
+    /// Changed absolute per-market session profits applied. Omitted markets stay unchanged.
+    SessionProfitsUpdated {
+        /// Number of updated markets, including explicit zero resets.
+        count: usize,
+        #[cfg(any(test, feature = "diagnostics"))]
+        #[doc(hidden)]
+        epoch: u16,
+    },
     /// Command was recognized, but this command kind has no balance-state effect.
     #[cfg(any(test, feature = "diagnostics"))]
     #[doc(hidden)]

@@ -11,9 +11,16 @@ use crate::protocol::Command;
 use crate::state::epoch::epoch_is_ok;
 
 impl EventDispatcher {
+    fn request_session_profits(&mut self, now_ms: i64, actions: &mut Vec<ActiveAction>) {
+        if self.markets.request_session_profits(now_ms) {
+            actions.push(ActiveAction::RequestSessionProfits);
+        }
+    }
+
     pub(super) fn client_new_data_balance(
         &mut self,
         payload: &[u8],
+        now_ms: i64,
         now_time_days: Option<f64>,
         out: &mut Vec<Event>,
         actions: &mut Vec<ActiveAction>,
@@ -87,16 +94,24 @@ impl EventDispatcher {
                 }
                 None => Self::push_parse_failed(out, Command::Balance, payload),
             },
-            7 => match parse_market_session_profits(body) {
-                Some(upd) => {
-                    if let Some(ev) = self.markets.apply_session_profit_snapshot(&upd) {
-                        out.push(Event::Balance(ev));
-                    }
-                }
+            7 | 9 => match parse_market_session_profits(body) {
+                Some(upd) => match self.markets.apply_session_profit_state(
+                    &upd, sub_cmd_id == 7, self.last_known_server_token,
+                ) {
+                    Ok(Some(ev)) => out.push(Event::Balance(ev)),
+                    Ok(None) => {}
+                    Err(()) => self.request_session_profits(now_ms, actions),
+                },
                 None => Self::push_parse_failed(out, Command::Balance, payload),
             },
             8 => {
-                let (epoch, digest) = parse_balance_digest(body);
+                let (epoch, digest, session_epoch) = parse_balance_digest(body);
+                // Check session repair before the independent balance-epoch gate.
+                if session_epoch.is_some_and(|epoch| {
+                    self.markets.session_profits_need_snapshot(epoch, self.last_known_server_token)
+                }) {
+                    self.request_session_profits(now_ms, actions);
+                }
                 if !epoch_is_ok(self.balances.last_epoch, epoch) {
                     return;
                 }

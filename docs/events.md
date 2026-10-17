@@ -199,9 +199,11 @@ pub enum Event {
 }
 ```
 
-`Event::Balance` also carries `BalanceEvent::SessionProfitsApplied` after the
-authoritative per-market session-profit snapshot is visible through retained
-market handles. Read `market.session_profit()` for the base-currency value or
+`Event::Balance` also carries `BalanceEvent::SessionProfitsApplied` for a full
+session-profit snapshot and `BalanceEvent::SessionProfitsUpdated` for changed
+markets. Both fire after authoritative values are visible through retained
+market handles. The library repairs missing updates automatically.
+Read `market.session_profit()` for the base-currency value or
 `snapshot.session_profit_for(&market)` for the chart-ready USD value.
 
 `Event::MarketHistory` completes a demand-driven

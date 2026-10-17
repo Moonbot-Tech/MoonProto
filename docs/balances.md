@@ -130,11 +130,30 @@ presenting unavailable data as zero.
 retained base-currency/USD conversion rate is available; the raw base-currency
 value remains readable from the market handle.
 
-The wire update is an authoritative sparse snapshot: it carries only non-zero
-markets, and every omitted known market becomes zero. A newly listed market
-also starts at known zero after session-profit support has been observed.
-`BalanceEvent::SessionProfitsApplied` tells push-driven UI that the retained
-values are ready; applications do not merge packet rows themselves.
+The core is authoritative. A full snapshot sets omitted markets to zero;
+incremental updates replace only changed values, including explicit zeros.
+A newly listed market starts at known zero once a baseline has arrived.
+The library detects missing updates, including the last update before an idle
+period, and automatically requests a full snapshot. During repair, handles keep
+their last applied values. A new connection needs a full baseline before diffs
+can apply. Older cores that only send full snapshots remain supported.
+
+Listen for both `BalanceEvent::SessionProfitsApplied` (full snapshot) and
+`BalanceEvent::SessionProfitsUpdated` (changed markets), then read the retained
+handles. Applications do not merge rows, count revisions, or accumulate session
+profits from reports; doing so would count the same profit twice.
+
+To reset sessions on the core:
+
+```rust
+client.settings().reset_sessions(Some("ETHUSDT"), false)?; // One market.
+client.settings().reset_sessions(None, true)?; // All markets, including hourly screenshot sessions.
+```
+
+This also clears the corresponding strategy session counters. Market values
+update through the core's normal broadcast, without optimistic local changes.
+It is independent of `reset_profit`, which resets account profit counters.
+The reset command requires a core with session-reset support.
 
 ## Getting A Fresh Snapshot
 
@@ -180,7 +199,10 @@ for event in client.drain_events() {
             nonzero_count,
             ..
         }) => {
-            println!("session profit updated: non-zero markets={nonzero_count}");
+            println!("full session profit state: non-zero markets={nonzero_count}");
+        }
+        Event::Balance(BalanceEvent::SessionProfitsUpdated { count, .. }) => {
+            println!("session profits changed: markets={count}");
         }
         _ => {}
     }

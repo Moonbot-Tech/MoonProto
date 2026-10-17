@@ -81,7 +81,7 @@ pub(super) fn engine_method_allowed_before_domain_ready(method: EngineMethod) ->
 
 #[inline]
 pub(super) fn outgoing_allowed_before_domain_ready(cmd: u8, data: &[u8]) -> bool {
-    matches!(
+    matches!(Command::from_byte(cmd), Command::Balance if data.first() == Some(&10)) || matches!(
         Command::from_byte(cmd),
         Command::API
             if engine_request_method(data)
@@ -95,7 +95,7 @@ pub(super) fn outgoing_allowed_before_domain_ready(cmd: u8, data: &[u8]) -> bool
 
 #[inline]
 pub(super) fn incoming_allowed_before_domain_ready(cmd: Command, data: &[u8]) -> bool {
-    matches!(
+    matches!(cmd, Command::Balance if matches!(data.first(), Some(7 | 9))) || matches!(
         cmd,
         Command::Strat
             if crate::commands::strat::is_schema_payload(data)

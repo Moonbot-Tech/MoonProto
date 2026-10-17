@@ -1767,6 +1767,7 @@ fn dispatcher_balance_incremental_epoch_gate_uses_live_market_epoch() {
 #[test]
 fn dispatcher_applies_full_sparse_session_profit_snapshot_by_server_index() {
     let mut d = EventDispatcher::new();
+    d.last_known_server_token = 1;
     seed_event_markets(&mut d, &["BTCUSDT", "ETHUSDT", "SOLUSDT"]);
     d.markets.apply_markets_indexes(vec![
         "SOLUSDT".to_string(),
@@ -1774,7 +1775,7 @@ fn dispatcher_applies_full_sparse_session_profit_snapshot_by_server_index() {
         "ETHUSDT".to_string(),
     ]);
 
-    let first = session_profit_payload(10, 5, &[(0, 3.5), (1, -1.25), (99, 88.0)]);
+    let first = session_profit_payload(10, 5, &[(0, 3.5), (1, -1.25)]);
     let events = d.dispatch(Command::Balance, &first, 1000);
 
     assert!(matches!(
@@ -1817,6 +1818,7 @@ fn dispatcher_applies_full_sparse_session_profit_snapshot_by_server_index() {
 #[test]
 fn dispatcher_rejects_duplicate_and_stale_session_profit_snapshots() {
     let mut d = EventDispatcher::new();
+    d.last_known_server_token = 1;
     seed_event_markets(&mut d, &["BTCUSDT"]);
     d.markets.apply_markets_indexes(vec!["BTCUSDT".to_string()]);
 
@@ -1848,6 +1850,7 @@ fn dispatcher_rejects_duplicate_and_stale_session_profit_snapshots() {
 #[test]
 fn dispatcher_does_not_apply_session_profit_through_stale_indexes() {
     let mut d = EventDispatcher::new();
+    d.last_known_server_token = 1;
     seed_event_markets(&mut d, &["BTCUSDT"]);
     d.markets.apply_markets_indexes(vec!["BTCUSDT".to_string()]);
     d.markets.mark_indexes_stale();
@@ -4742,4 +4745,187 @@ fn ui_strat_start_stop_v2_uses_owned_checked_delta() {
         }
         other => panic!("expected StratStartStopV2, got {other:?}"),
     }
+}
+
+// Exercise the real active dispatch path, including the per-connection context and repair outbox.
+fn session_packet(
+    d: &mut EventDispatcher,
+    client: &crate::client::Client,
+    cmd: u8,
+    epoch: u16,
+    items: &[(u16, f64)],
+    now_ms: i64,
+) -> (Vec<Event>, Vec<ActiveAction>) {
+    let mut payload = session_profit_payload(1, epoch, items);
+    payload[0] = cmd;
+    let mut events = Vec::new();
+    let mut actions = Vec::new();
+    dispatch_active_packet_for_test(d, Command::Balance, &payload, now_ms, &mut events, client, &mut actions);
+    (events, actions)
+}
+
+#[test]
+fn session_profit_diffs_preserve_other_markets_and_repair_gaps_atomically() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT", "ETHUSDT"]);
+    d.markets
+        .apply_markets_indexes(vec!["BTCUSDT".into(), "ETHUSDT".into()]);
+    let mut client = crate::client::Client::new(dummy_client_cfg());
+    client.testing_set_domain_ready(true);
+    client.testing_set_server_token(10);
+    let btc = d.markets.get("BTCUSDT").unwrap();
+    let eth = d.markets.get("ETHUSDT").unwrap();
+    session_packet(&mut d, &client, 7, 0, &[(0, 3.0), (1, 4.0)], 1000);
+    let (events, actions) = session_packet(&mut d, &client, 9, 1, &[(0, 0.0)], 1100);
+    assert!(matches!(
+        events.as_slice(),
+        [Event::Balance(BalanceEvent::SessionProfitsUpdated {
+            count: 1,
+            epoch: 1
+        })]
+    ));
+    assert!(actions.is_empty());
+    assert_eq!((btc.session_profit(), eth.session_profit()), (Some(0.0), Some(4.0)));
+
+    let (_, actions) = session_packet(&mut d, &client, 9, 3, &[(1, 9.0)], 2000);
+    assert!(matches!(actions.as_slice(), [ActiveAction::RequestSessionProfits]));
+    assert_eq!(eth.session_profit(), Some(4.0));
+    let (_, actions) = session_packet(&mut d, &client, 9, 2, &[(1, 8.0)], 2100);
+    assert!(actions.is_empty()); // A late missing packet cannot establish a fresh full baseline.
+    assert_eq!(eth.session_profit(), Some(4.0));
+    let (_, actions) = session_packet(&mut d, &client, 7, 3, &[(0, 5.0), (99, 7.0)], 7000);
+    assert!(matches!(actions.as_slice(), [ActiveAction::RequestSessionProfits]));
+    assert_eq!((btc.session_profit(), eth.session_profit()), (Some(0.0), Some(4.0)));
+    session_packet(&mut d, &client, 7, 3, &[(0, 5.0)], 7100);
+    assert_eq!((btc.session_profit(), eth.session_profit()), (Some(5.0), Some(0.0)));
+    session_packet(&mut d, &client, 9, 4, &[(1, -2.0)], 7200);
+    assert_eq!((btc.session_profit(), eth.session_profit()), (Some(5.0), Some(-2.0)));
+    session_packet(&mut d, &client, 7, 3, &[], 7300);
+    assert_eq!(btc.session_profit(), Some(5.0)); // Reordered full must not erase a later diff.
+}
+
+#[test]
+fn session_profit_wrap_reconnect_and_equal_epoch_repair() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    d.markets.apply_markets_indexes(vec!["BTCUSDT".into()]);
+    let mut client = crate::client::Client::new(dummy_client_cfg());
+    client.testing_set_domain_ready(true);
+    client.testing_set_server_token(1);
+    client.testing_set_peer_app_tokens(1, 1);
+    let btc = d.markets.get("BTCUSDT").unwrap();
+    let (_, actions) = session_packet(&mut d, &client, 9, 8, &[(0, 2.0)], 1000);
+    assert!(matches!(actions.as_slice(), [ActiveAction::RequestSessionProfits]));
+    assert_eq!(btc.session_profit(), None);
+    session_packet(&mut d, &client, 7, u16::MAX, &[(0, 3.0)], 1100);
+    session_packet(&mut d, &client, 9, 0, &[(0, 4.0)], 1200);
+    assert_eq!(btc.session_profit(), Some(4.0));
+    session_packet(&mut d, &client, 9, 1, &[(99, 1.0)], 1300);
+    let (events, _) = session_packet(&mut d, &client, 7, 0, &[(0, 4.0)], 1400);
+    assert!(matches!(
+        events.as_slice(),
+        [Event::Balance(BalanceEvent::SessionProfitsApplied { epoch: 0, .. })]
+    ));
+    session_packet(&mut d, &client, 9, 1, &[(0, 6.0)], 1500);
+    assert_eq!(btc.session_profit(), Some(6.0));
+    client.testing_set_server_token(2);
+    let (_, actions) = session_packet(&mut d, &client, 9, 2, &[(0, 7.0)], 1600);
+    assert!(matches!(actions.as_slice(), [ActiveAction::RequestSessionProfits]));
+    assert_eq!(btc.session_profit(), Some(6.0));
+    session_packet(&mut d, &client, 7, 0, &[], 1700);
+    assert_eq!(btc.session_profit(), Some(0.0));
+    client.testing_set_server_token(0);
+    session_packet(&mut d, &client, 7, 5, &[(0, 9.0)], 1800);
+    assert_eq!(btc.session_profit(), Some(0.0));
+    client.testing_set_server_token(3);
+    client.testing_set_peer_app_tokens(2, 1);
+    session_packet(&mut d, &client, 7, 0, &[(0, 9.0)], 1900);
+    assert_eq!(btc.session_profit(), None); // A new process must first refresh market indexes.
+    d.markets.apply_markets_indexes(vec!["BTCUSDT".into()]);
+    client.testing_set_peer_app_tokens(2, 2);
+    session_packet(&mut d, &client, 7, 0, &[(0, 9.0)], 2000);
+    assert_eq!(btc.session_profit(), Some(9.0));
+}
+
+#[test]
+fn initial_session_snapshot_and_repair_do_not_wait_for_later_init_steps() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    d.markets.apply_markets_indexes(vec!["BTCUSDT".into()]);
+    let mut client = crate::client::Client::new(dummy_client_cfg());
+    client.testing_set_server_token(1);
+    client.testing_set_domain_ready(false);
+    let (_, actions) = session_packet(&mut d, &client, 9, 1, &[(0, 5.0)], 1000);
+    client.apply_active_actions(actions);
+    let sent = drain_client_send_items(&client);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].cmd, Command::Balance.to_byte());
+    assert_eq!(sent[0].data[0], 10);
+    assert_eq!(sent[0].data.len(), 11);
+    assert!(sent[0].encrypted);
+    let (events, _) = session_packet(&mut d, &client, 7, 1, &[(0, 5.0)], 1100);
+    assert!(matches!(
+        events.as_slice(),
+        [Event::Balance(BalanceEvent::SessionProfitsApplied { .. })]
+    ));
+    assert_eq!(d.markets.get("BTCUSDT").unwrap().session_profit(), Some(5.0));
+    d.markets.mark_indexes_stale();
+    let (events, actions) = session_packet(&mut d, &client, 7, 2, &[(0, 7.0)], 1200);
+    assert!(events.is_empty() && actions.is_empty());
+    assert_eq!(d.markets.get("BTCUSDT").unwrap().session_profit(), Some(5.0));
+}
+
+#[test]
+fn session_digest_repairs_lost_last_update_before_balance_gate_and_throttles_requests() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    d.markets.apply_markets_indexes(vec!["BTCUSDT".into()]);
+    let mut client = crate::client::Client::new(dummy_client_cfg());
+    client.testing_set_domain_ready(true);
+    client.testing_set_server_token(1);
+    session_packet(&mut d, &client, 7, 4, &[(0, 3.0)], 1000);
+    d.balances.last_epoch = 100; // The digest is stale for balances, current for sessions.
+    let mut digest = crate::commands::balance::build_balance_digest(1, 99, 0);
+    digest[21..23].copy_from_slice(&5u16.to_le_bytes());
+    for (now, expected) in [(2000, 1), (6999, 0), (7000, 1), (1000, 1)] {
+        let mut events = Vec::new();
+        let mut actions = Vec::new();
+        dispatch_active_packet_for_test(
+            &mut d,
+            Command::Balance,
+            &digest,
+            now,
+            &mut events,
+            &client,
+            &mut actions,
+        );
+        assert_eq!(actions.len(), expected, "retry at {now}");
+        assert!(actions.iter().all(|a| matches!(a, ActiveAction::RequestSessionProfits)));
+    }
+    session_packet(&mut d, &client, 7, 5, &[], 8000);
+    let mut events = Vec::new();
+    let mut actions = Vec::new();
+    dispatch_active_packet_for_test(
+        &mut d,
+        Command::Balance,
+        &digest,
+        9000,
+        &mut events,
+        &client,
+        &mut actions,
+    );
+    assert!(actions.is_empty());
+    assert_eq!(d.markets.get("BTCUSDT").unwrap().session_profit(), Some(0.0));
+    digest.truncate(21); // Older cores have no session epoch tail.
+    d.markets.clear_session_profits_for_new_world();
+    dispatch_active_packet_for_test(
+        &mut d,
+        Command::Balance,
+        &digest,
+        10000,
+        &mut events,
+        &client,
+        &mut actions,
+    );
+    assert!(actions.is_empty());
 }

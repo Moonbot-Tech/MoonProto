@@ -1784,13 +1784,13 @@ fn new_market_after_session_profit_snapshot_starts_at_known_zero() {
         corr_markets: vec![],
     });
     st.apply_markets_indexes(vec!["BTCUSDT".to_string()]);
-    st.apply_session_profit_snapshot(&MarketSessionProfitUpdate {
+    st.apply_session_profit_state(&MarketSessionProfitUpdate {
         epoch: 1,
         items: vec![MarketSessionProfitItem {
             market_index: 0,
             session_profit: 2.0,
         }],
-    });
+    }, true, 1).unwrap();
 
     st.markets_list_refresh_needed = true;
     st.apply_markets_list(MarketsListResponse {
@@ -1812,13 +1812,13 @@ fn new_server_world_clears_session_profit_availability() {
         corr_markets: vec![],
     });
     st.apply_markets_indexes(vec!["BTCUSDT".to_string()]);
-    st.apply_session_profit_snapshot(&MarketSessionProfitUpdate {
+    st.apply_session_profit_state(&MarketSessionProfitUpdate {
         epoch: 10,
         items: vec![MarketSessionProfitItem {
             market_index: 0,
             session_profit: 3.0,
         }],
-    });
+    }, true, 1).unwrap();
 
     st.clear_session_profits_for_new_world();
 

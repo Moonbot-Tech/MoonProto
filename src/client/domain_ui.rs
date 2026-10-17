@@ -130,6 +130,13 @@ impl Client {
     }
 
     #[doc(hidden)]
+    /// Reset per-market sessions on the core.
+    pub(crate) fn ui_reset_session(&self, market_name: &str, clear_hourly: bool) {
+        let raw = crate::commands::ui::build_reset_session(rand::random(), market_name, clear_hourly);
+        self.send_typed_domain_cmd(raw, Command::UI);
+    }
+
+    #[doc(hidden)]
     /// Send `TResetProfitCommand` (UI CmdId=11, High) to reset profit counters.
     pub(crate) fn ui_reset_profit(&self, kind: u8) {
         let raw = crate::commands::ui::build_reset_profit(rand::random(), kind);
