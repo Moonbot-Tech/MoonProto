@@ -219,10 +219,10 @@ pub struct TradingSection {
     /// Buy price offset from ask, in price steps.
     pub x_ask: i32,
     /// Take-profit sell price offset from buy, in slider units.
-    /// Mirrors [`ClientSettingsCommand::x_sell`].
+    /// Mirrors [`ClientSettingsCommand::x_sell`](crate::ClientSettingsCommand::x_sell).
     pub x_sell: i32,
     /// Scalp/quick sell offset in slider units.
-    /// Mirrors [`ClientSettingsCommand::x_sell_scalp`].
+    /// Mirrors [`ClientSettingsCommand::x_sell_scalp`](crate::ClientSettingsCommand::x_sell_scalp).
     pub x_sell_scalp: i32,
     /// Order size as a share of the total trade balance, in thousandths:
     /// order = balance * play_with / 1000 (multiplied by leverage on futures).
@@ -253,25 +253,25 @@ pub struct TradingSection {
     /// `(value - 29)` minutes.
     pub auto_cancel_buy_order: i32,
     /// Volume-drop percentage that triggers panic sell (when enabled).
-    /// Mirrors [`ClientSettingsCommand::vol_drop_level`].
+    /// Mirrors [`ClientSettingsCommand::vol_drop_level`](crate::ClientSettingsCommand::vol_drop_level).
     pub vol_drop_level: i32,
     /// Price-drop percentage that triggers panic sell.
-    /// Mirrors [`ClientSettingsCommand::price_drop_level`].
+    /// Mirrors [`ClientSettingsCommand::price_drop_level`](crate::ClientSettingsCommand::price_drop_level).
     pub price_drop_level: f32,
     /// Panic-sell if volume drops below threshold.
     pub panic_if_vol_drop: bool,
     /// Panic-sell if price drops below threshold.
-    /// Mirrors [`ClientSettingsCommand::panic_if_price_drop`].
+    /// Mirrors [`ClientSettingsCommand::panic_if_price_drop`](crate::ClientSettingsCommand::panic_if_price_drop).
     pub panic_if_price_drop: bool,
     /// Manual mode — all autobuy sources are disabled.
     pub manual_mode: bool,
     /// Draw all pending buy orders on the chart (not only the selected one).
     pub draw_all_buy: bool,
     /// Enable trailing-stop logic globally.
-    /// Mirrors [`ClientSettingsCommand::trailing_stop`].
+    /// Mirrors [`ClientSettingsCommand::trailing_stop`](crate::ClientSettingsCommand::trailing_stop).
     pub trailing_stop: bool,
     /// Trailing-stop drop threshold (negative = below peak, e.g. -2.0 %).
-    /// Mirrors [`ClientSettingsCommand::trailing_drop`].
+    /// Mirrors [`ClientSettingsCommand::trailing_drop`](crate::ClientSettingsCommand::trailing_drop).
     pub trailing_drop: f32,
     /// Engine double-checks balance before placing a buy.
     pub engine_check_buy: bool,
@@ -282,10 +282,10 @@ pub struct TradingSection {
     /// Use the current ask price for buys (vs. last trade price).
     pub use_current_ask: bool,
     /// Global take-profit percentage.
-    /// Mirrors [`ClientSettingsCommand::g_take_profit`].
+    /// Mirrors [`ClientSettingsCommand::g_take_profit`](crate::ClientSettingsCommand::g_take_profit).
     pub g_take_profit: f64,
     /// Enable global take-profit.
-    /// Mirrors [`ClientSettingsCommand::use_g_take_profit`].
+    /// Mirrors [`ClientSettingsCommand::use_g_take_profit`](crate::ClientSettingsCommand::use_g_take_profit).
     pub use_g_take_profit: bool,
     /// Show order comments (strategy name / signal source) on the chart.
     pub show_order_comment: bool,
@@ -298,10 +298,10 @@ pub struct TradingSection {
     /// Require double-click on the Panic Sell button to activate.
     pub dbl_click_panic_sell: bool,
     /// Permanent coin blacklist text (one ticker per line).
-    /// Mirrors [`ClientSettingsCommand::coins_black_list_text`].
+    /// Mirrors [`ClientSettingsCommand::coins_black_list_text`](crate::ClientSettingsCommand::coins_black_list_text).
     pub coins_black_list_text: String,
     /// Enable permanent coin blacklist.
-    /// Mirrors [`ClientSettingsCommand::use_coins_black_list`].
+    /// Mirrors [`ClientSettingsCommand::use_coins_black_list`](crate::ClientSettingsCommand::use_coins_black_list).
     pub use_coins_black_list: bool,
     /// Hanging-position blacklist tickers (position control).
     pub h_pos_black_list_text: String,
@@ -349,7 +349,7 @@ pub struct TradingSection {
     /// Use x9 (9-grid) mode for order splitting.
     pub x9_mode: bool,
     /// Shared scale flag — multiply offsets by 10 when true.
-    /// Mirrors [`ClientSettingsCommand::x_tmode`].
+    /// Mirrors [`ClientSettingsCommand::x_tmode`](crate::ClientSettingsCommand::x_tmode).
     pub x_t_mode: bool,
     /// Runtime one-shot flag: the fixed-balance warning dialog has already
     /// been shown. Not a user setting.
@@ -357,10 +357,10 @@ pub struct TradingSection {
     /// Minimum gap between trades in milliseconds.
     pub trades_gap_time: i32,
     /// Use iceberg orders for buys.
-    /// Mirrors [`ClientSettingsCommand::buy_iceberg`].
+    /// Mirrors [`ClientSettingsCommand::buy_iceberg`](crate::ClientSettingsCommand::buy_iceberg).
     pub buy_iceberg: bool,
     /// Use iceberg orders for sells.
-    /// Mirrors [`ClientSettingsCommand::sell_iceberg`].
+    /// Mirrors [`ClientSettingsCommand::sell_iceberg`](crate::ClientSettingsCommand::sell_iceberg).
     pub sell_iceberg: bool,
     /// Iceberg slice size as a fraction of total.
     pub iceberg_step: f64,
@@ -426,7 +426,7 @@ pub struct TradingSection {
     /// Exclude blacklisted coins from delta calculations.
     pub exclude_black_list_delta: bool,
     /// Check and auto-close orphaned (zero-size) positions.
-    /// Mirrors [`ClientSettingsCommand::free_position_check`].
+    /// Mirrors [`ClientSettingsCommand::free_position_check`](crate::ClientSettingsCommand::free_position_check).
     pub free_position_check: bool,
 
     /// Order lifecycle watchdog settings.
@@ -437,10 +437,10 @@ pub struct TradingSection {
     /// Use pending-buy price instead of current ask for sell calculations.
     pub pending_buy_price: bool,
     /// Fixed sell mode toggle.
-    /// Mirrors [`ClientSettingsCommand::fixed_sell_mode`].
+    /// Mirrors [`ClientSettingsCommand::fixed_sell_mode`](crate::ClientSettingsCommand::fixed_sell_mode).
     pub fixed_sell_mode: bool,
     /// Fixed sell price value.
-    /// Mirrors [`ClientSettingsCommand::fixed_sell_price`].
+    /// Mirrors [`ClientSettingsCommand::fixed_sell_price`](crate::ClientSettingsCommand::fixed_sell_price).
     pub fixed_sell_price: f64,
     /// Enable futures-specific safety rules (position mode checks etc.).
     pub futures_rules: bool,
@@ -463,7 +463,7 @@ pub struct TradingSection {
     /// Leverage control expression (e.g. "1k def 5k BTC*").
     pub auto_lev_control: String,
     /// Use stop-market orders instead of stop-limit.
-    /// Mirrors [`ClientSettingsCommand::use_stop_market`].
+    /// Mirrors [`ClientSettingsCommand::use_stop_market`](crate::ClientSettingsCommand::use_stop_market).
     pub use_stop_market: bool,
     /// Auto-close zero-quantity ghost positions.
     pub auto_close_zero_pos: bool,
@@ -776,7 +776,7 @@ pub struct OrdersControl {
     /// Order protection bypass level (0 = enabled).
     pub ignore_protection: i32,
     /// Sign orders with HMAC for thin-client authentication.
-    /// Mirrors [`ClientSettingsCommand::sign_orders`].
+    /// Mirrors [`ClientSettingsCommand::sign_orders`](crate::ClientSettingsCommand::sign_orders).
     pub sign_orders: bool,
     /// Enable liquidation-price proximity control.
     pub liq_control: bool,
@@ -1341,12 +1341,12 @@ pub struct HotkeysConfig {
     /// Number of iceberg split parts.
     pub split_parts: u8,
     /// Selected sell-price preset slot (1-based).
-    /// Mirrors [`ClientSettingsCommand::sb_num`].
+    /// See [`crate::ClientSettingsCommand::selected_fixed_sell_slot`] for the compact settings view.
     pub sb_num: u8,
     /// Sell order hotkeys (6 slots).
     pub s_keys: [u16; 6],
-    /// Sell price presets as percentages (6 slots, e.g. [1,3,5,10,25,100]).
-    /// Mirrors [`ClientSettingsCommand::s_price`].
+    /// Sell price presets as percentages (6 slots, e.g. `[1,3,5,10,25,100]`).
+    /// Also available through [`crate::ClientSettingsCommand::fixed_sell_presets`].
     pub s_price: [f32; 6],
     /// Cancel buy hotkey.
     pub cancel_buy: u16,
