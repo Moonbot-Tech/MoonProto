@@ -1,5 +1,6 @@
 use super::protocol_core::ProtocolCore;
 use super::*;
+use crate::protocol::payload::Payload;
 
 struct RecvPhaseOutcome {
     drained_any: bool,
@@ -548,7 +549,7 @@ impl ProtocolCore<'_> {
             }
             return;
         };
-        self.finish_decoded_command(cmd, payload, timestamp_ms, sliced_stats, mode);
+        self.finish_decoded_command(cmd, payload.into(), timestamp_ms, sliced_stats, mode);
     }
 
     // parity: MoonBot MoonProtoCommon.pas:DataReadInt — same per-command decode
@@ -557,13 +558,14 @@ impl ProtocolCore<'_> {
     pub(crate) fn dispatch_command_owned(
         &mut self,
         raw_cmd: u8,
-        payload: Vec<u8>,
+        payload: impl Into<Payload>,
         recv_bytes: u64,
         timestamp_ms: i64,
         apply_recv_effects: bool,
         sliced_stats: Option<ReaderSlicedStats>,
         mode: &mut RunMode<'_>,
     ) {
+        let payload = payload.into();
         if apply_recv_effects {
             self.apply_recv_side_effects(recv_bytes, timestamp_ms);
         }
@@ -673,14 +675,14 @@ impl ProtocolCore<'_> {
                 };
                 item.payload = decompressed;
             }
-            self.finish_decoded_command(cmd, item.payload, item.timestamp_ms, None, mode);
+            self.finish_decoded_command(cmd, item.payload.into(), item.timestamp_ms, None, mode);
         }
     }
 
     fn finish_decoded_command(
         &mut self,
         cmd: u8,
-        payload: Vec<u8>,
+        mut payload: Payload,
         timestamp_ms: i64,
         sliced_stats: Option<ReaderSlicedStats>,
         mode: &mut RunMode<'_>,
@@ -696,17 +698,8 @@ impl ProtocolCore<'_> {
             _ => {}
         }
 
-        let api_pending_consumed = Client::dispatch_api_pending(
-            self.client.pending_api.api_pending.as_ref(),
-            cmd,
-            &payload,
-        );
-        let chunked_response_consumed = Client::dispatch_chunked_api_response(
-            &mut self.client.pending_api,
-            cmd,
-            &payload,
-            timestamp_ms,
-        );
+        let api_pending_consumed =
+            Client::dispatch_api_pending(self.client.pending_api.api_pending.as_ref(), cmd, &payload);
         #[cfg(any(test, feature = "diagnostics"))]
         if let Some(stats) = sliced_stats.as_ref() {
             self.client
@@ -754,7 +747,7 @@ impl ProtocolCore<'_> {
                 })
                 .unwrap_or_default();
             eprintln!(
-                "[mp-dataread] t={} cmd={:?} raw={} payload_len={} payload_hash={:016X} payload_head={} api_pending_consumed={} chunked_response_consumed={}{}{}{}{}",
+                "[mp-dataread] t={} cmd={:?} raw={} payload_len={} payload_hash={:016X} payload_head={} api_pending_consumed={}{}{}{}{}",
                 trace_elapsed_ms(),
                 cmd_kind,
                 cmd,
@@ -762,25 +755,26 @@ impl ProtocolCore<'_> {
                 fnv1a64(&payload),
                 trace_head(&payload, 16),
                 api_pending_consumed,
-                chunked_response_consumed,
                 sliced,
                 api,
                 strat,
                 ui
             );
         }
-        if let Some(stats) = sliced_stats {
-            self.apply_reader_sliced_stats(stats);
-        }
         #[cfg(any(test, feature = "diagnostics"))]
         let dispatch_api_method = metric_api_method(Command::from_byte(cmd), &payload);
         #[cfg(any(test, feature = "diagnostics"))]
         let dispatch_payload_len = payload.len();
+        let chunked_response_consumed =
+            Client::dispatch_chunked_api_response(&mut self.client.pending_api, cmd, &mut payload);
+        if let Some(stats) = sliced_stats {
+            self.apply_reader_sliced_stats(stats);
+        }
         #[cfg(any(test, feature = "diagnostics"))]
         let dispatch_start = crate::client::thread_cpu::ProfileTimer::start();
         self.client_new_data(
             cmd,
-            payload,
+            payload.into_vec(),
             api_pending_consumed,
             chunked_response_consumed,
             timestamp_ms,

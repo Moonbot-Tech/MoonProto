@@ -158,6 +158,21 @@ pub(crate) fn decrypt_with_cipher(cipher: &Aes128Gcm, data: &[u8], aad: &[u8]) -
     Some(buf)
 }
 
+/// Authenticate and decrypt the ciphertext in its receive allocation. The
+/// returned range excludes IV, tag, and padding; no bytes are shifted.
+pub(crate) fn decrypt_in_place(cipher: &Aes128Gcm, data: &mut [u8], aad: &[u8]) -> Option<std::ops::Range<usize>> {
+    let offset = IV_SIZE + GCM_TAG_SIZE;
+    if data.len() <= offset {
+        return None;
+    }
+    let (header, ciphertext) = data.split_at_mut(offset);
+    let nonce = Nonce::from_slice(&header[..IV_SIZE]);
+    let tag = Tag::from_slice(&header[IV_SIZE..]);
+    cipher.decrypt_in_place_detached(nonce, aad, ciphertext, tag).ok()?;
+    let padding = check_pkcs7_padding(ciphertext)?;
+    Some(offset..offset + ciphertext.len() - padding)
+}
+
 /// AES-128-GCM encrypt with MoonProto PKCS7 padding — convenience wrapper for the rare
 /// cases (handshake) where the cipher is not cached. Each call creates the cipher
 /// anew — acceptable only when called a handful of times per session.
@@ -207,6 +222,11 @@ mod tests {
             );
             let decrypted = decrypt(&key, &encrypted, &[]).unwrap();
             assert_eq!(decrypted, plaintext);
+            let mut owned = encrypted;
+            let ptr = owned.as_ptr();
+            let range = decrypt_in_place(&cipher_from_key(&key), &mut owned, &[]).unwrap();
+            assert_eq!(owned.as_ptr(), ptr);
+            assert_eq!(&owned[range], &plaintext);
         }
     }
 
@@ -227,6 +247,7 @@ mod tests {
         encrypted[IV_SIZE..cipher_offset].copy_from_slice(tag.as_slice());
 
         assert!(decrypt(&key, &encrypted, &[]).is_none());
+        assert!(decrypt_in_place(&cipher, &mut encrypted, &[]).is_none());
     }
 
     #[test]

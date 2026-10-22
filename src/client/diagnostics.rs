@@ -5,7 +5,6 @@
 )]
 
 use super::COMPRESSED_FLAG;
-use crate::commands::engine_api::parse_engine_response;
 use crate::commands::order_book::parse_order_book_packet_meta;
 use crate::protocol::{slicing, Command};
 use std::collections::HashMap;
@@ -87,6 +86,7 @@ pub struct ErrEmuSlicedDatagramDiagnostics {
     pub completed_strat_uid: Option<u64>,
     pub completed_api_method: Option<u8>,
     pub completed_api_uid: Option<u64>,
+    /// Success flag from the response header, not confirmation that its body was applied.
     pub completed_api_success: Option<bool>,
     pub completed_orderbook_market_index: Option<u16>,
     pub completed_orderbook_kind: Option<u8>,
@@ -330,7 +330,7 @@ impl ErrEmuDiagnosticsState {
                 .map(u64::from_le_bytes);
         }
         if Command::from_byte(cmd) == Command::API {
-            if let Some(resp) = parse_engine_response(payload) {
+            if let Some(resp) = super::Client::engine_response_meta_from_payload(payload) {
                 dg.completed_api_method = Some(resp.method.to_byte());
                 dg.completed_api_uid = Some(resp.request_uid);
                 dg.completed_api_success = Some(resp.success);

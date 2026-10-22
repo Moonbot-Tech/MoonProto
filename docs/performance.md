@@ -91,3 +91,62 @@ warmup. Socket wait CPU includes poller rearming and processing completions,
 excluding time spent asleep. Nested runtime and dispatch phases remain inclusive.
 Diagnostic Windows and Linux builds also name the runtime, lifecycle, and history threads
 for external per-thread CPU accounting. Normal builds contain no phase timers.
+
+## Bulk receive buffers
+
+Full candle snapshots and market-history archives retain their receive buffers
+through decryption, response parsing, and chunk collection. Consumed headers are
+excluded by slice boundaries. The existing archive worker reads the retained
+parts in chunk-index order directly; it no longer concatenates the archive.
+No application API changes are required.
+
+In-order UDP fragments reuse their assembled allocation. Reordered fragments
+still require one ordered materialization before authentication. Archive
+decompression and candle construction still allocate their output. The explicit
+flat-buffer helper available under `diagnostics` also still concatenates when
+called. These are not claims of zero-copy socket I/O.
+
+Duplicates keep the first accepted part and do not refresh request progress.
+Request UIDs remain independent, including interleaved transfers. The chunk
+collector no longer rejects an archive solely because its compressed parts
+exceed the former aggregate byte limit. Archive decoding retains its existing
+format and decompression checks. Diagnostic response metadata is read from the
+header without copying or decompressing the body; the diagnostic payload hash
+remains available and has a measurable cost.
+
+Run the local synthetic benchmark without a server or credentials:
+
+```sh
+cargo test --release --locked --lib bulk_receive_benchmark -- --ignored --nocapture
+```
+
+It uses the production assembly, decrypt, response, collection, and archive
+parser functions synchronously. The fixture is a 4,307,641-byte zlib archive,
+220 markets and 330,000 candles, delivered in two encrypted responses with 132
+UDP fragments each. The receive timer includes fragment storage, assembly,
+authentication/decryption, response parsing, and collection. The total also
+includes archive decompression, candle construction, and release of the archive
+buffers. Fixture generation, encryption, and result comparisons are outside the
+timers. Every result is compared with the reference rows. Socket I/O, scheduling
+between workers, and applying the parsed rows to retained state are outside this
+benchmark; use FireTest and `runtime_bench` for those paths.
+
+Measured on Windows x86-64 with Rust 1.96.0, GNU target, Release, on 2026-10-19.
+The baseline is public commit `c856037`. Values below are medians of three run
+medians, with five warmups and 60 measured iterations per case per run. Two
+additional before/after pairs used the preserved executables alternately, with
+no concurrent builds. Milliseconds are wall time. Mcycles are Windows thread
+CPU cycles, not milliseconds inferred from a clock frequency.
+
+| Fragment order | Diagnostic recorder | Receive ms, before → after | Receive Mcycles, before → after | Total ms, before → after | Total Mcycles, before → after |
+| --- | --- | ---: | ---: | ---: | ---: |
+| In order | Off | 9.204 → 4.543 | 34.580 → 17.173 | 32.337 → 27.654 | 120.587 → 103.524 |
+| Reversed | Off | 8.476 → 4.835 | 31.868 → 18.281 | 28.572 → 24.678 | 107.810 → 92.856 |
+| In order | On | 13.352 → 8.277 | 49.932 → 30.905 | 34.218 → 29.237 | 128.041 → 109.394 |
+| Reversed | On | 13.020 → 8.558 | 48.975 → 32.269 | 33.428 → 28.697 | 125.429 → 107.746 |
+
+The recorder switch isolates completion diagnostics inside the test harness;
+it is not a comparison of whole normal and diagnostic runtimes. With recording
+off, receive work fell by approximately 43–51%, while total processing fell by
+approximately 14%. These figures describe this fixture and machine, not network
+latency or a guaranteed improvement for every response size.

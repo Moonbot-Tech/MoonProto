@@ -3,7 +3,9 @@
 use super::{read_i32_zero_tail, read_u64_zero_tail, read_u8_zero_tail, EngineMethod};
 use crate::commands::inflate::{read_inflate_to_vec, MAX_INFLATE_OUTPUT_SIZE};
 use crate::commands::registry::read_string;
-use flate2::read::DeflateDecoder;
+use crate::protocol::payload::Payload;
+use flate2::bufread::DeflateDecoder;
+use std::ops::Range;
 
 /// Parsed Engine API response (`TEngineResponse`, server to client).
 #[derive(Debug, Clone)]
@@ -45,6 +47,28 @@ pub struct EngineResponse {
 ///
 /// Matches `MoonProtoEngineStruct.pas:364-403`.
 pub(crate) fn parse_engine_response(data: &[u8]) -> Option<EngineResponse> {
+    let (mut response, range, compressed) = parse_response_header(data)?;
+    response.data = decode_body(&data[range], compressed, response.request_uid)?;
+    Some(response)
+}
+
+/// On success, transfer the body out of the receive buffer. Failed parsing
+/// leaves the original bytes available to the ordinary delivery path.
+pub(crate) fn parse_engine_response_owned(payload: &mut Payload) -> Option<(EngineResponse, Payload)> {
+    let (response, range, compressed) = parse_response_header(payload)?;
+    let body = if compressed {
+        let body = decode_body(&payload[range], true, response.request_uid)?;
+        *payload = Payload::default();
+        body.into()
+    } else {
+        let mut body = std::mem::take(payload);
+        body.restrict(range);
+        body
+    };
+    Some((response, body))
+}
+
+fn parse_response_header(data: &[u8]) -> Option<(EngineResponse, Range<usize>, bool)> {
     if data.len() < 11 {
         return None;
     }
@@ -64,40 +88,31 @@ pub(crate) fn parse_engine_response(data: &[u8]) -> Option<EngineResponse> {
     let is_compressed = read_u8_zero_tail(data, &mut pos) != 0;
     let sz = read_i32_zero_tail(data, &mut pos);
 
-    let response_data = if sz > 0 {
-        let sz = sz as usize;
-        let available = data.len().saturating_sub(pos);
-        let end = pos + available.min(sz);
-        let raw = &data[pos..end];
-        if is_compressed {
-            let mut decoder = DeflateDecoder::new(raw);
-            match read_inflate_to_vec(
-                &mut decoder,
-                raw.len().saturating_mul(8),
-                MAX_INFLATE_OUTPUT_SIZE,
-            ) {
-                Ok(decompressed) => decompressed,
-                Err(e) => {
-                    log::warn!(target: "moonproto::engine_api",
-                        "DEFLATE decompress failed for EngineResponse uid={}: {}",
-                        request_uid, e);
-                    return None;
-                }
-            }
-        } else {
-            raw.to_vec()
-        }
-    } else {
-        Vec::new()
-    };
+    let end = pos + data.len().saturating_sub(pos).min(sz.max(0) as usize);
+    Some((
+        EngineResponse {
+            ver,
+            request_uid,
+            method,
+            success,
+            error_code,
+            error_msg,
+            data: Vec::new(),
+        },
+        pos..end,
+        is_compressed && sz > 0,
+    ))
+}
 
-    Some(EngineResponse {
-        ver,
-        request_uid,
-        method,
-        success,
-        error_code,
-        error_msg,
-        data: response_data,
-    })
+fn decode_body(raw: &[u8], compressed: bool, request_uid: u64) -> Option<Vec<u8>> {
+    if !compressed {
+        return Some(raw.to_vec());
+    }
+    let mut decoder = DeflateDecoder::new(raw);
+    read_inflate_to_vec(&mut decoder, raw.len().saturating_mul(8), MAX_INFLATE_OUTPUT_SIZE)
+        .map_err(|e| {
+            log::warn!(target: "moonproto::engine_api",
+                "DEFLATE decompress failed for EngineResponse uid={}: {}", request_uid, e);
+        })
+        .ok()
 }

@@ -7,6 +7,11 @@ use crate::events::EventDispatcher;
 use crate::transport::{outer_light_crypt, MacContext, ServerMsgHeader, TRANSPORT_VER};
 use std::net::UdpSocket;
 
+#[path = "bulk_receive_bench.rs"]
+mod bulk_receive_bench;
+#[path = "bulk_receive_tests.rs"]
+mod bulk_receive_tests;
+
 fn write_str8(out: &mut Vec<u8>, value: &str) {
     out.push(value.len() as u8);
     out.extend_from_slice(value.as_bytes());
@@ -957,8 +962,7 @@ fn market_history_chunks_keep_parallel_requests_separate() {
         assert!(Client::dispatch_chunked_api_response(
             &mut client.pending_api,
             Command::API.to_byte(),
-            &payload,
-            10,
+            &mut payload.into(),
         ));
     }
 

@@ -361,11 +361,11 @@ impl Client {
     pub(crate) fn decode_command_payload_owned(
         data_read_state: &mut DataReadState,
         raw_cmd: u8,
-        data: Vec<u8>,
-    ) -> Option<(u8, Vec<u8>)> {
+        data: impl Into<crate::protocol::payload::Payload>,
+    ) -> Option<(u8, crate::protocol::payload::Payload)> {
         let mut cmd = raw_cmd;
         let mut was_crypted = false;
-        let mut payload = data;
+        let mut payload = data.into();
 
         if Command::from_byte(cmd & 0x7F) == Command::Crypted {
             let DataReadState {
@@ -374,7 +374,7 @@ impl Client {
                 ..
             } = data_read_state;
             let decode_cipher = decode_cipher.as_ref()?;
-            let decrypted = crypted::decrypt_command(decode_cipher, &payload, slider);
+            let decrypted = crypted::decrypt_command_owned(decode_cipher, payload, slider);
             if let Some((inner_cmd, decrypted, _want_ack)) = decrypted {
                 cmd = inner_cmd;
                 payload = decrypted;
@@ -393,7 +393,7 @@ impl Client {
 
         if cmd & COMPRESSED_FLAG != 0 {
             cmd &= 0x7F;
-            payload = compression::mp_decompress(&payload)?;
+            payload = compression::mp_decompress(&payload)?.into();
         }
 
         // Public bulk API responses may be plaintext; everything else in API is

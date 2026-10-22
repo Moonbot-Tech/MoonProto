@@ -1,9 +1,7 @@
 use crate::commands::candles::{CandlesAggregator, RequestCandlesMarket};
-use crate::commands::chunked_response::ChunkedResponseAggregator;
+use crate::commands::chunked_response::{ChunkedPayload, ChunkedResponseAggregator};
 use crate::commands::engine_api::EngineMethod;
-use crate::commands::market_history::{
-    parse_market_history_archive, MarketHistoryArchive, MAX_MARKET_HISTORY_CHUNKED_BYTES,
-};
+use crate::commands::market_history::{parse_market_history_reader, MarketHistoryArchive};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
@@ -31,7 +29,7 @@ pub(crate) struct PartialCandles {
     pub(crate) aggregator: CandlesAggregator,
     pub(crate) progress: ChunkProgress,
     /// Completion sender used by the persistent candles parse worker after the
-    /// aggregator returns the merged zipped stream.
+    /// aggregator returns all parts of the zipped stream in index order.
     pub(crate) sender: mpsc::Sender<MergedCandles>,
 }
 
@@ -44,10 +42,7 @@ pub(crate) struct PartialMarketHistory {
 impl PartialMarketHistory {
     pub(crate) fn new(sender: mpsc::Sender<Result<MergedMarketHistory, String>>) -> Self {
         Self {
-            aggregator: ChunkedResponseAggregator::new(
-                "RequestMarketHistory",
-                MAX_MARKET_HISTORY_CHUNKED_BYTES,
-            ),
+            aggregator: ChunkedResponseAggregator::new("RequestMarketHistory"),
             progress: ChunkProgress::new(),
             sender,
         }
@@ -84,12 +79,12 @@ pub(crate) struct ChunkedApiParseQueue {
 enum ChunkedApiParseJob {
     Candles {
         uid: u64,
-        compressed: Vec<u8>,
+        compressed: ChunkedPayload,
         sender: mpsc::Sender<MergedCandles>,
     },
     MarketHistory {
         uid: u64,
-        compressed: Vec<u8>,
+        compressed: ChunkedPayload,
         sender: mpsc::Sender<Result<MergedMarketHistory, String>>,
     },
 }
@@ -120,12 +115,7 @@ impl ChunkedApiParseQueue {
         }
     }
 
-    pub(crate) fn submit_candles(
-        &self,
-        uid: u64,
-        compressed: Vec<u8>,
-        sender: mpsc::Sender<MergedCandles>,
-    ) {
+    pub(crate) fn submit_candles(&self, uid: u64, compressed: ChunkedPayload, sender: mpsc::Sender<MergedCandles>) {
         self.submit(ChunkedApiParseJob::Candles {
             uid,
             compressed,
@@ -136,7 +126,7 @@ impl ChunkedApiParseQueue {
     pub(crate) fn submit_market_history(
         &self,
         uid: u64,
-        compressed: Vec<u8>,
+        compressed: ChunkedPayload,
         sender: mpsc::Sender<Result<MergedMarketHistory, String>>,
     ) {
         self.submit(ChunkedApiParseJob::MarketHistory {
@@ -175,7 +165,7 @@ fn process_parse_job(job: ChunkedApiParseJob) {
             compressed,
             sender,
         } => {
-            let parsed = parse_market_history_archive(&compressed)
+            let parsed = parse_market_history_reader(compressed.reader(), compressed.len())
                 .map(|archive| MergedMarketHistory { uid, archive });
             let _ = sender.send(parsed);
         }
@@ -192,15 +182,15 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
-fn parse_and_send_candles(uid: u64, zipped_data: Vec<u8>, sender: mpsc::Sender<MergedCandles>) {
-    let markets = crate::commands::candles::parse_request_candles_data_response(&zipped_data)
+fn parse_and_send_candles(uid: u64, zipped_data: ChunkedPayload, sender: mpsc::Sender<MergedCandles>) {
+    let markets = crate::commands::candles::parse_request_candles_reader(zipped_data.reader(), zipped_data.len(), 0.0)
         .unwrap_or_else(|| {
             log::warn!(target: "moonproto::client",
                 "candles aggregator merged but strict parse failed for uid={} ({} bytes); trying Delphi partial apply",
                 uid,
                 zipped_data.len()
             );
-            crate::commands::candles::parse_request_candles_data_response_partial(&zipped_data)
+            crate::commands::candles::parse_request_candles_partial_reader(zipped_data.reader(), zipped_data.len(), 0.0)
                 .unwrap_or_default()
         });
     let _ = sender.send(MergedCandles {

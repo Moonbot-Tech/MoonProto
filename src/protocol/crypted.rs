@@ -1,3 +1,4 @@
+use super::payload::Payload;
 use super::slider::Slider;
 use crate::crypto;
 use crate::crypto::Aes128Gcm;
@@ -91,6 +92,33 @@ pub(crate) fn decrypt_command(
     // reuse the owned Vec, one fewer allocation per Crypted packet.
     plaintext.drain(..CRYPTO_HEADER_SIZE);
     Some((hdr.cmd, plaintext, hdr.want_ack))
+}
+
+pub(crate) fn decrypt_command_owned(
+    decode_cipher: &Aes128Gcm,
+    mut payload: Payload,
+    slider: &mut Slider,
+) -> Option<(u8, Payload, bool)> {
+    let range = match crypto::decrypt_in_place(decode_cipher, &mut payload, &[]) {
+        Some(range) => range,
+        None => {
+            warn!(target: "moonproto::crypted", "AES-GCM decrypt failed (tag mismatch)");
+            return None;
+        }
+    };
+    payload.restrict(range);
+    if payload.len() < CRYPTO_HEADER_SIZE {
+        warn!(target: "moonproto::crypted", "decrypted plaintext too short: {} < {}", payload.len(), CRYPTO_HEADER_SIZE);
+        return None;
+    }
+    let hdr = CryptoHeader::from_bytes(&payload)?;
+    if !slider.check_revd(hdr.msg_num) {
+        log::trace!(target: "moonproto::crypted",
+            "replay/duplicate detected: msg_num={} cmd={}", hdr.msg_num, hdr.cmd);
+        return None;
+    }
+    payload.restrict(CRYPTO_HEADER_SIZE..payload.len());
+    Some((hdr.cmd, payload, hdr.want_ack))
 }
 
 /// Decrypt an `MPC_Crypted` payload without touching the receive slider.

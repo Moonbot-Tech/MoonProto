@@ -260,13 +260,13 @@ fn aggregator_reports_stored_only_for_new_chunks() {
     let bad_index = vec![4u8, 0u8, 2u8, 0u8, 9, 9];
     let second = vec![1u8, 0u8, 2u8, 0u8, 3, 4];
 
-    assert_eq!(agg.on_chunk_result(&first), CandlesChunkResult::Stored);
-    assert_eq!(agg.on_chunk_result(&duplicate), CandlesChunkResult::Ignored);
-    assert_eq!(agg.on_chunk_result(&bad_index), CandlesChunkResult::Ignored);
-    assert_eq!(
-        agg.on_chunk_result(&second),
-        CandlesChunkResult::Complete(vec![1, 2, 3, 4])
-    );
+    assert_eq!(agg.on_chunk_result(first.into()), CandlesChunkResult::Stored);
+    assert_eq!(agg.on_chunk_result(duplicate.into()), CandlesChunkResult::Ignored);
+    assert_eq!(agg.on_chunk_result(bad_index.into()), CandlesChunkResult::Ignored);
+    let CandlesChunkResult::Complete(complete) = agg.on_chunk_result(second.into()) else {
+        panic!("all unique chunks must complete the response");
+    };
+    assert_eq!(complete.into_vec(), vec![1, 2, 3, 4]);
 }
 
 #[test]
@@ -281,12 +281,15 @@ fn aggregator_accepts_delphi_word_sized_chunk_total() {
 }
 
 #[test]
-fn aggregator_rejects_payload_above_domain_cap_before_copying_more() {
-    let mut agg = CandlesAggregator::with_max_payload_bytes(3);
-    let chunk = vec![0u8, 0u8, 1u8, 0u8, 1, 2, 3, 4];
-
-    assert_eq!(agg.on_chunk_result(&chunk), CandlesChunkResult::Ignored);
-    assert_eq!(agg.progress(), (0, 0));
+fn aggregator_accepts_owned_archive_above_former_128_mib_limit() {
+    let mut agg = CandlesAggregator::new();
+    let mut large = vec![0; 128 * 1024 * 1024 + 4];
+    large[2] = 2; // index 0 of 2
+    assert_eq!(agg.on_chunk_result(large.into()), CandlesChunkResult::Stored);
+    let CandlesChunkResult::Complete(archive) = agg.on_chunk_result(vec![1, 0, 2, 0, 42].into()) else {
+        panic!("owned chunks must not be discarded by an aggregate byte limit");
+    };
+    assert_eq!(archive.len(), 128 * 1024 * 1024 + 1);
 }
 
 #[test]

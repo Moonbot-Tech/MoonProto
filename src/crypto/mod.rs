@@ -34,7 +34,7 @@ mod keys;
 
 pub(crate) use aes_gcm::Aes128Gcm;
 pub(crate) use aes_gcm_codec::{
-    cipher_from_key, decrypt, decrypt_with_cipher, encrypt, encrypt_with_cipher, GCM_TAG_SIZE,
+    cipher_from_key, decrypt, decrypt_in_place, decrypt_with_cipher, encrypt, encrypt_with_cipher, GCM_TAG_SIZE,
     IV_SIZE, MAX_PKCS7_PADDING,
 };
 pub(crate) use keys::{

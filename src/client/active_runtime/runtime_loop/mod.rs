@@ -1581,7 +1581,11 @@ mod tests {
             error_msg: String::new(),
             data: vec![0, 0, 1, 0, 0],
         };
-        assert!(!Client::handle_market_history_chunk_in_pending(&mut client.pending_api, &old_response));
+        assert!(!Client::handle_market_history_chunk_in_pending(
+            &mut client.pending_api,
+            &old_response,
+            old_response.data.clone().into()
+        ));
         assert!(!poll_market_history(&mut client, &mut pending, &mut dispatcher));
         assert_eq!(pending.market_history.len(), 1);
         assert_eq!(pending.market_history[0].ticket.id(), 2);

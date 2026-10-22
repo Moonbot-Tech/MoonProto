@@ -8,7 +8,8 @@ use super::{
     REQUEST_CANDLES_MARKET_MIN_SIZE,
 };
 use crate::commands::inflate::read_inflate_to_vec;
-use flate2::read::ZlibDecoder;
+use flate2::bufread::ZlibDecoder;
+use std::io::BufRead;
 use zerocopy::FromBytes;
 /// Parse merged `emk_RequestCandlesData` bytes.
 ///
@@ -32,27 +33,28 @@ use zerocopy::FromBytes;
 /// server writes candle rows in its local Delphi time and puts that timezone
 /// offset into the stream; the normal parser converts rows to UTC instead of
 /// reproducing Delphi client's client-local `TDateTime` storage.
-pub fn parse_request_candles_data_response(
-    zipped_data: &[u8],
-) -> Option<Vec<RequestCandlesMarket>> {
+#[cfg(any(test, feature = "diagnostics"))]
+pub fn parse_request_candles_data_response(zipped_data: &[u8]) -> Option<Vec<RequestCandlesMarket>> {
     parse_request_candles_data_response_with_local_shift(zipped_data, 0.0)
 }
 
-// parity: MoonBot MoonProtoClient.pas:ProcessApiCommand (chunked emk_RequestCandlesData read)
-pub(crate) fn parse_request_candles_data_response_partial(
-    zipped_data: &[u8],
-) -> Option<Vec<RequestCandlesMarket>> {
-    parse_request_candles_data_response_partial_with_local_shift(zipped_data, 0.0)
-}
-
+#[cfg(any(test, feature = "diagnostics"))]
 pub(crate) fn parse_request_candles_data_response_with_local_shift(
     zipped_data: &[u8],
+    local_time_shift_minutes: f64,
+) -> Option<Vec<RequestCandlesMarket>> {
+    parse_request_candles_reader(zipped_data, zipped_data.len(), local_time_shift_minutes)
+}
+
+pub(crate) fn parse_request_candles_reader(
+    zipped_data: impl BufRead,
+    compressed_len: usize,
     local_time_shift_minutes: f64,
 ) -> Option<Vec<RequestCandlesMarket>> {
     let mut decoder = ZlibDecoder::new(zipped_data);
     let data = read_inflate_to_vec(
         &mut decoder,
-        zipped_data.len().saturating_mul(12),
+        compressed_len.saturating_mul(12),
         MAX_REQUEST_CANDLES_DECOMPRESSED_BYTES,
     )
     .map_err(|e| {
@@ -173,14 +175,23 @@ pub(crate) fn parse_request_candles_data_response_with_local_shift(
     Some(markets)
 }
 
+#[cfg(test)]
 pub(crate) fn parse_request_candles_data_response_partial_with_local_shift(
     zipped_data: &[u8],
+    local_time_shift_minutes: f64,
+) -> Option<Vec<RequestCandlesMarket>> {
+    parse_request_candles_partial_reader(zipped_data, zipped_data.len(), local_time_shift_minutes)
+}
+
+pub(crate) fn parse_request_candles_partial_reader(
+    zipped_data: impl BufRead,
+    compressed_len: usize,
     local_time_shift_minutes: f64,
 ) -> Option<Vec<RequestCandlesMarket>> {
     let mut decoder = ZlibDecoder::new(zipped_data);
     let data = read_inflate_to_vec(
         &mut decoder,
-        zipped_data.len().saturating_mul(12),
+        compressed_len.saturating_mul(12),
         MAX_REQUEST_CANDLES_DECOMPRESSED_BYTES,
     )
     .map_err(|e| {

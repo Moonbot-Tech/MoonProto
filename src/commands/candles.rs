@@ -23,6 +23,8 @@ use crate::time::MoonTime;
 mod aggregator;
 mod request_parser;
 
+pub(crate) use self::request_parser::{parse_request_candles_partial_reader, parse_request_candles_reader};
+
 #[doc(hidden)]
 #[cfg(feature = "diagnostics")]
 pub use self::aggregator::CandlesAggregator;
@@ -35,8 +37,8 @@ pub(crate) use self::aggregator::CandlesChunkResult;
 pub use self::request_parser::parse_request_candles_data_response;
 #[doc(hidden)]
 #[cfg(not(feature = "diagnostics"))]
+#[cfg(test)]
 pub(crate) use self::request_parser::parse_request_candles_data_response;
-pub(crate) use self::request_parser::parse_request_candles_data_response_partial;
 #[cfg(test)]
 pub(crate) use self::request_parser::{
     parse_request_candles_data_response_partial_with_local_shift,
@@ -50,12 +52,6 @@ pub(crate) use self::request_parser::{
 pub(crate) const MAX_REQUEST_CANDLES_PER_MARKET: usize = 25_000;
 pub(crate) const MAX_REQUEST_CANDLES_MARKETS: usize = 4_096;
 pub(crate) const MAX_REQUEST_CANDLES_TOTAL: usize = 10_000_000;
-
-/// Chunk payload is the zlib stream from `StoreCandlesToZip` after the outer
-/// EngineResponse layer is decoded. Live full snapshots are single-digit MiB;
-/// this leaves large future headroom while preventing a second GiB-scale copy
-/// during chunk aggregation.
-pub(crate) const MAX_REQUEST_CANDLES_CHUNKED_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
 
 /// Domain cap for the decompressed `StoreCandlesToZip` stream. The global
 /// inflate cap stays larger for strategy blobs; candle snapshots have known row

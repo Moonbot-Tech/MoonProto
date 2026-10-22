@@ -8,6 +8,7 @@
 pub(crate) mod control;
 pub(crate) mod crypted;
 pub(crate) mod handshake;
+pub(crate) mod payload;
 pub(crate) mod slicing;
 pub(crate) mod slider;
 

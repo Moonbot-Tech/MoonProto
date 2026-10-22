@@ -1,4 +1,6 @@
 use super::*;
+use crate::commands::engine_api::parse_engine_response_owned;
+use crate::protocol::payload::Payload;
 
 impl Client {
     pub(crate) fn engine_response_request_uid_from_payload(payload: &[u8]) -> Option<u64> {
@@ -122,12 +124,7 @@ impl Client {
         api_pending.dispatch_registered_with(uid, || parse_engine_response(payload))
     }
 
-    pub(crate) fn dispatch_chunked_api_response(
-        pending_api: &mut PendingApi,
-        cmd: u8,
-        payload: &[u8],
-        now_ms: i64,
-    ) -> bool {
+    pub(crate) fn dispatch_chunked_api_response(pending_api: &mut PendingApi, cmd: u8, payload: &mut Payload) -> bool {
         if cmd != Command::API.to_byte() {
             return false;
         }
@@ -147,15 +144,13 @@ impl Client {
         if !registered {
             return false;
         }
-        let Some(resp) = parse_engine_response(payload) else {
+        let Some((resp, body)) = parse_engine_response_owned(payload) else {
             return false;
         };
         match method {
-            EngineMethod::RequestCandlesData => {
-                Self::handle_candles_chunk_in_pending(pending_api, &resp, now_ms)
-            }
+            EngineMethod::RequestCandlesData => Self::handle_candles_chunk_in_pending(pending_api, &resp, body),
             EngineMethod::RequestMarketHistory => {
-                Self::handle_market_history_chunk_in_pending(pending_api, &resp)
+                Self::handle_market_history_chunk_in_pending(pending_api, &resp, body)
             }
             _ => false,
         }
@@ -201,27 +196,12 @@ impl Client {
         if chunked_response_consumed_by_reader {
             return Ok(());
         }
+        let mut payload = Payload::from(payload);
+        if Self::dispatch_chunked_api_response(&mut self.pending_api, Command::API.to_byte(), &mut payload) {
+            return Ok(());
+        }
+        let payload = payload.into_vec();
         if let Some(meta) = Self::engine_response_meta_from_payload(&payload) {
-            // Chunked responses keep their pending slot until every packet with
-            // the same UID has been assembled.
-            let now_ms = self.now_ms();
-            if meta.method == EngineMethod::RequestCandlesData {
-                if let Some(resp) = parse_engine_response(&payload) {
-                    if Self::handle_candles_chunk_in_pending(&mut self.pending_api, &resp, now_ms) {
-                        // Async consumers get the merged result via
-                        // Receiver<MergedCandles>. The active dispatcher only
-                        // sees completed/ordinary API payloads.
-                        return Ok(());
-                    }
-                }
-            }
-            if meta.method == EngineMethod::RequestMarketHistory {
-                if let Some(resp) = parse_engine_response(&payload) {
-                    if Self::handle_market_history_chunk_in_pending(&mut self.pending_api, &resp) {
-                        return Ok(());
-                    }
-                }
-            }
             // An unregistered response falls back to the ordinary pending/event
             // path used by fire-and-forget API callers.
 
@@ -268,7 +248,7 @@ impl Client {
     pub(crate) fn handle_candles_chunk_in_pending(
         pending_api: &mut PendingApi,
         resp: &EngineResponse,
-        _now_ms: i64,
+        body: Payload,
     ) -> bool {
         // Keep the slot until the response is complete or explicitly fails.
         if !resp.success {
@@ -287,7 +267,7 @@ impl Client {
             let Some(partial) = pending_api.pending_candles.get_mut(&uid) else {
                 return false;
             };
-            let chunk_result = partial.aggregator.on_chunk_result(&resp.data);
+            let chunk_result = partial.aggregator.on_chunk_result(body);
             if matches!(
                 chunk_result,
                 CandlesChunkResult::Stored | CandlesChunkResult::Complete(_)
@@ -309,6 +289,7 @@ impl Client {
     pub(crate) fn handle_market_history_chunk_in_pending(
         pending_api: &mut PendingApi,
         resp: &EngineResponse,
+        body: Payload,
     ) -> bool {
         let uid = resp.request_uid;
         if !resp.success {
@@ -326,7 +307,7 @@ impl Client {
             let Some(partial) = pending_api.pending_market_history.get_mut(&uid) else {
                 return false;
             };
-            let result = partial.aggregator.on_chunk(&resp.data);
+            let result = partial.aggregator.on_chunk(body);
             if matches!(
                 result,
                 crate::commands::chunked_response::ChunkedResponseResult::Stored

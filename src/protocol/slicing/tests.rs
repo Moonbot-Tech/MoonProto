@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn ordered_completion_transfers_the_fragment_buffer() {
+    let mut sliced = SlicedData::new(9, 2);
+    sliced.receive_piece(0, &[31, 1]);
+    sliced.receive_piece(1, &[]);
+    sliced.receive_piece(1, &[99]); // A duplicate cannot replace an empty first arrival.
+    sliced.receive_piece(2, &[2, 3]);
+    let ptr = sliced.block_payloads.as_ptr();
+    let (cmd, payload) = sliced.assemble().unwrap();
+    assert_eq!(cmd, 31);
+    assert_eq!(payload.as_ptr(), ptr.wrapping_add(1));
+    assert_eq!(&*payload, &[1, 2, 3]);
+}
+
+#[test]
 fn slice_header_and_ack_use_private_wire_structs() {
     assert_eq!(std::mem::size_of::<WireSliceHeader>(), 4);
     assert_eq!(SLICE_HEADER_SIZE, 4);

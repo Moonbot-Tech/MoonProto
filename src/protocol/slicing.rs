@@ -1,3 +1,4 @@
+use super::payload::Payload;
 /// Slicing engine — receive side.
 /// Byte-exact port of TMoonProtoSlicedData / OnNewSliced from MoonProtoIntStruct.pas.
 ///
@@ -131,7 +132,6 @@ pub(crate) struct SlicedData {
     // mutate the datagram payload or completion count.
     block_spans: [BlockSpan; 256],
     block_payloads: Vec<u8>,
-    max_present_block_num: u8,
     received_count: usize,
     completion_returned: bool,
     pub(crate) ack_flags: [u8; 32], // TMoonProtoFlag256 = set of byte = 32 bytes
@@ -146,7 +146,6 @@ impl SlicedData {
             blocks_count: count,
             block_spans: [BlockSpan::default(); 256],
             block_payloads: Vec::new(),
-            max_present_block_num: 0,
             received_count: 0,
             completion_returned: false,
             ack_flags: [0u8; 32],
@@ -169,7 +168,6 @@ impl SlicedData {
         if span.present {
             self.dup_count = self.dup_count.saturating_add(1);
         } else {
-            self.max_present_block_num = self.max_present_block_num.max(block_num);
             let offset = self.block_payloads.len();
             self.block_payloads.extend_from_slice(payload);
             *span = BlockSpan {
@@ -190,46 +188,37 @@ impl SlicedData {
     /// Reassemble the complete message. Returns (cmd, data).
     /// Block 0: SliceHeader already stripped by caller, first byte = cmd, rest = data.
     /// Block N>0: SliceHeader already stripped, all = data.
-    pub(crate) fn assemble(&self) -> Option<(u8, Vec<u8>)> {
+    pub(crate) fn assemble(&mut self) -> Option<(u8, Payload)> {
         if !self.is_complete() {
             return None;
         }
-        // Receive pieces live in one dense buffer plus BlockNum->span metadata.
-        // Iterating only to the highest received valid BlockNum preserves the
-        // same sorted-by-BlockNum effect as Delphi's sorted slice list without
-        // scanning unused slots.
-        let total = self.block_payloads.len();
-        let mut cmd = 0u8;
-        let mut saw_block_zero = false;
-        let mut result = Vec::with_capacity(total.saturating_sub(1));
-
-        for block_num in 0..=self.max_present_block_num {
-            let span = self.block_spans[block_num as usize];
-            if !span.present {
-                continue;
-            }
-            let offset = span.offset as usize;
-            let len = span.len as usize;
-            let data = &self.block_payloads[offset..offset + len];
-            if block_num == 0 {
-                saw_block_zero = true;
-                if let Some((&first, rest)) = data.split_first() {
-                    cmd = first; // TMoonProtoCommand byte
-                    result.extend_from_slice(rest);
-                }
-            } else {
-                result.extend_from_slice(data);
-            }
+        let first = self.block_spans[0];
+        let cmd = if first.len == 0 {
+            0
+        } else {
+            self.block_payloads[first.offset as usize]
+        };
+        let skip = usize::from(first.len != 0);
+        let mut offset = 0;
+        let ordered = self.block_spans[..self.blocks_count].iter().all(|span| {
+            let matches = span.offset as usize == offset;
+            offset += span.len as usize;
+            matches
+        });
+        if ordered {
+            let mut result = Payload::from(std::mem::take(&mut self.block_payloads));
+            result.restrict(skip..result.len());
+            return Some((cmd, result));
         }
-        if !saw_block_zero {
-            // Delphi `TMoonProtoSlicedData.GetReceivedStream` only updates Fcmd
-            // while iterating a BlockNum=0 slice. If malformed blocks complete a
-            // datagram without block 0, Fcmd stays at constructor default
-            // MPC_None, but BaseNet.OnNewSliced still calls DataReadInt and then
-            // removes the datagram from Receiving.
-            cmd = 0;
+        // Reordered fragments need one ordered materialization; duplicates
+        // retain the first accepted span. Fragment lengths need not be equal.
+        let mut result = Vec::with_capacity(self.block_payloads.len().saturating_sub(skip));
+        for (index, span) in self.block_spans[..self.blocks_count].iter().enumerate() {
+            let start = span.offset as usize + if index == 0 { skip } else { 0 };
+            let end = span.offset as usize + span.len as usize;
+            result.extend_from_slice(&self.block_payloads[start..end]);
         }
-        Some((cmd, result))
+        Some((cmd, result.into()))
     }
 }
 
@@ -244,7 +233,7 @@ struct WireSlicedAck {
 /// ACK256 wire format: 32 bytes flags + 2 bytes DatagramNum + 4 bytes Session = 38 bytes.
 pub(crate) const ACK256_WIRE_SIZE: usize = std::mem::size_of::<WireSlicedAck>();
 const _: [(); 38] = [(); ACK256_WIRE_SIZE];
-pub(crate) type SlicedPayloadResult = Option<(u16, u8, Vec<u8>, u8, usize)>;
+pub(crate) type SlicedPayloadResult = Option<(u16, u8, Payload, u8, usize)>;
 pub(crate) type SlicedProcessResult = (SlicedPayloadResult, [u8; ACK256_WIRE_SIZE]);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -19,8 +19,8 @@ pub use self::auth_check::{AuthCheckResponse, DexInfo, HyperDexIndex};
 pub(crate) use self::base_check::{exchange_type_flags, parse_base_check_response};
 pub use self::base_check::{ExchangeTypeMask, ServerInfo};
 pub use self::method::EngineMethod;
-pub(crate) use self::response::parse_engine_response;
 pub use self::response::EngineResponse;
+pub(crate) use self::response::{parse_engine_response, parse_engine_response_owned};
 
 #[cfg(test)]
 const DELPHI_UNIX_EPOCH_DAYS: f64 = 25_569.0;

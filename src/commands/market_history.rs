@@ -1,13 +1,13 @@
 //! `RequestMarketHistory` archive parser.
 
-use flate2::read::DeflateDecoder;
+use flate2::bufread::DeflateDecoder;
+use std::io::BufRead;
 
 use crate::state::{LastPricePoint, MiniCandle, TradeHistoryRow};
 use crate::MoonTime;
 
 use super::inflate::read_inflate_to_vec;
 
-pub(crate) const MAX_MARKET_HISTORY_CHUNKED_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_MARKET_HISTORY_DECOMPRESSED_BYTES: usize = 16 * 1024 * 1024;
 const MARKET_HISTORY_VERSION: u8 = 1;
 const TRADE_ROW_SIZE: usize = 16;
@@ -22,13 +22,19 @@ pub(crate) struct MarketHistoryArchive {
     pub(crate) liquidations: Vec<TradeHistoryRow>,
 }
 
-pub(crate) fn parse_market_history_archive(
-    compressed: &[u8],
+#[cfg(test)]
+pub(crate) fn parse_market_history_archive(compressed: &[u8]) -> Result<MarketHistoryArchive, String> {
+    parse_market_history_reader(compressed, compressed.len())
+}
+
+pub(crate) fn parse_market_history_reader(
+    compressed: impl BufRead,
+    compressed_len: usize,
 ) -> Result<MarketHistoryArchive, String> {
     let mut decoder = DeflateDecoder::new(compressed);
     let raw = read_inflate_to_vec(
         &mut decoder,
-        compressed.len().saturating_mul(4),
+        compressed_len.saturating_mul(4),
         MAX_MARKET_HISTORY_DECOMPRESSED_BYTES,
     )
     .map_err(|err| format!("market-history DEFLATE failed: {err}"))?;
