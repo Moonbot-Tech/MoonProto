@@ -160,6 +160,8 @@ pub struct StartupStatus {
     /// Number of local sockets closed for automatic reconnect/port rotation.
     pub local_port_change_count: u32,
     /// Last full client/core UDP round-trip time reported by Ping.
+    /// `None` before a Ping with a nonnegative RTT arrives; `Some(0)` preserves a received zero.
+    /// Zero can mean a rounded fast round trip or no measurement yet at the core.
     pub round_trip_ms: Option<u32>,
     /// Last path MTU reported by Ping.
     pub path_mtu_bytes: Option<u16>,

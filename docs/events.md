@@ -220,7 +220,12 @@ form a lower-rate profile; their `Option` fields are `None` until that profile
 first arrives and then keep the last reported values in
 `snapshot.kernel_health()`.
 
-The latency fields are also `None` until the core has a corresponding sample.
+`core_round_trip_ms` is `None` until a Ping with a valid nonnegative RTT arrives.
+`Some(0)` means a zero was received: it can be a fast round trip rounded to
+milliseconds or the core's initial value before its first measurement. The wire
+does not distinguish those two cases. `StartupStatus::round_trip_ms` preserves
+the same distinction between missing and zero. `order_api_latency_ms` remains
+`None` until the core reports a nonzero order API latency.
 
 `core_round_trip_ms` is the full smoothed RTT. Divide it by two only when a UI
 wants a one-way proximity estimate. `order_api_latency_ms` measures actual

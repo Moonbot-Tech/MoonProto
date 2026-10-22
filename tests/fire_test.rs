@@ -4326,6 +4326,8 @@ fn has_initial_health(st: &SessionStats) -> bool {
         && st.strategy_schema_fields > 0
         && st.kernel_health_events > 0
         && st.kernel_health.is_some_and(kernel_health_is_complete)
+        && st.profit_state_events > 0
+        && st.profit_state.is_some()
         && news_healthy
         && st.trades_apply > 0
         && st.orderbook_apply > 0
@@ -4530,7 +4532,20 @@ fn kernel_health_is_complete(health: KernelHealth) -> bool {
         && health.used_memory_mb.is_some()
         && health.free_physical_memory_mb.is_some()
         && health.logical_cpu_count.is_some_and(|cores| cores > 0)
-        && health.core_round_trip_ms.is_some_and(|ms| ms > 0)
+        && health.core_round_trip_ms.is_some()
+}
+
+#[test]
+fn kernel_health_gate_accepts_received_zero_rtt_but_requires_ping() {
+    let mut health = KernelHealth {
+        used_memory_mb: Some(0),
+        free_physical_memory_mb: Some(1024),
+        logical_cpu_count: Some(1),
+        ..Default::default()
+    };
+    assert!(!kernel_health_is_complete(health));
+    health.core_round_trip_ms = Some(0);
+    assert!(kernel_health_is_complete(health));
 }
 
 fn has_transfer_assets_refresh(st: &SessionStats) -> bool {
@@ -5338,6 +5353,8 @@ struct MoonClientPathStats {
     runtime_state_events: u64,
     runtime_state: Option<RuntimeStateProbe>,
     kernel_license_state: Option<KernelLicenseProbe>,
+    profit_state_events: u64,
+    profit_state: Option<ProfitStateCommand>,
     hyperliquid_request_limit_events: u64,
     hyperliquid_requests_left: Option<u64>,
     kernel_health_events: u64,
@@ -5537,6 +5554,9 @@ impl MoonClientPathStats {
             Event::Settings(SettingsEvent::HyperliquidRequestLimitUpdated) => {
                 self.hyperliquid_request_limit_events += 1;
             }
+            Event::Settings(SettingsEvent::ProfitStateUpdated) => {
+                self.profit_state_events += 1;
+            }
             Event::KernelHealth(health) => {
                 self.kernel_health_events += 1;
                 self.kernel_health = Some(*health);
@@ -5574,6 +5594,7 @@ impl MoonClientPathStats {
             .kernel_license_state
             .map(KernelLicenseProbe::from);
         self.hyperliquid_requests_left = snapshot.settings().hyperliquid_requests_left;
+        self.profit_state = snapshot.settings().profit_state;
         self.market_count = snapshot.markets().iter().count();
         self.session_profit_known_markets = snapshot
             .markets()
@@ -5675,6 +5696,8 @@ impl MoonClientPathStats {
             && self.lifecycle_ready
             && self.kernel_health_events > 0
             && self.kernel_health.is_some_and(kernel_health_is_complete)
+            && self.profit_state_events > 0
+            && self.profit_state.is_some()
             && self.session_profit_events > 0
             && self.market_count > 0
             && self.session_profit_known_markets == self.market_count
@@ -5794,10 +5817,12 @@ impl MoonClientPathStats {
             self.market_invariant_error.as_deref().unwrap_or("none")
         );
         format!(
-            "{base} kernel_license={:?} kernel_health_events={} kernel_health={:?} hl_limit_events={} hl_requests_left={:?} session_profit_events={} session_profit_last_full_nonzero={} session_profit_known={}/{} news_history_events={} news_history_count={} news_history_tags={} news_retained={} news_tags_present={}",
+            "{base} kernel_license={:?} kernel_health_events={} kernel_health={:?} profit_state_events={} profit_state={:?} hl_limit_events={} hl_requests_left={:?} session_profit_events={} session_profit_last_full_nonzero={} session_profit_known={}/{} news_history_events={} news_history_count={} news_history_tags={} news_retained={} news_tags_present={}",
             self.kernel_license_state,
             self.kernel_health_events,
             self.kernel_health,
+            self.profit_state_events,
+            self.profit_state,
             self.hyperliquid_request_limit_events,
             self.hyperliquid_requests_left,
             self.session_profit_events,
@@ -9967,12 +9992,15 @@ fn fire_test_active_library_health() {
         pump_pair_until(&mut a, &mut b, cfg.wait, "initial health", |a, b| {
             has_initial_health(a) && has_initial_health(b)
         }),
-        "FireTest initial health failed: both clients must receive trades and configured orderbook within {:?}",
+        "FireTest initial health failed: both clients must receive startup ProfitState, kernel telemetry, trades and configured orderbook within {:?}",
         cfg.wait
     );
     let a_initial = a.snapshot();
     let b_initial = b.snapshot();
     for stats in [&a_initial, &b_initial] {
+        println!("OK: FIRETEST {}: startup ProfitState events={} state={:?}",
+            stats.label, stats.profit_state_events,
+            stats.profit_state.expect("initial health must retain startup profit state"));
         let health = stats
             .kernel_health
             .expect("initial health must retain kernel telemetry");
@@ -10010,12 +10038,6 @@ fn fire_test_active_library_health() {
         println!(
             "FIRETEST NOTE initial health: LevManage was not observed on both clients (A={} B={}); live market/trades/orderbook health does not depend on this optional SrvConnect UI extension",
             a_initial.lev_manage_events, b_initial.lev_manage_events
-        );
-    }
-    if a_initial.profit_state_events == 0 || b_initial.profit_state_events == 0 {
-        println!(
-            "FIRETEST NOTE initial health: ProfitState was not observed on both clients (A={} B={}); live market/trades/orderbook health does not depend on this optional SrvConnect UI extension",
-            a_initial.profit_state_events, b_initial.profit_state_events
         );
     }
     assert!(

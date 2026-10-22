@@ -471,10 +471,6 @@ fn is_pre_init_state_payload(cmd: Command, payload: &[u8]) -> bool {
     ) || matches!(
         cmd,
         Command::UI
-            if crate::commands::ui::is_runtime_state_payload(payload)
-                || crate::commands::ui::is_kernel_license_state_payload(payload)
-                || crate::commands::ui::is_news_payload(payload)
-                || crate::commands::ui::is_problems_payload(payload)
-                || crate::commands::ui::is_telegram_state_payload(payload)
+            if crate::commands::ui::is_startup_state_payload(payload)
     )
 }

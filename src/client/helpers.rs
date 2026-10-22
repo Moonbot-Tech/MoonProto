@@ -104,12 +104,7 @@ pub(super) fn incoming_allowed_before_domain_ready(cmd: Command, data: &[u8]) ->
     ) || matches!(
         cmd,
         Command::UI
-            if crate::commands::ui::is_runtime_state_payload(data)
-                || crate::commands::ui::is_kernel_license_state_payload(data)
-                || crate::commands::ui::is_hl_request_limit_state_payload(data)
-                || crate::commands::ui::is_news_payload(data)
-                || crate::commands::ui::is_problems_payload(data)
-                || crate::commands::ui::is_telegram_state_payload(data)
+            if crate::commands::ui::is_startup_state_payload(data)
     )
 }
 

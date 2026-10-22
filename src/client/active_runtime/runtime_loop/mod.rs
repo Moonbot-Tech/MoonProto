@@ -475,9 +475,7 @@ impl StartupStatusPublisher {
         }
 
         if client.ping_count > 0 {
-            self.cached.round_trip_ms = u32::try_from(client.round_trip_delay)
-                .ok()
-                .filter(|value| *value > 0);
+            self.cached.round_trip_ms = u32::try_from(client.round_trip_delay).ok();
             self.cached.path_mtu_bytes = Some(client.actual_pmtu);
             self.cached.downlink_delivery_percent =
                 Some((client.rs * 100.0).round().clamp(0.0, 100.0) as u8);
@@ -629,6 +627,21 @@ mod startup_status_tests {
         assert_eq!(status.current_port_received_bytes, 222);
         assert!(status.completed_steps.contains(InitStep::StartupSnapshot));
         assert!(status.completed_steps.contains(InitStep::StartupEvents));
+    }
+
+    #[test]
+    fn startup_rtt_distinguishes_missing_ping_from_received_zero() {
+        let shared = Arc::new(RwLock::new(StartupStatus::default()));
+        let mut publisher = StartupStatusPublisher::new(Arc::clone(&shared));
+        let mut client = test_client();
+        publisher.publish(&client, None, true);
+        assert_eq!(shared.read().round_trip_ms, None);
+        for rtt in [0, 123, 0] {
+            client.ping_count += 1;
+            client.round_trip_delay = rtt;
+            publisher.publish(&client, None, true);
+            assert_eq!(shared.read().round_trip_ms, Some(rtt as u32));
+        }
     }
 }
 
@@ -1646,6 +1659,88 @@ mod tests {
         schedule_auto_candles_snapshot(&mut client, &mut pending);
         assert!(pending.auto_candles_requested);
         assert_eq!(pending.auto_candles.len(), 1);
+    }
+
+    #[test]
+    fn auto_candles_refusal_waits_for_existing_progress_deadline_before_retry() {
+        use crate::commands::engine_api::{EngineMethod, EngineResponse};
+
+        for partial_first in [false, true] {
+            let mut client = ready_client();
+            let mut dispatcher = crate::events::EventDispatcher::new();
+            let mut pending = RuntimePending::default();
+            handle_command(&mut client, &mut dispatcher, RuntimeCommand::SubscribeAllTrades(false), &mut pending);
+            let uid = pending.auto_candles[0].uid;
+            let mut response = EngineResponse {
+                ver: 1,
+                request_uid: uid,
+                method: EngineMethod::RequestCandlesData,
+                success: true,
+                error_code: 0,
+                error_msg: String::new(),
+                data: vec![0, 0, 2, 0, 1],
+            };
+            if partial_first {
+                // Only new chunks extend the original idle deadline, even if a refusal follows.
+                let old_deadline = Instant::now() + Duration::from_secs(1);
+                pending.auto_candles[0].deadline = old_deadline;
+                assert!(Client::handle_candles_chunk_in_pending(
+                    &mut client.pending_api, &response, response.data.clone().into(),
+                ));
+                assert!(!poll_auto_candles(&mut client, &mut pending, &mut dispatcher));
+                assert!(pending.auto_candles[0].deadline > old_deadline);
+                let deadline = pending.auto_candles[0].deadline;
+                assert!(Client::handle_candles_chunk_in_pending(
+                    &mut client.pending_api, &response, response.data.clone().into(),
+                ));
+                assert!(!poll_auto_candles(&mut client, &mut pending, &mut dispatcher));
+                assert_eq!(pending.auto_candles[0].deadline, deadline);
+            }
+            response.success = false;
+            response.data.clear();
+            assert!(Client::handle_candles_chunk_in_pending(
+                &mut client.pending_api, &response, Vec::new().into(),
+            ));
+            assert!(!client.pending_api.pending_candles.contains_key(&uid));
+            let deadline = pending.auto_candles[0].deadline;
+            client.take_send_queues_for_test();
+            for _ in 0..4 {
+                assert!(!poll_auto_candles(&mut client, &mut pending, &mut dispatcher));
+                schedule_auto_candles_snapshot(&mut client, &mut pending);
+                assert!(pending.auto_candles_requested);
+                assert_eq!(pending.auto_candles.len(), 1);
+                assert_eq!(pending.auto_candles[0].uid, uid);
+                assert_eq!(pending.auto_candles[0].deadline, deadline);
+                let (sliced, high, low) = client.take_send_queues_for_test();
+                assert!(sliced.is_empty() && high.is_empty() && low.is_empty());
+            }
+            assert!(dispatcher.take_queued_events().is_empty());
+            pending.auto_candles[0].deadline = Instant::now();
+            assert!(poll_auto_candles(&mut client, &mut pending, &mut dispatcher));
+            assert!(matches!(dispatcher.take_queued_events().as_slice(), [
+                crate::events::Event::CandlesSnapshot(crate::state::CandlesSnapshotEvent::Failed { request_uid: Some(id), .. })
+            ] if *id == uid));
+            assert!(!poll_auto_candles(&mut client, &mut pending, &mut dispatcher));
+            schedule_auto_candles_snapshot(&mut client, &mut pending);
+            assert_eq!(pending.auto_candles.len(), 1);
+            assert_ne!(pending.auto_candles[0].uid, uid);
+        }
+    }
+
+    #[test]
+    fn auto_candles_closed_request_is_cancelled_with_subscription() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        handle_command(&mut client, &mut dispatcher, RuntimeCommand::SubscribeAllTrades(false), &mut pending);
+        let uid = pending.auto_candles[0].uid;
+        client.pending_api.pending_candles.remove(&uid);
+        handle_command(&mut client, &mut dispatcher, RuntimeCommand::UnsubscribeAllTrades, &mut pending);
+        assert!(!pending.auto_candles_requested);
+        assert!(pending.auto_candles.is_empty());
+        assert!(!poll_auto_candles(&mut client, &mut pending, &mut dispatcher));
+        schedule_auto_candles_snapshot(&mut client, &mut pending);
+        assert!(pending.auto_candles.is_empty());
     }
 
     #[test]

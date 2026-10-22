@@ -11,6 +11,11 @@ application examples: some are intentionally low-level protocol guards.
 - `fire_test.rs` is the live health/stress gate. It also uses the public
   `MoonClient` path, but it enables diagnostics and destructive scenarios to
   prove protocol recovery, retained state, and CPU gates. It is not a sample app.
+  Both profiles require a startup report-profit event and retained profit state
+  on the public `MoonClient` path; the full profile also requires them on both
+  primary clients before mutation tests. Zero profit counters and a received
+  zero-millisecond RTT are valid. Missing startup profit or Ping telemetry fails
+  the health gate.
 
 ## Runtime / Protocol Unit Tests
 
@@ -19,6 +24,9 @@ reconnect, PMTU, send queues, pending Engine API routing, subscriptions, and
 wire-compatible timing/retry semantics. They may instantiate internal `Client` or
 `EventDispatcher` directly because their job is to lock down machine-effect
 parity, not to demonstrate the public API.
+Regression coverage includes encrypted startup profit delivery before Init,
+replays before/after Init, zero-valued live updates, candle refusal/retry timing
+with partial and duplicate chunks, cancellation, and missing versus zero RTT.
 
 Tests under `src/events/tests.rs` and `src/state/**/tests.rs` protect Active Lib
 state application and retained read models. Direct state/dispatcher use here is

@@ -120,40 +120,18 @@ const CMD_PROBLEMS_CLEAR: u8 = 34;
 const CMD_PROBLEMS_TEST: u8 = 35;
 const CMD_TELEGRAM_STATE: u8 = 36;
 
-#[inline]
-pub(crate) fn is_telegram_state_payload(payload: &[u8]) -> bool {
-    payload.first().copied() == Some(CMD_TELEGRAM_STATE)
-}
-
-#[inline]
-pub(crate) fn is_problems_payload(payload: &[u8]) -> bool {
-    matches!(
-        payload.first(),
-        Some(&CMD_PROBLEMS_STATE | &CMD_PROBLEM_NOTIFY)
-    )
-}
-
 pub(crate) const NEWS_RELAY_KIND_NEWS: u8 = 0;
 pub(crate) const NEWS_RELAY_KIND_TAGS: u8 = 1;
 
+/// State that can arrive from the core before the client's market initialization finishes.
+/// Keep both receive gates on the same list; these payloads do not require market indexes.
 #[inline]
-pub(crate) fn is_news_payload(payload: &[u8]) -> bool {
-    matches!(payload.first(), Some(&CMD_NEWS_RELAY | &CMD_NEWS_HISTORY))
-}
-
-#[inline]
-pub(crate) fn is_runtime_state_payload(payload: &[u8]) -> bool {
-    payload.first().copied() == Some(CMD_RUNTIME_STATE)
-}
-
-#[inline]
-pub(crate) fn is_kernel_license_state_payload(payload: &[u8]) -> bool {
-    payload.first().copied() == Some(CMD_KERNEL_LICENSE_STATE)
-}
-
-#[inline]
-pub(crate) fn is_hl_request_limit_state_payload(payload: &[u8]) -> bool {
-    payload.first().copied() == Some(CMD_HL_REQUEST_LIMIT_STATE)
+pub(crate) fn is_startup_state_payload(payload: &[u8]) -> bool {
+    matches!(payload.first(), Some(
+        &CMD_RUNTIME_STATE | &CMD_KERNEL_LICENSE_STATE | &CMD_PROFIT_STATE
+        | &CMD_NEWS_RELAY | &CMD_NEWS_HISTORY | &CMD_HL_REQUEST_LIMIT_STATE
+        | &CMD_PROBLEMS_STATE | &CMD_PROBLEM_NOTIFY | &CMD_TELEGRAM_STATE
+    ))
 }
 
 const LEV_CMD_VER: u8 = 1;

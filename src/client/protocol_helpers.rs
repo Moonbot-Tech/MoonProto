@@ -82,8 +82,7 @@ impl Client {
         self.rs = rs;
         self.kernel_health.process_cpu_percent = ping.moment_cpu_percent;
         self.kernel_health.system_cpu_percent = ping.total_cpu_percent;
-        self.kernel_health.core_round_trip_ms =
-            u32::try_from(ping.trip_delay).ok().filter(|&ms| ms != 0);
+        self.kernel_health.core_round_trip_ms = u32::try_from(ping.trip_delay).ok();
         self.kernel_health.order_api_latency_ms =
             (ping.global_timing_orders != 0).then_some(ping.global_timing_orders);
         if let Some(memory) = ping.memory {

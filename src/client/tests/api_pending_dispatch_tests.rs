@@ -176,6 +176,80 @@ fn build_strat_runtime_state_payload(running: bool) -> Vec<u8> {
     payload
 }
 
+#[test]
+fn startup_profit_state_survives_both_init_gates_and_rejects_replays() {
+    use crate::commands::ui::ProfitStateCommand;
+    use crate::state::SettingsEvent;
+
+    let mut client = Client::new(dummy_cfg());
+    let key = install_server_decode_session(&mut client, 42);
+    client.authorized = true;
+    client.auth_status = AuthStatus::AuthDone;
+    assert!(!client.is_domain_ready());
+    let mut dispatcher = EventDispatcher::new();
+    assert!(dispatcher.settings().profit_state.is_none());
+
+    let initial = ProfitStateCommand {
+        uid: 24,
+        rep_total_profit: 1.25,
+        rep_total_trades: 3,
+        rep_trades_total: -0.5,
+        rep_count_trades: 7,
+    };
+    let cleared = ProfitStateCommand { uid: 25, ..Default::default() };
+    let encode = |profit: ProfitStateCommand, sequence| {
+        let mut payload = vec![24];
+        payload.extend_from_slice(&crate::commands::registry::CURRENT_PROTO_CMD_VER.to_le_bytes());
+        payload.extend_from_slice(&profit.uid.to_le_bytes());
+        payload.extend_from_slice(&profit.rep_total_profit.to_le_bytes());
+        payload.extend_from_slice(&profit.rep_total_trades.to_le_bytes());
+        payload.extend_from_slice(&profit.rep_trades_total.to_le_bytes());
+        payload.extend_from_slice(&profit.rep_count_trades.to_le_bytes());
+        build_server_crypted_payload(&key, sequence, Command::UI, &payload)
+    };
+    let first = encode(initial, 1);
+    let second = encode(cleared, 2);
+    for (ready, wire, expected, events) in [
+        (false, &first, initial, 1),
+        (false, &first, initial, 0),
+        (true, &first, initial, 0),
+        (true, &second, cleared, 1),
+        (true, &first, cleared, 0),
+    ] {
+        client.testing_set_domain_ready(ready);
+        let mut mode = RunMode::new(&mut dispatcher);
+        ProtocolCore { client: &mut client }.dispatch_command_owned(
+            Command::Crypted.to_byte(), wire.clone(), 0, 100, false, None, &mut mode,
+        );
+        assert_eq!(mode.dispatcher.settings().profit_state, Some(expected));
+        assert_eq!(mode.dispatcher.take_queued_events().iter().filter(|event| {
+            matches!(event, crate::events::Event::Settings(SettingsEvent::ProfitStateUpdated))
+        }).count(), events);
+    }
+}
+
+#[test]
+fn startup_hyperliquid_limit_survives_both_init_gates() {
+    let mut client = Client::new(dummy_cfg());
+    let key = install_server_decode_session(&mut client, 42);
+    client.authorized = true;
+    client.auth_status = AuthStatus::AuthDone;
+    let mut payload = vec![30];
+    payload.extend_from_slice(&crate::commands::registry::CURRENT_PROTO_CMD_VER.to_le_bytes());
+    payload.extend_from_slice(&30u64.to_le_bytes());
+    payload.extend_from_slice(&1234u64.to_le_bytes());
+    let mut dispatcher = EventDispatcher::new();
+    let mut mode = RunMode::new(&mut dispatcher);
+    ProtocolCore { client: &mut client }.dispatch_command_owned(
+        Command::Crypted.to_byte(), build_server_crypted_payload(&key, 1, Command::UI, &payload),
+        0, 100, false, None, &mut mode,
+    );
+    assert_eq!(mode.dispatcher.settings().hyperliquid_requests_left, Some(1234));
+    assert!(mode.dispatcher.take_queued_events().iter().any(|event| {
+        matches!(event, crate::events::Event::Settings(crate::state::SettingsEvent::HyperliquidRequestLimitUpdated))
+    }));
+}
+
 fn drain_base_check_sends(client: &mut Client) -> usize {
     let mut count = 0;
     let (sliced, high, low) = client.take_send_queues_for_test();

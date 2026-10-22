@@ -246,20 +246,8 @@ pub(super) fn poll_auto_candles(
                     changed = true;
                 }
             }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                let uid = pending.auto_candles.swap_remove(i).uid;
-                client.pending_api.pending_candles.remove(&uid);
-                pending.auto_candles_requested = false;
-                dispatcher.queue_candles_snapshot_event(
-                    crate::state::CandlesSnapshotEvent::Failed {
-                        #[cfg(any(test, feature = "diagnostics"))]
-                        request_uid: Some(uid),
-                        error: "pending full candles receiver closed before response".to_string(),
-                    },
-                );
-                changed = true;
-            }
-            Err(mpsc::TryRecvError::Empty) => {
+            Err(error) => {
+                // A refusal closes the receiver, but must not shorten the existing retry wait.
                 if pending.auto_candles[i].deadline <= now {
                     let uid = pending.auto_candles.swap_remove(i).uid;
                     client.pending_api.pending_candles.remove(&uid);
@@ -268,7 +256,10 @@ pub(super) fn poll_auto_candles(
                         crate::state::CandlesSnapshotEvent::Failed {
                             #[cfg(any(test, feature = "diagnostics"))]
                             request_uid: Some(uid),
-                            error: "pending full candles request timed out".to_string(),
+                            error: match error {
+                                mpsc::TryRecvError::Disconnected => "pending full candles receiver closed before response",
+                                mpsc::TryRecvError::Empty => "pending full candles request timed out",
+                            }.to_string(),
                         },
                     );
                     changed = true;

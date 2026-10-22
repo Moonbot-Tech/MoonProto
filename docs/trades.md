@@ -28,6 +28,14 @@ is known, the library creates retained storage for all known markets and keeps
 trades, liquidations, market-maker rows, LastPrice rows, 5-minute candles,
 mini-candles, and derived analytics for them.
 
+In this mode, the library automatically requests the initial full 5-minute
+candle snapshot for the selected storage scope. If the core refuses it or the
+response channel closes, a retry still waits for the existing 15-second idle
+deadline from the request or the last new chunk. Duplicate chunks do not extend
+that deadline. Unsubscribing cancels the pending request; changing the scope
+starts a request for the new selection. After success, this startup load is
+one-shot for that scope, not a periodic refresh of the core's market table.
+
 `TradesOnly` is the exchange tape: time, price, quantity, and side. HyperLiquid
 wallet/taker addresses for the MoonBot heat-map are not fields on
 `TradeHistoryRow`. They arrive in market-maker sections when the stream is

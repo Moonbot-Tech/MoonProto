@@ -255,8 +255,16 @@ when it needs an active/expired indicator.
 ### Profit State
 
 The server sends the current report-profit counters after connect and whenever
-its calculated values change. Read them from `snapshot().settings().profit_state`
-after `SettingsEvent::ProfitStateUpdated`:
+its calculated values change.
+
+The library accepts the initial counters while market initialization is still
+in progress and retains them in published snapshots. No market subscription or
+profit reset is needed to receive them. `None` means no state has arrived;
+received counters may legitimately all be zero. Transport replays are rejected
+before state application, including repeats that arrive after Init completes.
+
+Read them from `snapshot().settings().profit_state` after
+`SettingsEvent::ProfitStateUpdated`:
 
 ```rust
 if let Some(profit) = client

@@ -17,9 +17,9 @@ pub struct KernelHealth {
     pub logical_cpu_count: Option<u8>,
     /// Smoothed full UDP round-trip time between this client and the core.
     ///
-    /// `None` until the core has measured at least one Ping response. A UI that
-    /// wants the same one-way estimate shown by MoonBot can display half of this
-    /// value.
+    /// `None` until a Ping with a nonnegative RTT is received. `Some(0)` is valid:
+    /// the core can round a fast round trip to zero or have no RTT sample yet.
+    /// A UI that wants MoonBot's one-way estimate can display half of this value.
     pub core_round_trip_ms: Option<u32>,
     /// Smoothed duration of order-related requests from the core to the exchange.
     ///

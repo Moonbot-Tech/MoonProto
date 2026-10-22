@@ -205,6 +205,18 @@ fn service_ping_payload(
     payload
 }
 
+#[test]
+fn ping_health_distinguishes_missing_ping_from_zero_rtt() {
+    let mut client = Client::new(dummy_cfg_for_server("127.0.0.1:3000".parse().unwrap()));
+    assert_eq!(client.kernel_health().core_round_trip_ms, None);
+    for (index, rtt) in [0, 123, 0].into_iter().enumerate() {
+        let payload = service_ping_payload(rtt, 1200, 0, 0, 255);
+        assert!(client.apply_ping_and_build_response(&payload, 45_000.0, 45_000.0, 0, 0).is_some());
+        assert_eq!(client.kernel_health().core_round_trip_ms, Some(rtt as u32));
+        assert_eq!(client.ping_count(), index as u32 + 1);
+    }
+}
+
 fn encrypted_server_hello(
     master_key: &MoonKey,
     cmd: Command,

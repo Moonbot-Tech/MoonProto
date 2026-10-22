@@ -100,6 +100,8 @@ counts, duplicate blocks, whole-step retries, reconnect count, RTT, PMTU, and
 the core's server-to-client delivery estimate. It also reports the current and
 previous local UDP ports, physical packet counts for the current socket, and
 the final send/receive counts captured before the latest automatic port change.
+RTT is optional until a valid Ping arrives. A received zero is `Some(0)`, not
+missing telemetry; it can mean rounding or an initial value at the core.
 The core may see different external ports when NAT remaps these local ports.
 These transport-wide counters describe the connection, not necessarily the
 response awaited by `current_step`, and never extend that step's deadline. The
