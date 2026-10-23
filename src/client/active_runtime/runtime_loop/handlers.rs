@@ -150,6 +150,10 @@ pub(super) fn handle_command(
             dispatcher.set_deltas_by_trades(enabled);
             false
         }
+        RuntimeCommand::MarketStatsRefresh => {
+            client.send_api_request(&crate::commands::engine_request::get_markets_stats());
+            false
+        }
         RuntimeCommand::BalanceRefresh => {
             client.balance_request_refresh();
             false

@@ -223,6 +223,7 @@ impl EventDispatcher {
             self.settings.problems = Default::default();
             self.settings.telegram = None;
             self.markets.clear_session_profits_for_new_world();
+            self.markets.clear_market_stats();
         }
         self.last_known_peer_app_token = ctx.peer_app_token;
 

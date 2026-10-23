@@ -161,6 +161,11 @@ pub(crate) fn get_markets_list() -> Vec<u8> {
     build_engine_request(EngineMethod::GetMarketsList, "", &[])
 }
 
+/// Request only the core-calculated volumes and deltas for all markets.
+pub(crate) fn get_markets_stats() -> Vec<u8> {
+    build_engine_request(EngineMethod::GetMarketsStats, "", &[])
+}
+
 /// `emk_GetMarketsIndexes`: fetch the server `mIndex -> market name` mapping.
 pub(crate) fn get_markets_indexes() -> Vec<u8> {
     build_engine_request(EngineMethod::GetMarketsIndexes, "", &[])

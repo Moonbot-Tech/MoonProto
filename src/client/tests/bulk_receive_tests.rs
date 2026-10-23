@@ -317,3 +317,40 @@ fn chunk_reader_restarts_for_partial_candles_fallback() {
     assert_eq!(result.markets[0].market_name, "BTCUSDT");
     assert_eq!(result.markets[0].candles_5m.len(), 1);
 }
+
+
+#[test]
+fn manual_stats_response_survives_compression_sliced_reordering_and_duplicates() {
+    let mut body = 64i32.to_le_bytes().to_vec();
+    for index in 0..64u16 {
+        body.extend_from_slice(&index.to_le_bytes());
+        for value in [24.5f64, 1.25] {
+            body.extend_from_slice(&(value * f64::from(index)).to_le_bytes());
+        }
+        for value in [1.5f32, 3.25, 5.75] {
+            body.extend_from_slice(&(value * f32::from(index)).to_le_bytes());
+        }
+        for value in [0.125f64, 1.25, 2.5, 3.75, 24.5] {
+            body.extend_from_slice(&(value * f64::from(index)).to_le_bytes());
+        }
+        body.extend_from_slice(&i32::from(index).to_le_bytes());
+    }
+    for compressed in [false, true] {
+        let mut client = Client::new(dummy_cfg());
+        let key = install_server_decode_session(&mut client, 42);
+        let data = if compressed { deflate_raw(&body) } else { body.clone() };
+        let mut response = build_engine_response_payload(123, EngineMethod::GetMarketsStats, &data);
+        response[27] = u8::from(compressed);
+        let wire = build_server_crypted_payload(&key, 1, Command::API, &response);
+        let assembled = reassemble(&wire, true);
+        let (_, decoded) = Client::decode_command_payload_owned(
+            &mut client.recv.data_read_state, Command::Crypted.to_byte(), assembled.into_vec(),
+        ).unwrap();
+        let parsed = parse_engine_response(&decoded).unwrap();
+        assert_eq!(parsed.method, EngineMethod::GetMarketsStats);
+        assert_eq!(parsed.data, body);
+        assert!(Client::decode_command_payload_owned(
+            &mut client.recv.data_read_state, Command::Crypted.to_byte(), wire,
+        ).is_none(), "replayed encrypted stats must not be delivered again");
+    }
+}

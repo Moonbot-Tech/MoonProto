@@ -8,6 +8,7 @@ MoonProto API. Packet structs and command IDs are not application API.
 | Feature | Meaning | API |
 |---|---|---|
 | Market search | Find a market once and keep its stable handle for chart and action code. | `snapshot.markets().find(...)`; keep the returned `MarketHandle`. |
+| Core markets-table volumes and deltas | Manual snapshot for all markets, independent of trade subscriptions. | `client.markets().refresh_stats()`; `market.stats()`. |
 | Prices and funding | Current bid, ask, mark price, funding rate, and funding time. | `market.price()`; use typed time helpers instead of raw wire values. |
 | Position overlay | Current position size/price, liquidation price, leverage, margin mode, and PnL for the selected market. | `market.balance_position()`. |
 | Unprotected position | Whether the retained position is not fully covered by active non-emulator close orders. | `snapshot.position_protection_for(&market)`. |

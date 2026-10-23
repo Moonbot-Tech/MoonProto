@@ -714,6 +714,22 @@ impl MoonStreams<'_> {
     }
 }
 
+/// Manual market statistics refresh handle.
+pub struct MoonMarkets<'a> {
+    pub(super) client: &'a MoonClient,
+}
+
+impl MoonMarkets<'_> {
+    /// Request core-calculated volumes and deltas for every market, without subscribing to trades.
+    ///
+    /// Returns after queueing the request. Completion emits `MarketsEvent::StatsUpdated`
+    /// or `StatsRefreshFailed`; read the values through `MarketHandle::stats()`.
+    /// There is no automatic refresh on startup, a timer, or reconnect.
+    pub fn refresh_stats(&self) -> Result<(), MoonClientError> {
+        self.client.send_no_reply(RuntimeCommand::MarketStatsRefresh)
+    }
+}
+
 /// Balance, position, and transferable-assets refresh handle.
 pub struct MoonBalances<'a> {
     pub(super) client: &'a MoonClient,

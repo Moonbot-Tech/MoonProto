@@ -687,6 +687,7 @@ fn event_market(name: &str) -> Market {
         balance_hash: 0,
         last_balance_epoch: 0,
         session_profit: None,
+        stats: None,
         trade_tail: Default::default(),
         price: Default::default(),
         delta_state: Default::default(),
@@ -4928,4 +4929,62 @@ fn session_digest_repairs_lost_last_update_before_balance_gate_and_throttles_req
         &mut actions,
     );
     assert!(actions.is_empty());
+}
+
+
+#[test]
+fn api_manual_stats_emit_completion_or_failure_without_trade_subscription() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    let mut data = vec![0; 78];
+    data[..4].copy_from_slice(&1i32.to_le_bytes());
+    let payload = api_response_payload_ver(3, EngineMethod::GetMarketsStats, &data);
+    let events = d.dispatch(Command::API, &payload, 1000);
+    assert!(events.iter().any(|e| matches!(e,
+        Event::Markets(MarketsEvent::StatsUpdated { count: 1 }))));
+    let btc = d.markets.get("BTCUSDT").unwrap();
+    assert_eq!(btc.stats(), Some(crate::state::MarketStats::default()));
+
+    let mut rejected = api_response_payload_ver(3, EngineMethod::GetMarketsStats, &[]);
+    rejected[20] = 0; // Success=false, as an old core's Unknown method response.
+    rejected[21..25].copy_from_slice(&400i32.to_le_bytes());
+    let events = d.dispatch(Command::API, &rejected, 2000);
+    assert!(events.iter().any(|e| matches!(e,
+        Event::Markets(MarketsEvent::StatsRefreshFailed { message }) if message.starts_with("400:"))));
+    assert_eq!(btc.stats(), Some(crate::state::MarketStats::default()));
+
+    let bad = api_response_payload_ver(3, EngineMethod::GetMarketsStats, &[1]);
+    assert!(d.dispatch(Command::API, &bad, 3000).iter().any(|e| matches!(e,
+        Event::Markets(MarketsEvent::StatsRefreshFailed { .. }))));
+    assert_eq!(btc.stats(), Some(crate::state::MarketStats::default()));
+}
+
+
+#[test]
+fn manual_stats_survive_transport_reconnect_but_clear_on_new_core() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    let btc = d.markets.get("BTCUSDT").unwrap();
+    let mut client = crate::client::Client::new(dummy_client_cfg());
+    client.testing_set_domain_ready(true);
+    client.testing_set_server_token(1);
+    client.testing_set_peer_app_tokens(1, 1);
+    let mut body = vec![0; 78];
+    body[..4].copy_from_slice(&1i32.to_le_bytes());
+    let payload = api_response_payload_ver(3, EngineMethod::GetMarketsStats, &body);
+    let mut events = Vec::new();
+    let mut actions = Vec::new();
+    dispatch_active_packet_for_test(&mut d, Command::API, &payload, 1000, &mut events, &client, &mut actions);
+    assert!(btc.stats().is_some());
+    client.testing_set_server_token(2);
+    session_packet(&mut d, &client, 7, 0, &[], 1100);
+    assert!(btc.stats().is_some(), "same core retains the last manual snapshot");
+    client.testing_set_peer_app_tokens(2, 1);
+    dispatch_active_packet_for_test(&mut d, Command::API, &payload, 1200, &mut events, &client, &mut actions);
+    assert_eq!(btc.stats(), None, "a new core clears the old values and cannot use stale indexes");
+    assert!(events.iter().any(|e| matches!(e, Event::Markets(MarketsEvent::StatsRefreshFailed { .. }))));
+    d.markets.apply_markets_indexes(vec!["BTCUSDT".into()]);
+    client.testing_set_peer_app_tokens(2, 2);
+    dispatch_active_packet_for_test(&mut d, Command::API, &payload, 1300, &mut events, &client, &mut actions);
+    assert!(btc.stats().is_some());
 }

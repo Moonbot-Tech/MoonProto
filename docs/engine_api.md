@@ -11,6 +11,7 @@ Use these non-blocking calls from UI/application code:
 
 | Need | Call | Read result from |
 |---|---|---|
+| Core volumes and deltas for all markets | `markets().refresh_stats()` | `Event::Markets`, `market.stats()`; [manual refresh](markets.md#manual-volumes-and-deltas) |
 | Balances/positions | `balances().refresh()` | `Event::Balance`, `snapshot().balances()`, `snapshot().markets()` |
 | Hedge mode | `account().refresh_hedge_mode()` | `Event::Account`, `snapshot().account().hedge_mode()` |
 | API-key expiration | `account().refresh_api_expiration_time()` | `Event::Account`, `snapshot().account().api_expiration()` |

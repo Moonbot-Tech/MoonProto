@@ -114,6 +114,9 @@ impl EngineMethod {
     /// EngineResponse packets with the same request UID.
     pub const RequestMarketHistory: Self = Self(34);
 
+    /// `GetMarketsStats`: manually fetch core-calculated volumes and deltas for all markets.
+    pub const GetMarketsStats: Self = Self(35);
+
     /// Preserve the raw wire ordinal so future methods remain parseable.
     #[doc(hidden)]
     pub const fn from_byte(b: u8) -> Self {
@@ -126,7 +129,7 @@ impl EngineMethod {
     }
 
     pub const fn is_known(self) -> bool {
-        self.0 <= Self::RequestMarketHistory.0
+        self.0 <= Self::GetMarketsStats.0
     }
 
     pub const fn name(self) -> &'static str {
@@ -166,6 +169,7 @@ impl EngineMethod {
             Self::SubscribeCandles => "SubscribeCandles",
             Self::UnsubscribeCandles => "UnsubscribeCandles",
             Self::RequestMarketHistory => "RequestMarketHistory",
+            Self::GetMarketsStats => "GetMarketsStats",
             _ => "Unknown",
         }
     }
@@ -201,6 +205,7 @@ mod tests {
             EngineMethod::from_byte(34),
             EngineMethod::RequestMarketHistory
         );
+        assert_eq!(EngineMethod::from_byte(35), EngineMethod::GetMarketsStats);
         assert_eq!(EngineMethod::from_byte(0), EngineMethod::None);
     }
 

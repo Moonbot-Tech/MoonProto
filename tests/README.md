@@ -16,6 +16,11 @@ application examples: some are intentionally low-level protocol guards.
   primary clients before mutation tests. Zero profit counters and a received
   zero-millisecond RTT are valid. Missing startup profit or Ping telemetry fails
   the health gate.
+  Both profiles also require two manual volumes/deltas refreshes on a separate
+  client with no trade, orderbook, or candle subscription. Every retained market
+  must receive finite values, the response must contain nonzero core volumes
+  and deltas, and refreshes must leave subscriptions unchanged. Startup must not
+  fetch these statistics automatically.
 
 ## Runtime / Protocol Unit Tests
 

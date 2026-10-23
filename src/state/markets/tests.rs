@@ -78,6 +78,7 @@ fn mk_market(name: &str, idx: u16) -> Market {
         balance_hash: 0,
         last_balance_epoch: 0,
         session_profit: None,
+        stats: None,
         trade_tail: Default::default(),
         price: Default::default(),
         delta_state: Default::default(),
@@ -1856,4 +1857,118 @@ fn session_profit_usd_uses_retained_base_currency_price() {
             usd: 90.0,
         })
     );
+}
+
+
+// Mirrors the packed core row's primitive sequence, with distinct values at every offset.
+fn stats_payload(indices: &[u16]) -> Vec<u8> {
+    let mut data = (indices.len() as i32).to_le_bytes().to_vec();
+    for &index in indices {
+        data.extend_from_slice(&index.to_le_bytes());
+        for value in [2400.5f64 + f64::from(index), 100.25] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [1.5f32, 3.25, 5.75] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [0.125f64, 1.25, 2.5, 3.75, 24.5] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        data.extend_from_slice(&72i32.to_le_bytes());
+    }
+    assert_eq!(data.len(), 4 + 74 * indices.len());
+    data
+}
+
+fn stats_state() -> MarketsState {
+    let mut state = MarketsState::new();
+    state.apply_markets_list(MarketsListResponse {
+        markets: vec![mk_market("BTC", 0), mk_market("ETH", 1)],
+        corr_markets: vec![],
+    });
+    state
+}
+
+#[test]
+fn manual_stats_follow_server_indexes_and_preserve_handles() {
+    let mut state = stats_state();
+    let btc = state.get("BTC").unwrap();
+    assert_eq!(btc.stats(), None);
+    state.apply_markets_indexes(vec!["ETH".into(), "BTC".into()]);
+    // Packet row order and local object order both differ from server index order.
+    let data = stats_payload(&[1, 0]);
+    assert_eq!(state.apply_market_stats_payload(&data), Ok(2));
+    assert_eq!(btc.stats(), Some(MarketStats {
+        volume_24h: 2401.5, volume_1h: 100.25,
+        volume_1m: 1.5, volume_3m: 3.25, volume_5m: 5.75,
+        delta_1m: 0.125, delta_15m: 1.25, delta_1h: 2.5,
+        delta_3h: 3.75, delta_24h: 24.5, delta_72h: 72,
+    }));
+    assert_eq!(state.get("ETH").unwrap().stats().unwrap().volume_24h, 2400.5);
+    assert_eq!(btc.with(|market| market.volume), 2401.5);
+    // A repeated complete answer replaces values without adding market objects.
+    let before = btc.stats();
+    assert_eq!(state.apply_market_stats_payload(&data), Ok(2));
+    assert_eq!(btc.stats(), before);
+    assert!(btc.ptr_eq(&state.get("BTC").unwrap()));
+    assert_eq!(state.market_count(), 2);
+}
+
+#[test]
+fn manual_stats_reject_malformed_or_unknown_rows_before_any_mutation() {
+    let mut state = stats_state();
+    let good = stats_payload(&[0, 1]);
+    state.apply_market_stats_payload(&good).unwrap();
+    let before = state.get("BTC").unwrap().stats();
+    for end in 0..good.len() {
+        assert!(state.apply_market_stats_payload(&good[..end]).is_err());
+        assert_eq!(state.get("BTC").unwrap().stats(), before);
+    }
+    let mut extra = good.clone();
+    extra.push(0);
+    assert!(state.apply_market_stats_payload(&extra).is_err());
+    for count in [-1i32, i32::MAX] {
+        let mut bad = good.clone();
+        bad[..4].copy_from_slice(&count.to_le_bytes());
+        assert!(state.apply_market_stats_payload(&bad).is_err());
+    }
+    let mut unknown = stats_payload(&[0, 2]);
+    unknown[6..14].copy_from_slice(&999.0f64.to_le_bytes());
+    assert!(state.apply_market_stats_payload(&unknown).is_err());
+    assert_eq!(state.get("BTC").unwrap().stats(), before);
+    assert!(state.markets_list_refresh_needed);
+}
+
+#[test]
+fn manual_stats_distinguish_zero_and_gate_stale_indexes() {
+    let mut state = stats_state();
+    let btc = state.get("BTC").unwrap();
+    let mut zero = vec![0u8; 78];
+    zero[..4].copy_from_slice(&1i32.to_le_bytes());
+    state.apply_market_stats_payload(&zero).unwrap();
+    assert_eq!(btc.stats(), Some(MarketStats::default()));
+    state.mark_indexes_stale();
+    assert!(state.apply_market_stats_payload(&stats_payload(&[0])).is_err());
+    assert_eq!(btc.stats(), Some(MarketStats::default()));
+    state.clear_market_stats();
+    assert_eq!(btc.stats(), None);
+    state.apply_markets_indexes(vec!["ETH".into(), "BTC".into()]);
+    state.apply_market_stats_payload(&stats_payload(&[1])).unwrap();
+    assert_eq!(btc.stats().unwrap().volume_24h, 2401.5);
+    assert_eq!(state.get("ETH").unwrap().stats(), None);
+    assert_eq!(state.apply_market_stats_payload(&0i32.to_le_bytes()), Ok(0));
+}
+
+#[test]
+fn listing_refresh_preserves_manual_stats_on_existing_objects() {
+    let mut state = stats_state();
+    state.apply_market_stats_payload(&stats_payload(&[0, 1])).unwrap();
+    let retained = state.get("BTC").unwrap();
+    let stats = retained.stats();
+    state.apply_markets_list(MarketsListResponse {
+        markets: vec![mk_market("BTC", 0), mk_market("ETH", 1)],
+        corr_markets: vec![],
+    });
+    assert!(retained.ptr_eq(&state.get("BTC").unwrap()));
+    assert_eq!(retained.stats(), stats);
 }

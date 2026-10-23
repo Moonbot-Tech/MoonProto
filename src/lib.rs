@@ -171,7 +171,7 @@ pub use client::{
     ConnectError, EngineActionTicket, InitConfig, InitError, InitStep, InitStepSet,
     InitialStrategies, LifecycleEvent, LiveCandleSubscription, MoonAccount, MoonBalances,
     MoonCandles, MoonChartAlerts, MoonChartText, MoonClient, MoonClientError, MoonClientEvent,
-    MoonClientSnapshot, MoonEmulator, MoonEventQueue, MoonEventSink, MoonHistory, MoonOrders,
+    MoonClientSnapshot, MoonEmulator, MoonEventQueue, MoonEventSink, MoonHistory, MoonMarkets, MoonOrders,
     MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTelegram, MoonTrade, NewOrderParams,
     NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams, RefreshConfig, SellOrderParams,
     SplitOrderParams, StartupState, StartupStatus, TradeContextError, TradesStreamMode,
@@ -234,7 +234,7 @@ pub use protocol::Command;
 pub use state::{
     ChartAlertEvent, ChartAlertObject, ChartAlertsState, ChartTextSnapshot, ChartTextState,
     CoinCardCandlesEvent, CoinCardCandlesState, ExchangeKind, KernelHealth,
-    MarketHistoryApplySummary, MarketHistoryCounts, MarketHistoryEvent, MarketHistoryTicket,
+    MarketHistoryApplySummary, MarketHistoryCounts, MarketHistoryEvent, MarketHistoryTicket, MarketStats,
     NewsEvent, NewsState, TransferAssetsEvent, TransferAssetsState,
 };
 pub use state::{

@@ -21,6 +21,7 @@ mod indexes;
 mod lev_control;
 mod list;
 mod prices;
+mod stats;
 mod tags;
 mod text;
 mod types;
@@ -39,7 +40,7 @@ pub use self::types::{
 };
 // The live trade tail and price live on the retained `Market` object itself;
 // re-export them here so the public `state::markets` path is stable.
-pub use crate::commands::market::{MarketDeltaState, MarketPrice, MarketTradeState};
+pub use crate::commands::market::{MarketDeltaState, MarketPrice, MarketStats, MarketTradeState};
 
 #[derive(Debug, Clone, Default)]
 pub struct MarketsState {

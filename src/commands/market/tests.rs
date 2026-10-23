@@ -73,6 +73,7 @@ fn sample_market(name: &str, with_v2: bool) -> Market {
         balance_hash: 0,
         last_balance_epoch: 0,
         session_profit: None,
+        stats: None,
         trade_tail: Default::default(),
         price: Default::default(),
         delta_state: Default::default(),

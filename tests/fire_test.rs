@@ -5856,6 +5856,71 @@ fn record_public_client_tick(
     }
 }
 
+fn run_manual_market_stats_check(cfg: &FireConfig, keys: ImportedKeys) {
+    use moonproto::state::MarketsEvent;
+
+    let client = MoonClient::connect(
+        ClientConfig::new(&cfg.host, cfg.port, keys.master_key, keys.mac_key)
+            .with_transport_mode(cfg.transport_mode)
+            .with_client_id(rand::random()),
+        ConnectConfig::new(InitConfig { subscribe_logs: false, ..InitConfig::default() })
+            .with_connect_timeout(cfg.connect_timeout),
+    ).expect("manual stats: connect");
+    let deadline = Instant::now() + cfg.connect_timeout + cfg.wait;
+    loop {
+        if client.drain_lifecycle_events().iter().any(|e| matches!(e, LifecycleEvent::Ready)) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "manual stats: initialization timed out");
+        std::thread::sleep(PUMP_SLICE);
+    }
+    let snapshot = client.snapshot().expect("manual stats: ready snapshot");
+    let markets: Vec<_> = snapshot.markets().iter().cloned().collect();
+    assert!(!markets.is_empty());
+    assert!(markets.iter().all(|market| market.stats().is_none()), "startup must not fetch stats");
+    let subscriptions = client.active_subscriptions();
+    assert!(subscriptions.all_trades.is_none());
+    assert!(subscriptions.orderbooks.is_empty());
+    assert!(subscriptions.live_candles.is_empty());
+
+    for request in 1..=2 {
+        client.markets().refresh_stats().expect("manual stats: enqueue request");
+        let deadline = Instant::now() + cfg.wait;
+        let count = 'wait: loop {
+            for event in client.drain_events() {
+                match event {
+                    Event::Markets(MarketsEvent::StatsUpdated { count }) => break 'wait count,
+                    Event::Markets(MarketsEvent::StatsRefreshFailed { message }) => {
+                        panic!("manual stats: core rejected refresh: {message}");
+                    }
+                    _ => {}
+                }
+            }
+            assert!(Instant::now() < deadline, "manual stats: response timed out");
+            std::thread::sleep(PUMP_SLICE);
+        };
+        assert!(count >= markets.len(), "manual stats: missing markets in full response");
+        let mut nonzero_volumes = 0;
+        let mut nonzero_deltas = 0;
+        for market in &markets {
+            let stats = market.stats().expect("manual stats: every retained handle must be updated");
+            assert!([
+                stats.volume_24h, stats.volume_1h, f64::from(stats.volume_1m),
+                f64::from(stats.volume_3m), f64::from(stats.volume_5m),
+                stats.delta_1m, stats.delta_15m, stats.delta_1h, stats.delta_3h, stats.delta_24h,
+            ].iter().all(|value| value.is_finite()), "manual stats: invalid values for {}", market.name());
+            nonzero_volumes += usize::from(stats.volume_24h > 0.0 && stats.volume_1h > 0.0);
+            nonzero_deltas += usize::from(stats.delta_24h > 0.0 || stats.delta_72h > 0);
+        }
+        assert!(nonzero_volumes > 0, "manual stats: no core volumes received");
+        assert!(nonzero_deltas > 0, "manual stats: no core deltas received");
+        assert_eq!(client.active_subscriptions(), subscriptions, "stats must not change subscriptions");
+        println!("OK: FIRETEST manual market stats #{request}: {count} markets, volumes={nonzero_volumes}, deltas={nonzero_deltas}, no trades subscription");
+    }
+    client.disconnect().expect("manual stats: disconnect");
+    client.wait_finished().expect("manual stats: runtime shutdown");
+}
+
 fn run_moonclient_public_smoke(
     label: &str,
     cfg: &FireConfig,
@@ -9951,6 +10016,8 @@ fn fire_test_active_library_health() {
         cfg.candles_timeout,
         cfg.high_loss_timeout
     );
+
+    run_manual_market_stats_check(&cfg, keys);
 
     if profile == FireProfile::Quick {
         run_quick_fire_test(&cfg, keys);

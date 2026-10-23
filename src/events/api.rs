@@ -134,6 +134,17 @@ impl EventDispatcher {
         history_now_time_days: Option<f64>,
         out: &mut Vec<Event>,
     ) {
+        if resp.method == EngineMethod::GetMarketsStats {
+            let result = if resp.success {
+                self.markets.apply_market_stats_payload(&resp.data).map_err(str::to_owned)
+            } else {
+                Err(format!("{}: {}", resp.error_code, resp.error_msg))
+            };
+            out.push(Event::Markets(match result {
+                Ok(count) => MarketsEvent::StatsUpdated { count },
+                Err(message) => MarketsEvent::StatsRefreshFailed { message },
+            }));
+        }
         if resp.success {
             match resp.method {
                 EngineMethod::GetMarketsList => {

@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 
 use crate::commands::market::{
     ArbPlatformCode, Market, MarketArbNowEntry, MarketArbSlot, MarketDeltaState, MarketPrice,
-    MarketTradeState, PositionType,
+    MarketStats, MarketTradeState, PositionType,
 };
 use crate::commands::trade::OrderType;
 
@@ -66,6 +66,11 @@ impl MarketHandle {
     /// the connected core. A real zero is returned as `Some(0.0)`.
     pub fn session_profit(&self) -> Option<f64> {
         self.with(|market| market.session_profit)
+    }
+
+    /// Copy the last manually requested core volumes/deltas. `None` means not received.
+    pub fn stats(&self) -> Option<MarketStats> {
+        self.with(|market| market.stats)
     }
 
     /// Copy the live price row used by chart, funding, and mark-price UI.
@@ -299,6 +304,10 @@ pub enum MarketsEvent {
         included_funding: bool,
         included_corr: bool,
     },
+    /// A manual volumes/deltas refresh was applied to the retained market handles.
+    StatsUpdated { count: usize },
+    /// A manual refresh failed; the previous values remain available.
+    StatsRefreshFailed { message: String },
     /// The server-index market-name map was updated.
     IndexesUpdated { count: usize },
     /// Token tags were updated.

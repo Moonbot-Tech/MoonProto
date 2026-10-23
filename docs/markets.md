@@ -115,6 +115,50 @@ selected handle; raw arb `market_index` blocks are diagnostic protocol details.
 Arb price entries expose `time()` / `unix_millis()` helpers; the fixed ring
 cursor is diagnostics/test-only.
 
+## Manual Volumes And Deltas
+
+Call `client.markets().refresh_stats()?` when the user requests an update. One
+request fetches the core's already calculated values for every market; no trade,
+orderbook, or candle subscription is needed.
+
+```rust
+client.markets().refresh_stats()?;
+// After Event::Markets(MarketsEvent::StatsUpdated { .. }):
+if let Some(stats) = market.stats() {
+    println!("24h volume={} 1h volume={} 1m delta={}%",
+        stats.volume_24h, stats.volume_1h, stats.delta_1m);
+}
+```
+
+`MarketStats` contains only these values:
+
+| Fields | Meaning |
+|---|---|
+| `volume_24h`, `volume_1h` | 24-hour and 1-hour quote-currency volume (`f64`). |
+| `volume_1m`, `volume_3m`, `volume_5m` | Short-window quote-currency volume (`f32`). |
+| `delta_1m`, `delta_15m`, `delta_1h`, `delta_3h`, `delta_24h` | Core markets-table percentage deltas (`f64`). |
+| `delta_72h` | Core markets-table 72-hour percentage delta, rounded by the core (`i32`). |
+
+These are the latest values calculated by the core, using its delta settings;
+the library does not recalculate them from local history. They are separate
+from `delta_state()` trend signals and retained-history analytics. Values are
+sampled while the core builds the response, not at one globally atomic instant.
+
+`MarketHandle::stats()` copies the small value under one read lock. It returns
+`None` before the first successful manual refresh and after a core process restart;
+a received all-zero row is `Some(MarketStats { .. })`. A transport reconnect to
+the same core retains the previous values. Successful refreshes also update
+`Market::volume` with the received 24-hour volume.
+
+There is no timer, startup request, automatic retry, or refresh on reconnect.
+The return from `refresh_stats()` means the request was queued. Completion emits
+`MarketsEvent::StatsUpdated { count }`; server rejection, invalid data, or stale
+market indexes emit `StatsRefreshFailed { message }` and preserve prior values.
+If initialization or a market-list refresh was in progress, retry manually after
+it completes. Connection loss is reported through normal lifecycle events.
+A core implementing this operation is required; older cores report an unknown
+method failure. Existing automatic price/funding updates remain independent.
+
 ## Init and Refresh
 
 Initial fetch:
@@ -144,6 +188,8 @@ pub enum MarketsEvent {
     MarketsListReplaced { count: usize, corr_count: usize },
     NewMarketsAdded { names: Vec<String> },
     PricesUpdated { count: usize, included_funding: bool, included_corr: bool },
+    StatsUpdated { count: usize },
+    StatsRefreshFailed { message: String },
     IndexesUpdated { count: usize },
     TokenTagsUpdated { count: usize },
 }

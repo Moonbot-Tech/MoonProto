@@ -56,6 +56,26 @@ pub use self::token_tags::TokenTags;
 #[cfg(test)]
 pub(crate) use self::token_tags::{build_token_tags_response, parse_token_tags_response};
 
+/// Core-calculated markets-table values from the last manual refresh.
+///
+/// Volumes use the market's quote currency. Deltas are the core's percentage
+/// movement values, including its configured delta calculation mode. They are
+/// independent of locally retained trades and `MarketDeltaState` trend signals.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MarketStats {
+    pub volume_24h: f64,
+    pub volume_1h: f64,
+    pub volume_1m: f32,
+    pub volume_3m: f32,
+    pub volume_5m: f32,
+    pub delta_1m: f64,
+    pub delta_15m: f64,
+    pub delta_1h: f64,
+    pub delta_3h: f64,
+    pub delta_24h: f64,
+    pub delta_72h: i32,
+}
+
 // =============================================================================
 //  TBotPlatform ordinal (Vars.pas:24)
 // =============================================================================
@@ -713,6 +733,8 @@ pub struct Market {
     /// first authoritative snapshot arrives, zero is represented as
     /// `Some(0.0)`.
     pub session_profit: Option<f64>,
+    /// Last manually requested core volumes/deltas; absent until a successful refresh.
+    pub stats: Option<MarketStats>,
     // --- Active Lib live trade tail state ---
     pub trade_tail: MarketTradeState,
     // --- Active Lib live price state ---
@@ -1271,6 +1293,7 @@ pub(crate) fn read_market_with_local_shift(
         balance_hash: 0,
         last_balance_epoch: 0,
         session_profit: None,
+        stats: None,
         trade_tail: MarketTradeState::default(),
         // Live price starts empty; `MarketsState` seeds `price.funding_*` from the
         // market's funding fields when the market enters the universe (Delphi

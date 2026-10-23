@@ -21,7 +21,7 @@ use crate::commands::ui::SpotMarketKind;
 use commands::{RuntimeCommand, StratRuntimeCommand, UiRuntimeCommand};
 pub use handles::{
     MoonAccount, MoonBalances, MoonCandles, MoonChartAlerts, MoonChartText, MoonEmulator,
-    MoonHistory, MoonOrders, MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade,
+    MoonHistory, MoonMarkets, MoonOrders, MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade,
 };
 use runtime_loop::runtime_loop;
 pub use types::{
@@ -468,7 +468,12 @@ impl MoonClient {
         MoonStreams { client: self }
     }
 
-    /// Balance, position, and transferable-assets refresh API.
+    /// Manual refresh of core-calculated volumes and deltas.
+    pub fn markets(&self) -> MoonMarkets<'_> {
+        MoonMarkets { client: self }
+    }
+
+    /// Balance refresh and transfer operations.
     pub fn balances(&self) -> MoonBalances<'_> {
         MoonBalances { client: self }
     }
