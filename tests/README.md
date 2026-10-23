@@ -21,6 +21,8 @@ application examples: some are intentionally low-level protocol guards.
   must receive finite values, the response must contain nonzero core volumes
   and deltas, and refreshes must leave subscriptions unchanged. Startup must not
   fetch these statistics automatically.
+  An empty startup news history is valid: the health gate requires the history
+  event and applied tags, not a positive number of news records.
 
 ## Runtime / Protocol Unit Tests
 

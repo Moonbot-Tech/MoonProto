@@ -4313,11 +4313,7 @@ fn pump_pair_until_nonblocking_api_refresh(
 fn has_initial_health(st: &SessionStats) -> bool {
     let news_healthy = st.kernel_license_state.is_some_and(|license| {
         !license.news_service_active(MoonTime::now())
-            || (st.news_history_events > 0
-                && st.news_history_count > 0
-                && st.news_history_tags_seen
-                && st.news_snapshot_count > 0
-                && st.news_tags_present)
+            || news_history_is_complete(st.news_history_events, st.news_history_tags_seen, st.news_tags_present)
     });
     st.connected_now
         && st.strategy_snapshot_events > 0
@@ -4524,6 +4520,28 @@ fn run_session_profit_and_hl_limit_gate(cfg: &FireConfig, a: &mut Session, b: &m
             stats.label, known, markets, nonzero
         );
     }
+}
+
+// The core may send a valid history with zero news frames and retained tags.
+fn news_history_is_complete(history_events: u64, included_tags: bool, retained_tags: bool) -> bool {
+    history_events > 0 && included_tags && retained_tags
+}
+
+#[test]
+fn news_health_accepts_empty_received_history_but_requires_delivery_and_tags() {
+    let stats = MoonClientPathStats {
+        news_history_events: 1,
+        news_history_tags_seen: true,
+        news_tags_present: true,
+        ..Default::default()
+    };
+    assert_eq!((stats.news_history_count, stats.news_snapshot_count), (0, 0));
+    assert!(news_history_is_complete(
+        stats.news_history_events, stats.news_history_tags_seen, stats.news_tags_present,
+    ));
+    assert!(!news_history_is_complete(0, true, true));
+    assert!(!news_history_is_complete(1, false, true));
+    assert!(!news_history_is_complete(1, true, false));
 }
 
 fn kernel_health_is_complete(health: KernelHealth) -> bool {
@@ -5681,11 +5699,9 @@ impl MoonClientPathStats {
         };
         let news_healthy = self.kernel_license_state.is_some_and(|license| {
             !license.news_service_active(MoonTime::now())
-                || (self.news_history_events > 0
-                    && self.news_history_count > 0
-                    && self.news_history_tags_seen
-                    && self.news_snapshot_count > 0
-                    && self.news_tags_present)
+                || news_history_is_complete(
+                    self.news_history_events, self.news_history_tags_seen, self.news_tags_present,
+                )
         });
         // Mandatory Init is a lifecycle/state contract. Some Delphi-style
         // pending steps (notably GetMarketsList) are applied by the owner after
