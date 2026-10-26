@@ -164,6 +164,23 @@ pub(crate) fn build_update_version(uid: u64, version_name: &str, is_release: boo
     out
 }
 
+/// Targeted update uses v5 so older cores skip it instead of broadcasting.
+pub(crate) fn build_core_update(uid: u64, version_name: &str, is_release: bool) -> Vec<u8> {
+    let mut out = build_update_version(uid, version_name, is_release);
+    out[1..3].copy_from_slice(&5u16.to_le_bytes());
+    out.push(1);
+    write_string(&mut out, "");
+    out
+}
+
+pub(crate) fn build_settings_snapshot_request(uid: u64, transfer_id: u64, offset: i64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(27);
+    write_header(&mut out, 53, uid);
+    out.extend_from_slice(&transfer_id.to_le_bytes());
+    out.extend_from_slice(&offset.to_le_bytes());
+    out
+}
+
 /// CmdId=7 `TEmuTradesCommand`.
 #[doc(hidden)]
 pub(crate) fn build_emu_trades(

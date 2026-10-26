@@ -76,6 +76,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[path = "fire_test/compact.rs"]
 mod compact;
+#[path = "fire_test/core_management.rs"]
+mod core_management;
 #[path = "fire_test/history_compare.rs"]
 mod history_compare;
 
@@ -10038,6 +10040,10 @@ fn fire_test_active_library_health() {
     if profile == FireProfile::Quick {
         run_quick_fire_test(&cfg, keys);
         return;
+    }
+
+    if std::env::var("MOONPROTO_FIRETEST_SETTINGS_SNAPSHOT").as_deref() == Ok("1") {
+        core_management::run_settings_snapshot_check(&cfg, keys);
     }
 
     assert!(

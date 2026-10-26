@@ -814,6 +814,10 @@ pub(crate) const UI_COMMANDS: &[CommandDescriptor] = &[
         direction = Outbound
     ),
     cmd_desc!(Command::UI, 50, "TResetSessionCommand", base = Base, priority = High, direction = Outbound),
+    // 51/52 are retired shutdown/export commands. Never reuse them for snapshots.
+    cmd_desc!(Command::UI, 53, "TVpsArchiveRequest", base = Base, priority = High, direction = Outbound),
+    cmd_desc!(Command::UI, 54, "TVpsArchiveReply", base = Base, priority = Sliced, direction = Inbound),
+    cmd_desc!(Command::UI, 55, "TMoonProtoChangeKey", base = Base, priority = High, direction = Outbound),
 ];
 
 pub(crate) const STRAT_COMMANDS: &[CommandDescriptor] = &[
@@ -1149,7 +1153,7 @@ mod tests {
     #[test]
     fn descriptor_map_covers_known_typed_domains() {
         assert_eq!(ORDER_COMMANDS.len(), 26);
-        assert_eq!(UI_COMMANDS.len(), 51);
+        assert_eq!(UI_COMMANDS.len(), 54);
         assert_eq!(STRAT_COMMANDS.len(), 11);
         assert_eq!(BALANCE_COMMANDS.len(), 11);
         assert_eq!(API_COMMANDS.len(), 5);

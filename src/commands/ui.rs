@@ -73,6 +73,7 @@ pub use builders::build_chart_text_snapshot_for_test;
 #[cfg(test)]
 pub(crate) use builders::build_new_market_notify;
 pub(crate) use builders::{
+    build_core_update, build_settings_snapshot_request,
     build_alert_object, build_alert_snapshot_request, build_arb_activate_notify, build_auto_detect,
     build_chart_text_state, build_client_settings, build_emu_trades,
     build_kernel_license_state_request, build_lev_manage, build_logs_subscribe, build_mm_orders_subscribe,
@@ -1027,6 +1028,10 @@ pub struct UpdateVersion {
     pub(crate) uid: u64,
     pub version_name: String,
     pub is_release: bool,
+    /// True for a targeted core download result; never a terminal-update instruction.
+    pub only_this_core: bool,
+    /// Download/preparation error. Empty means the package is ready, not installed.
+    pub error: String,
 }
 
 /// Emulated chart ticks for one market.
@@ -1724,3 +1729,5 @@ fn copy_blob_prefix<const N: usize>(dst: &mut [u8; N], blob: &[u8]) {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod core_management_tests;

@@ -314,6 +314,55 @@ fn core_shutdown_queues_one_encrypted_high_ui_command() {
 }
 
 #[test]
+fn core_management_commands_use_encrypted_high_queue_without_replacing_legacy_update() {
+    let mut client = Client::new(dummy_cfg());
+    client.set_domain_ready(true);
+    client.ui_update_version("legacy", false);
+    assert!(client.take_server_update_sent());
+    client.ui_core_update("targeted", false);
+    client.ui_settings_snapshot_request(42, -1);
+    let (sliced, high, low) = client.take_send_queues_for_test();
+    assert!(sliced.is_empty() && low.is_empty());
+    assert_eq!(high.len(), 3);
+    assert!(high.iter().all(|item| item.cmd == Command::UI.to_byte() && item.encrypted));
+    assert_eq!(&high[0].data[..3], &[6, 4, 0]);
+    assert_eq!(&high[1].data[..3], &[6, 5, 0]);
+    assert_eq!(&high[2].data[..3], &[53, 4, 0]);
+    assert_eq!(&high[2].data[11..19], &42u64.to_le_bytes());
+    assert!(!client.server_update_sent(), "targeted downloader does not set the terminal update flag");
+}
+
+#[test]
+fn encrypted_update_results_preserve_replay_filter_and_legacy_event() {
+    use crate::events::Event;
+    use crate::state::SettingsEvent;
+    let mut client = Client::new(dummy_cfg());
+    let key = install_server_decode_session(&mut client, 42);
+    client.authorized = true;
+    client.auth_status = AuthStatus::AuthDone;
+    client.set_domain_ready(true);
+    let mut dispatcher = EventDispatcher::new();
+    let targeted = crate::commands::ui::build_core_update(10, "missing", false);
+    let legacy = crate::commands::ui::build_update_version(11, "legacy", true);
+    for (sequence, payload, expected) in [(1, &targeted, 1), (1, &targeted, 0), (2, &legacy, 1)] {
+        let wire = build_server_crypted_payload(&key, sequence, Command::UI, payload);
+        let mut mode = RunMode::new(&mut dispatcher);
+        ProtocolCore { client: &mut client }.dispatch_command_owned(
+            Command::Crypted.to_byte(), wire, 0, 100, false, None, &mut mode,
+        );
+        let events = mode.dispatcher.take_queued_events();
+        assert_eq!(events.len(), expected);
+        if let Some(event) = events.first() {
+            assert!(match event {
+                Event::Settings(SettingsEvent::CoreUpdateResult { .. }) => sequence == 1,
+                Event::Settings(SettingsEvent::VersionUpdate { .. }) => sequence == 2,
+                _ => false,
+            });
+        }
+    }
+}
+
+#[test]
 fn base_check_without_server_update_uses_one_sendandwait_attempt() {
     let mut client = Client::new(dummy_cfg());
     let mut dispatcher = EventDispatcher::new();

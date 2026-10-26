@@ -116,6 +116,19 @@ pub enum SettingsEvent {
         version_name: String,
         is_release: bool,
     },
+    /// Result of a targeted core update download, sent only to its requester.
+    /// An empty error means the package is ready and installation was requested.
+    /// It does not confirm installation or ask this terminal to update itself.
+    CoreUpdateResult {
+        version_name: String,
+        is_release: bool,
+        error: String,
+    },
+    /// A settings archive download finished. On failure a partial file may remain.
+    SettingsSnapshotDownloaded {
+        path: std::path::PathBuf,
+        result: Result<u64, String>,
+    },
     /// Arbitrage license was activated/refreshed.
     ArbActivated {
         #[cfg(any(test, feature = "diagnostics"))]
@@ -275,6 +288,11 @@ impl SettingsState {
             | UICommand::ProblemsTest(_)
             | UICommand::Shutdown { .. } => None,
 
+            UICommand::UpdateVersion(u) if u.only_this_core => Some(SettingsEvent::CoreUpdateResult {
+                version_name: u.version_name,
+                is_release: u.is_release,
+                error: u.error,
+            }),
             UICommand::UpdateVersion(u) => Some(SettingsEvent::VersionUpdate {
                 #[cfg(any(test, feature = "diagnostics"))]
                 uid: u.uid,

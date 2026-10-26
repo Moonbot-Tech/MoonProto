@@ -448,6 +448,8 @@ pub enum MoonClientError {
     InvalidStrategyFolders(&'static str),
     /// Telegram input cannot be represented without truncation.
     InvalidTelegramInput(&'static str),
+    /// A key replacement requires valid current and replacement export packages.
+    InvalidKeyExport,
     /// A user-facing market name could not be resolved to the active market map.
     UnknownMarket(String),
     /// A UI emulator command cannot fit the wire `Word Count` field.
@@ -473,6 +475,7 @@ impl std::fmt::Display for MoonClientError {
             Self::InvalidSharedConfig(err) => write!(f, "invalid MoonProto shared config: {err}"),
             Self::InvalidStrategyFolders(reason) => write!(f, "invalid strategy folders: {reason}"),
             Self::InvalidTelegramInput(reason) => write!(f, "invalid Telegram input: {reason}"),
+            Self::InvalidKeyExport => write!(f, "invalid MoonProto key export or container checksum"),
             Self::UnknownMarket(market) => write!(f, "MoonProto market is unknown: {market}"),
             Self::TooManyEmuTradePoints(count) => {
                 write!(
@@ -506,6 +509,7 @@ impl std::error::Error for MoonClientError {
             | Self::StateUnavailable(_)
             | Self::InvalidStrategyFolders(_)
             | Self::InvalidTelegramInput(_)
+            | Self::InvalidKeyExport
             | Self::UnknownMarket(_)
             | Self::TooManyEmuTradePoints(_)
             | Self::InvalidReportSyncRequest

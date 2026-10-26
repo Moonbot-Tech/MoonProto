@@ -978,6 +978,39 @@ impl MoonSettings<'_> {
         self.client.request_version_update(version_name, false)
     }
 
+    /// Update only the connected core. Other terminals do not receive an update instruction.
+    /// An empty name with `is_release=true` requests the current release.
+    /// Observe `SettingsEvent::CoreUpdateResult` for the download/preparation result.
+    /// Older cores ignore this request; never fall back to the broadcast update.
+    pub fn request_core_update(
+        &self,
+        version_name: impl Into<String>,
+        is_release: bool,
+    ) -> Result<(), MoonClientError> {
+        self.client.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::CoreUpdate {
+            version_name: version_name.into(), is_release,
+        }))
+    }
+
+    /// Download a settings ZIP without stopping the source core.
+    /// The destination must not exist. Chunks, retries and SHA-256 verification
+    /// are handled by the library. Completion is `SettingsSnapshotDownloaded`.
+    /// A failed/stopped download can leave a partial file. Treat the archive as
+    /// confidential: it contains connection and exchange credentials.
+    pub fn download_settings_snapshot(&self, path: impl Into<std::path::PathBuf>) -> Result<(), MoonClientError> {
+        self.client.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::DownloadSettingsSnapshot(path.into())))
+    }
+
+    /// Queue a key replacement using the current and replacement exported packages.
+    /// Only the key changes; endpoint metadata in the packages is not applied.
+    /// There is no positive reply. Confirm success by connecting a new client
+    /// with the replacement key. This client retains its current key.
+    pub fn request_key_change(&self, current_export: &str, replacement_export: &str) -> Result<(), MoonClientError> {
+        let payload = crate::key_import::build_key_change(current_export, replacement_export)
+            .ok_or(MoonClientError::InvalidKeyExport)?;
+        self.client.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::ChangeKey(payload)))
+    }
+
     /// Switch DEX mode.
     pub fn switch_dex(&self, dex_name: impl Into<String>) -> Result<(), MoonClientError> {
         self.client.switch_dex(dex_name)

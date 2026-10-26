@@ -66,6 +66,7 @@ mod strat;
 mod trades;
 mod types;
 mod ui;
+mod settings_snapshot;
 
 pub(crate) use active::{ActiveAction, ActiveDispatchContext};
 pub use snapshot::MoonStateSnapshot;
@@ -142,6 +143,7 @@ pub(crate) struct EventDispatcher {
     pub(crate) coin_card_candles: CowState<crate::state::CoinCardCandlesState>,
     pub(crate) strats: CowState<StratsState>,
     pub(crate) settings: CowState<SettingsState>,
+    settings_snapshot: Option<settings_snapshot::Download>,
     pub(crate) markets: CowState<MarketsState>,
     pub(crate) chart_alerts: CowState<ChartAlertsState>,
     pub(crate) chart_text: CowState<ChartTextState>,
@@ -268,6 +270,7 @@ impl Default for EventDispatcher {
             coin_card_candles: CowState::default(),
             strats: CowState::default(),
             settings: CowState::default(),
+            settings_snapshot: None,
             markets: CowState::default(),
             chart_alerts: CowState::default(),
             chart_text: CowState::default(),

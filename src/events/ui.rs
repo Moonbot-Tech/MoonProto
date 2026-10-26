@@ -7,6 +7,10 @@ use crate::protocol::Command;
 
 impl EventDispatcher {
     pub(super) fn client_new_data_ui(&mut self, payload: &[u8], out: &mut Vec<Event>) {
+        if payload.first() == Some(&54) {
+            self.receive_settings_snapshot(payload, out);
+            return;
+        }
         match UICommand::parse_with_client_settings_fallback(
             payload,
             Some(self.settings.client_settings_parse_fallback()),

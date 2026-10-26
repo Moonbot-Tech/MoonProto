@@ -6,7 +6,7 @@ use super::*;
 impl UICommand {
     /// Parse a TBaseUICommand payload (after MPC_UI dispatch in data_read_int).
     /// Wire-format: `cmd_id:u8 + ver:u16 + UID:u64 + class-specific`.
-    /// A command newer than the shared v4 registry is skipped, matching
+    /// A command newer than its supported version is skipped, matching
     /// Delphi registry `FSkipped`.
     #[doc(hidden)]
     pub fn parse(payload: &[u8]) -> Option<Self> {
@@ -33,7 +33,8 @@ impl UICommand {
         let cmd_id = payload[0];
         let ver = u16::from_le_bytes([payload[1], payload[2]]);
         let uid = u64::from_le_bytes(payload[3..11].try_into().unwrap());
-        if ver > CURRENT_PROTO_CMD_VER {
+        let max_ver = if cmd_id == CMD_UPDATE_VERSION { 5 } else { CURRENT_PROTO_CMD_VER };
+        if ver > max_ver {
             return Some(UICommand::Skipped { cmd_id, uid, ver });
         }
         let mut pos = 11usize;
@@ -92,10 +93,17 @@ impl UICommand {
             CMD_UPDATE_VERSION => {
                 let version_name = read_string(payload, &mut pos)?;
                 let is_release = read_bool_zero_tail(payload, &mut pos);
+                let (only_this_core, error) = if ver >= 5 {
+                    (read_bool(payload, &mut pos)?, read_string(payload, &mut pos)?)
+                } else {
+                    (false, String::new())
+                };
                 Some(UICommand::UpdateVersion(UpdateVersion {
                     uid,
                     version_name,
                     is_release,
+                    only_this_core,
+                    error,
                 }))
             }
 

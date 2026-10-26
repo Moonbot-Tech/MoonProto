@@ -156,6 +156,25 @@ automatically.
 
 ### Version Update
 
+There are two independent update flows:
+
+| Call | Scope | Event |
+| --- | --- | --- |
+| `request_release_update()` / `request_version_update(name)` | Existing coordinated update, including terminal notifications | `VersionUpdate` |
+| `request_core_update(name, is_release)` | Only the connected core | `CoreUpdateResult` |
+
+For a core-only release update, call `client.settings().request_core_update("", true)?`.
+For a named build, pass its name and `false`. The result is sent only to the
+requesting client. `CoreUpdateResult.error` is empty when the package is ready
+and installation has been requested; this does **not** confirm that the new
+process has started. Reconnect and inspect the core version to confirm installation.
+A nonempty error describes the download/preparation failure. This event must
+never start the terminal's own updater.
+
+Older cores ignore the core-only request. The library deliberately does not
+fall back to the coordinated update or report queued intent as success. The
+existing coordinated methods keep their original wire format and behavior.
+
 `request_release_update()` asks the server to start the normal release update
 flow. `request_version_update(version_name)` asks for a named beta/test build.
 
@@ -178,6 +197,58 @@ effect.
 
 Low-level builders remain internal diagnostics/compatibility machinery; normal
 applications should use the typed methods above.
+
+### Downloading a Settings Archive
+
+`client.settings().download_settings_snapshot(path)?` downloads the Windows
+core's settings ZIP while it continues running. It is a transfer/backup package,
+including credentials, rather than the editable safe-share configuration.
+Protect the destination accordingly. The destination must not already exist.
+
+The library requests each chunk, retries after two seconds without a reply,
+rejects changed/corrupt data, verifies SHA-256, and completes the server's final
+transfer handshake. It writes chunks directly to the file without retaining
+the whole ZIP or making a second pass over it for hashing. Only one download
+per client can be active; the core also permits one active export at a time.
+
+```rust
+client.settings().download_settings_snapshot("settings-backup.zip")?;
+for event in client.drain_events() {
+    if let moonproto::Event::Settings(
+        moonproto::state::SettingsEvent::SettingsSnapshotDownloaded { path, result }
+    ) = event {
+        match result {
+            Ok(bytes) => println!("Saved {bytes} verified bytes to {}", path.display()),
+            Err(error) => eprintln!("Snapshot download failed: {error}"),
+        }
+    }
+}
+```
+
+No progress for five minutes fails the operation, including when the core does
+not support snapshots. A failed download or client shutdown can leave a partial
+file: use only files whose completion event contains `Ok`. The library does not
+extract the ZIP, install a VPS, or modify the source core's connection settings.
+
+### Replacing the Core Key
+
+```rust
+client.settings().request_key_change(&current_export, &replacement_export)?;
+```
+
+Pass the current and replacement MoonBot key packages. Both package and key
+container checksums are validated locally. The core accepts the replacement only
+if the current package still identifies its active key, preventing a delayed
+request from overwriting a newer key. Only the key changes; endpoint metadata
+from the packages is not applied. A core that also connects to another core
+rejects this operation and requires a local settings change.
+
+Returning `Ok(())` means queued. There is no success acknowledgement on the old
+connection, and this client retains its old key. Persist the replacement package
+before requesting the change, then connect a new `MoonClient` with that package
+and wait for `Ready` to confirm success. The core keeps running, but its MoonProto
+listener restarts and clients must reconnect with the replacement key. Older
+cores ignore the request; the library never changes keys locally on that assumption.
 
 ### Runtime State
 

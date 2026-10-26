@@ -267,6 +267,7 @@ pub(super) fn runtime_loop(
         );
         if startup.is_none() {
             shared_config_refresh.poll(&client, &dispatcher);
+            dispatcher.poll_settings_snapshot(&client);
         }
         if state_changed && startup.is_none() {
             publish_snapshot_profiled(&client, &dispatcher, &snapshot);

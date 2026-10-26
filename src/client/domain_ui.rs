@@ -88,6 +88,17 @@ impl Client {
     }
 
     #[doc(hidden)]
+    /// Request only this core's update; the result is not a terminal update command.
+    pub(crate) fn ui_core_update(&self, version_name: &str, is_release: bool) {
+        let raw = crate::commands::ui::build_core_update(rand::random(), version_name, is_release);
+        self.send_typed_domain_cmd(raw, Command::UI);
+    }
+
+    pub(crate) fn ui_settings_snapshot_request(&self, transfer_id: u64, offset: i64) -> bool {
+        let raw = crate::commands::ui::build_settings_snapshot_request(rand::random(), transfer_id, offset);
+        self.send_typed_domain_cmd(raw, Command::UI)
+    }
+
     /// Send `TEmuTradesCommand` (UI CmdId=7, Sliced) with emulated trades for a
     /// test market.
     pub(crate) fn ui_emu_trades(

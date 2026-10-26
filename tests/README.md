@@ -23,6 +23,23 @@ application examples: some are intentionally low-level protocol guards.
   fetch these statistics automatically.
   An empty startup news history is valid: the health gate requires the history
   event and applied tags, not a positive number of news records.
+  On a Windows core with settings-archive support, enable the additional full
+  gate with `MOONPROTO_FIRETEST_SETTINGS_SNAPSHOT=1`. It downloads two ZIPs in
+  sequence through the public API, verifies
+  completion/checksums/file sizes, and confirms that the source still serves
+  settings without changing subscriptions. Successful confidential test ZIPs
+  are deleted. Set `MOONPROTO_FIRETEST_SNAPSHOT_DIR` to choose their directory;
+  otherwise the OS temporary directory is used. Failed transfers can leave a
+  partial file there. The focused case is
+  `core_management::fire_test_settings_snapshot`. This gate is explicit because
+  the core currently implements archive creation only on Windows; the ordinary
+  full profile remains usable against Linux cores.
+  FireTest does not install versions or rotate the live server key. Those
+  destructive actions are protected by local wire/dispatch regressions:
+  unchanged legacy update bytes/events, targeted success/error isolation,
+  command-specific version gating, encrypted sends, and original key-container
+  checksums. Snapshot regressions cover reordering, repeats, unrelated transfer
+  IDs, corrupt/changed/truncated data, timeout and destination preservation.
 
 ## Runtime / Protocol Unit Tests
 

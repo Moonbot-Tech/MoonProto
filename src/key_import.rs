@@ -142,6 +142,14 @@ pub fn import_key(base64_str: &str) -> Option<ImportedKeys> {
 
 /// Parse MoonBot key export for UI/config screens.
 pub fn parse_key_info(base64_str: &str) -> Option<ImportedKeyInfo> {
+    let (plain, format) = decode_export(base64_str)?;
+    match format {
+        ImportedKeyFormat::V1 => parse_v1_plain(&plain),
+        ImportedKeyFormat::Legacy => parse_legacy_plain(&plain),
+    }
+}
+
+fn decode_export(base64_str: &str) -> Option<(zeroize::Zeroizing<Vec<u8>>, ImportedKeyFormat)> {
     use base64::Engine;
     let compact = base64_str
         .chars()
@@ -158,16 +166,33 @@ pub fn parse_key_info(base64_str: &str) -> Option<ImportedKeyInfo> {
     let checksum = i64::from_le_bytes(raw[8..16].try_into().unwrap());
     let encrypted = &raw[16..];
 
-    if let Some(mut plain) = try_decrypt(encrypted, NEW_PWD_HEAD, ts, checksum) {
-        let parsed = parse_v1_plain(&plain);
-        plain.zeroize();
-        return parsed;
+    if let Some(plain) = try_decrypt(encrypted, NEW_PWD_HEAD, ts, checksum) {
+        return Some((zeroize::Zeroizing::new(plain), ImportedKeyFormat::V1));
     }
+    let plain = try_decrypt(encrypted, OLD_PWD_HEAD, ts, checksum)?;
+    Some((zeroize::Zeroizing::new(plain), ImportedKeyFormat::Legacy))
+}
 
-    let mut plain = try_decrypt(encrypted, OLD_PWD_HEAD, ts, checksum)?;
-    let parsed = parse_legacy_plain(&plain);
-    plain.zeroize();
-    parsed
+pub(crate) fn build_key_change(current: &str, replacement: &str) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+    fn container(export: &str) -> Option<zeroize::Zeroizing<[u8; KEY_CONTAINER_SIZE]>> {
+        let (plain, format) = decode_export(export)?;
+        let offset = match format {
+            ImportedKeyFormat::V1 => { parse_v1_plain(&plain)?; 9 }
+            ImportedKeyFormat::Legacy => { parse_legacy_plain(&plain)?; 8 }
+        };
+        let key = zeroize::Zeroizing::new(<[u8; KEY_CONTAINER_SIZE]>::try_from(&plain[offset..offset + KEY_CONTAINER_SIZE]).ok()?);
+        let hash = i64::from_le_bytes(key[64..72].try_into().ok()?);
+        (calculate_checksum_w(&key[..64]) == hash).then_some(key)
+    }
+    let old = container(current)?;
+    let new = container(replacement)?;
+    let mut out = zeroize::Zeroizing::new(Vec::with_capacity(91));
+    out.push(55);
+    out.extend_from_slice(&crate::commands::registry::CURRENT_PROTO_CMD_VER.to_le_bytes());
+    out.extend_from_slice(&rand::random::<u64>().to_le_bytes());
+    out.extend_from_slice(&old[64..72]);
+    out.extend_from_slice(&new[..]);
+    Some(out)
 }
 
 fn try_decrypt(encrypted: &[u8], password_head: &str, ts: i64, checksum: i64) -> Option<Vec<u8>> {
@@ -547,6 +572,29 @@ mod tests {
         clear[container + 30] = 1; // key container version
         clear[container + 32..container + 48].copy_from_slice(&master_key);
         clear[container + 48..container + 64].copy_from_slice(&mac_key);
+        let checksum = calculate_checksum_w(&clear[container..container + 64]);
+        clear[container + 64..container + 72].copy_from_slice(&checksum.to_le_bytes());
+    }
+
+    #[test]
+    fn key_change_preserves_original_container_and_previous_hash() {
+        let old = build_legacy_test_export([1; 16], [2; 16]);
+        let new = build_v1_ipv4_test_export([3; 16], [4; 16], 0x7f000001, 3000, 2);
+        let wire = build_key_change(&old, &new).unwrap();
+        let (old_plain, _) = decode_export(&old).unwrap();
+        let (new_plain, _) = decode_export(&new).unwrap();
+        assert_eq!(wire.len(), 91);
+        assert_eq!(&wire[..3], &[55, 4, 0]);
+        assert_eq!(&wire[11..19], &old_plain[8 + 64..8 + 72]);
+        assert_eq!(&wire[19..], &new_plain[9..9 + 72]);
+        assert!(build_key_change("broken", &new).is_none());
+        assert!(build_key_change(&old, "broken").is_none());
+        // A valid outer package checksum cannot mask a bad inner key checksum.
+        let mut corrupt = new_plain.to_vec();
+        corrupt[9 + 64] ^= 1;
+        let corrupt = wrap_export(corrupt, NEW_PWD_HEAD, 12345678);
+        assert!(build_key_change(&old, &corrupt).is_none());
+        assert!(build_key_change(&corrupt, &old).is_none());
     }
 
     fn wrap_export(mut clear: Vec<u8>, password_head: &str, outer_ts: i64) -> String {

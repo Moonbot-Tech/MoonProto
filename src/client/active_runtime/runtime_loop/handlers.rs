@@ -620,6 +620,18 @@ fn handle_ui_command(
             client.ui_update_version(&version_name, is_release);
             false
         }
+        UiRuntimeCommand::CoreUpdate { version_name, is_release } => {
+            client.ui_core_update(&version_name, is_release);
+            false
+        }
+        UiRuntimeCommand::DownloadSettingsSnapshot(path) => {
+            dispatcher.start_settings_snapshot(path);
+            false
+        }
+        UiRuntimeCommand::ChangeKey(mut payload) => {
+            client.send_typed_domain_cmd(std::mem::take(&mut *payload), crate::protocol::Command::UI);
+            false
+        }
         UiRuntimeCommand::SwitchDex(dex_name) => {
             client.ui_switch_dex(&dex_name);
             false
