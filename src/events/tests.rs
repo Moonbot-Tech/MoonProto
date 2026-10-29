@@ -2288,7 +2288,7 @@ fn inactive_history_configuration_is_cached_and_new_markets_invalidate_it() {
 
     let scope = crate::state::TradeStorageScope::from_markets(["ETHUSDT"]);
     d.set_trade_storage_scope(Some(&scope), 45_000.0);
-    assert_eq!(d.last_market_history_scope, Some(scope.clone()));
+    assert_eq!(d.last_market_history_scope.as_deref(), Some(&scope));
     assert_eq!(d.last_market_history_markets_version, Some(d.markets.markets_version()));
     assert!(d.market_history.is_none());
 
@@ -3557,6 +3557,101 @@ fn trades_payload_with_market_sections(packet_num: u16, market_indices: &[u16]) 
     }
     payload.push(0); // packet flags: uncompressed, no taker flag.
     payload
+}
+
+#[test]
+fn shared_storage_scope_adopts_equal_intent_and_updates_mm_flag() {
+    let mut d = EventDispatcher::new();
+    d.market_history_auto_enabled = false;
+    seed_event_markets(&mut d, &["BTCUSDT", "ETHUSDT"]);
+    let mut intent = crate::client::TradeStorageIntent {
+        scope: Arc::new(TradeStorageScope::from_markets(["BTCUSDT"])),
+        retain_mm_orders: false,
+    };
+    d.set_trade_storage_intent(Some(&intent), 45000.0);
+    assert!(Arc::ptr_eq(d.trade_storage_scope.as_ref().unwrap(), &intent.scope));
+    let old = intent.scope.clone();
+    intent.scope = Arc::new((*old).clone());
+    intent.retain_mm_orders = true;
+    d.set_trade_storage_intent(Some(&intent), 45000.0);
+    assert!(d.retain_mm_orders);
+    assert!(Arc::ptr_eq(d.trade_storage_scope.as_ref().unwrap(), &intent.scope));
+    assert!(Arc::ptr_eq(d.last_market_history_scope.as_ref().unwrap(), &intent.scope));
+    intent.scope = Arc::new(TradeStorageScope::from_markets(["ETHUSDT"]));
+    d.set_trade_storage_intent(Some(&intent), 45000.0);
+    assert!(!d.active_trade_storage_allows_market("BTCUSDT"));
+    assert!(d.active_trade_storage_allows_market("ETHUSDT"));
+    d.set_trade_storage_intent(None, 45000.0);
+    assert!(d.trade_storage_scope.is_none());
+    assert!(d.last_market_history_scope.is_none());
+    assert!(!d.retain_mm_orders);
+}
+
+#[test]
+fn skipped_history_rows_preserve_first_row_time_shift_and_following_sections() {
+    for kind in [1, 3] {
+        for empty in [false, true] {
+            let mut d = EventDispatcher::new();
+            seed_event_markets(&mut d, &["BTCUSDT"]);
+            d.markets.apply_markets_indexes(vec!["BTCUSDT".to_owned()]);
+            let mut payload = 45000.0f64.to_le_bytes().to_vec();
+            payload.extend_from_slice(&1u16.to_le_bytes());
+            // The first row and the following fill straddle the minute-rounding boundary.
+            let rows = if empty { &[][..] } else { &[(0, 100.0, 1.0), (30000, 101.0, 2.0)][..] };
+            if kind == 1 {
+                push_trades_section(&mut payload, kind, 0, rows);
+            } else {
+                push_liquidation_section(&mut payload, 0, rows);
+            }
+            push_watcher_fills_section(&mut payload, 0, [7; 20], &[(30000, 102.0, 3.0, 0.0, 0.0, 0, 0)]);
+            payload.push(0);
+            let now = 45000.0 + 40000.0 / DELPHI_MSECS_PER_DAY;
+            let mut out = Vec::new();
+            d.client_new_data_trades_stream(&payload, 1000, Some(now), &mut out);
+            let watcher = out.iter().find_map(|event| match event {
+                Event::WatcherFills(watcher) => Some(watcher), _ => None,
+            }).unwrap();
+            let expected = 45000.0 + (if empty { 30000.0 } else { 90000.0 }) / DELPHI_MSECS_PER_DAY;
+            assert!((watcher.fills[0].time - expected).abs() < 1e-10);
+            assert_eq!(watcher.fills[0].price, 102.0);
+            assert!(d.market_history.is_none());
+        }
+    }
+}
+
+#[test]
+fn retained_mm_and_liquidation_sections_keep_every_row() {
+    let worker = crate::state::MarketHistoryWorker::spawn(crate::state::MarketHistoryConfig {
+        futures_trades_capacity: 0, spot_trades_capacity: 0,
+        liquidation_capacity: 8, mm_orders_capacity: 8,
+        last_price_capacity: 0, mini_candles_capacity: 0, candles_5m_capacity: 0,
+    });
+    let mut d = EventDispatcher::new();
+    d.set_market_history_handle(worker.handle());
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    d.markets.apply_markets_indexes(vec!["BTCUSDT".to_owned()]);
+    d.set_trade_storage_intent(Some(&crate::client::TradeStorageIntent {
+        scope: Arc::new(TradeStorageScope::All), retain_mm_orders: true,
+    }), 45000.0);
+    let mut payload = 45000.0f64.to_le_bytes().to_vec();
+    payload.extend_from_slice(&1u16.to_le_bytes());
+    let rows = [(0, 100.0, 1.0), (1, 101.0, -2.0), (2, 102.0, 3.0)];
+    push_trades_section(&mut payload, 1, 0, &rows);
+    push_liquidation_section(&mut payload, 0, &rows);
+    payload.push(0);
+    d.client_new_data_trades_stream(&payload, 1000, Some(45000.0), &mut Vec::new());
+    assert!(worker.flush(mt(45000.0)));
+    let readers = worker.readers("BTCUSDT").unwrap();
+    let mut mm = Vec::new();
+    let mut liq = Vec::new();
+    readers.mm_orders.as_ref().unwrap().copy_last(8, &mut mm);
+    readers.liquidations.as_ref().unwrap().copy_last(8, &mut liq);
+    assert_eq!(mm.len(), rows.len());
+    assert_eq!(liq.len(), rows.len());
+    for (i, (_, price, qty)) in rows.iter().enumerate() {
+        assert_eq!((mm[i].volume, mm[i].q), (f64::from(*price), f64::from(*qty)));
+        assert_eq!((liq[i].price, liq[i].qty), (*price, *qty));
+    }
 }
 
 fn trades_payload_with_rows(

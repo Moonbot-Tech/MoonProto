@@ -121,7 +121,7 @@ fn apply_at(
         app_token,
         0.0,
         &|_| market_exists,
-        &mut events,
+        &mut |event| events.push(event),
         &mut repairs,
     );
     (events, repairs)
@@ -595,7 +595,7 @@ fn peer_app_token_changes_world_but_server_token_does_not() {
         APP_TOKEN,
         0.0,
         &|_| true,
-        &mut events,
+        &mut |event| events.push(event),
         &mut repairs,
     );
     assert!(orders.get(16).is_some() && orders.get(17).is_some());
@@ -629,7 +629,7 @@ fn mirror_parks_until_market_exists_then_attaches_without_network_repair() {
     assert!(orders.mirrors.contains_key(&19));
 
     let mut events = Vec::new();
-    orders.rescan_parked(2_000, &|market| market == "NEWCOIN", &mut events);
+    orders.rescan_parked(2_000, &|market| market == "NEWCOIN", &mut |event| events.push(event));
     assert!(matches!(events.as_slice(), [OrderEvent::Created(order)] if order.uid == 19));
     assert!(orders.get(19).is_some());
 }

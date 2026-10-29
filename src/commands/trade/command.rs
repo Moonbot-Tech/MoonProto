@@ -59,12 +59,22 @@ pub enum TradeCommand {
 }
 
 impl TradeCommand {
+    pub(crate) fn parse_for_apply(payload: &[u8]) -> Option<Self> {
+        let mut input = payload;
+        Self::read_with_visual_names(&mut input, false)
+    }
+
+    #[allow(dead_code)] // Full wire parser retained for command inspection and regression tests.
     pub fn parse(payload: &[u8]) -> Option<Self> {
         let mut input = payload;
         Self::read(&mut input)
     }
 
     pub(super) fn read(input: &mut &[u8]) -> Option<Self> {
+        Self::read_with_visual_names(input, true)
+    }
+
+    fn read_with_visual_names(input: &mut &[u8], retain_names: bool) -> Option<Self> {
         if input.len() < 11 {
             return None;
         }
@@ -80,8 +90,16 @@ impl TradeCommand {
             1 => Some(Self::BaseMarket(MarketCommandHeader::read(input)?)),
             23 => Some(Self::Penalty(MarketCommandHeader::read(input)?)),
             24 => Some(Self::TradeVisual(MarketCommandHeader::read(input)?)),
-            25 => Some(Self::OrderTracePoint(OrderTracePoint::read(input)?)),
-            26 => Some(Self::CorridorUpdate(CorridorUpdate::read(input)?)),
+            25 => Some(Self::OrderTracePoint(if retain_names {
+                OrderTracePoint::read(input)?
+            } else {
+                OrderTracePoint::read_for_apply(input)?
+            })),
+            26 => Some(Self::CorridorUpdate(if retain_names {
+                CorridorUpdate::read(input)?
+            } else {
+                CorridorUpdate::read_for_apply(input)?
+            })),
             31 => Some(Self::ClosedSellOrderReport(ClosedSellOrderReport::read(
                 input,
             )?)),
@@ -165,6 +183,48 @@ impl TradeCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visual_apply_parser_preserves_values_and_truncation_rules() {
+        for cmd_id in [25, 26] {
+            for name in [b"BTCUSDT".as_slice(), &[0xff, 0xc0, b'X'], &[]] {
+                let mut payload = vec![cmd_id];
+                payload.extend_from_slice(&CURRENT_PROTO_CMD_VER.to_le_bytes());
+                payload.extend_from_slice(&123_u64.to_le_bytes());
+                payload.extend_from_slice(&[2, 3]);
+                payload.extend_from_slice(&(name.len() as u16).to_le_bytes());
+                payload.extend_from_slice(name);
+                let header_len = payload.len();
+                payload.extend_from_slice(&45000.0_f64.to_le_bytes());
+                payload.extend_from_slice(&100.0_f32.to_le_bytes());
+                payload.extend_from_slice(&99.0_f32.to_le_bytes());
+                payload.extend_from_slice(&98.0_f32.to_le_bytes());
+                payload.extend_from_slice(&[1, 7]);
+                for len in 0..=payload.len() {
+                    let full = TradeCommand::parse(&payload[..len]);
+                    let compact = TradeCommand::parse_for_apply(&payload[..len]);
+                    assert_eq!(full.is_some(), len >= header_len);
+                    assert_eq!(compact.is_some(), full.is_some());
+                    if let (Some(mut full), Some(compact)) = (full, compact) {
+                        let market = match &mut full {
+                            TradeCommand::OrderTracePoint(c) => &mut c.market,
+                            TradeCommand::CorridorUpdate(c) => &mut c.market,
+                            _ => unreachable!(),
+                        };
+                        assert_eq!(market.market_name, if name == [0xff, 0xc0, b'X'] { "??X" } else {
+                            std::str::from_utf8(name).unwrap()
+                        });
+                        market.market_name.clear();
+                        assert_eq!(format!("{full:?}"), format!("{compact:?}"));
+                    }
+                }
+                payload[1..3].copy_from_slice(&(CURRENT_PROTO_CMD_VER + 1).to_le_bytes());
+                for parse in [TradeCommand::parse, TradeCommand::parse_for_apply] {
+                    assert!(matches!(parse(&payload[..11]), Some(TradeCommand::Unknown { uid: 123, .. })));
+                }
+            }
+        }
+    }
 
     #[test]
     fn retired_order_command_ids_stay_unknown() {

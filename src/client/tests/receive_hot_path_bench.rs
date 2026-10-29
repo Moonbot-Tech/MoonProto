@@ -2,43 +2,8 @@
 use super::*;
 use crate::client::thread_cpu::ThreadCpuTimer;
 use crate::commands::market::MarketsListResponse;
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::hint::black_box;
-
-struct CountingAllocator;
-thread_local! {
-    static COUNTS: Cell<Option<(u64, u64)>> = const { Cell::new(None) };
-}
-
-fn allocated(size: usize) {
-    let _ = COUNTS.try_with(|counter| {
-        if let Some((calls, bytes)) = counter.get() {
-            counter.set(Some((calls + 1, bytes + size as u64)));
-        }
-    });
-}
-
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        allocated(layout.size());
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        allocated(layout.size());
-        unsafe { System.alloc_zeroed(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        allocated(size);
-        unsafe { System.realloc(ptr, layout, size) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
+use crate::bench_support::{COUNTS, percentile};
 
 fn prices(count: usize) -> Vec<u8> {
     let mut data = vec![0]; // no funding
@@ -52,12 +17,6 @@ fn prices(count: usize) -> Vec<u8> {
     }
     data.push(0); // no correlation markets
     data
-}
-
-fn percentile(samples: &mut [f64], fraction: f64) -> f64 {
-    if samples.is_empty() { return f64::NAN; }
-    samples.sort_by(f64::total_cmp);
-    samples[((samples.len() - 1) as f64 * fraction).round() as usize]
 }
 
 #[test]

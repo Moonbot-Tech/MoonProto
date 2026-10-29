@@ -201,16 +201,30 @@ impl EventDispatcher {
             .extend([crate::events::Event::CandlesSnapshot(event)]);
     }
 
+    #[cfg(test)]
     pub(crate) fn set_trade_storage_scope(
         &mut self,
         scope: Option<&TradeStorageScope>,
         now_time_days: f64,
     ) {
+        self.set_shared_trade_storage_scope(scope.cloned().map(Arc::new).as_ref(), now_time_days);
+    }
+
+    fn set_shared_trade_storage_scope(&mut self, scope: Option<&Arc<TradeStorageScope>>, now_time_days: f64) {
+        if self.trade_storage_scope.as_ref().map(Arc::as_ptr) == scope.map(Arc::as_ptr) {
+            return;
+        }
         if self.trade_storage_scope.as_ref() != scope {
             self.trade_storage_scope = scope.cloned();
             self.sync_market_history_storage();
             if self.trade_storage_scope.is_some() {
                 self.queue_current_last_price_history(now_time_days);
+            }
+        } else {
+            // Adopt an equal replacement once, so later packets use pointer equality.
+            self.trade_storage_scope = scope.cloned();
+            if self.last_market_history_scope.as_ref() == scope {
+                self.last_market_history_scope = scope.cloned();
             }
         }
     }
@@ -221,7 +235,7 @@ impl EventDispatcher {
         now_time_days: f64,
     ) {
         self.retain_mm_orders = intent.is_some_and(|intent| intent.retain_mm_orders);
-        self.set_trade_storage_scope(intent.map(|intent| intent.scope.as_ref()), now_time_days);
+        self.set_shared_trade_storage_scope(intent.map(|intent| &intent.scope), now_time_days);
     }
 
     pub(crate) fn set_deltas_by_trades(&mut self, enabled: bool) {
@@ -292,7 +306,7 @@ impl EventDispatcher {
         let has_active_market = self.has_active_market_history_market(&market_names);
         self.ensure_default_market_history_worker(has_active_market);
         if let Some(handle) = &self.market_history {
-            handle.configure_markets(market_names, self.trade_storage_scope.clone());
+            handle.configure_markets(market_names, self.trade_storage_scope.as_deref().cloned());
         }
         self.last_market_history_scope = self.trade_storage_scope.clone();
         self.last_market_history_markets_version = Some(markets_version);

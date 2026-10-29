@@ -207,7 +207,7 @@ impl OrderState {
         peer_app_token: u64,
         server_time_delta: f64,
         market_exists: &dyn Fn(&str) -> bool,
-        events: &mut Vec<OrderEvent>,
+        events: &mut impl FnMut(OrderEvent),
         repairs: &mut Vec<OrderRepair>,
     ) {
         if server_token == 0 {
@@ -271,7 +271,7 @@ impl OrderState {
                     events,
                     repairs,
                 );
-                events.push(OrderEvent::Snapshot);
+                events(OrderEvent::Snapshot);
             }
             TradeCommand::OrdersCatalog(catalog) => {
                 self.process_cold_page(
@@ -281,7 +281,7 @@ impl OrderState {
                     events,
                     repairs,
                 );
-                events.push(OrderEvent::Snapshot);
+                events(OrderEvent::Snapshot);
             }
             TradeCommand::OrderNotFound(header) => self.apply_gone(header.uid, events),
             TradeCommand::OrderTracePoint(mut point) => {
@@ -289,7 +289,7 @@ impl OrderState {
                 if self.mirrors.contains_key(&point.market.base.uid) {
                     if let Some(order) = self.order_mut(point.market.base.uid) {
                         Self::apply_trace_line(order, &point);
-                        events.push(OrderEvent::TracePoint { uid: order.uid });
+                        events(OrderEvent::TracePoint { uid: order.uid });
                     }
                 }
             }
@@ -300,7 +300,7 @@ impl OrderState {
                         order.is_moon_shot = true;
                         order.corridor_price_down = corridor.price_down;
                         order.corridor_price_up = corridor.price_up;
-                        events.push(OrderEvent::CorridorChanged(uid));
+                        events(OrderEvent::CorridorChanged(uid));
                     }
                 }
             }
@@ -308,12 +308,12 @@ impl OrderState {
         }
     }
 
-    fn ensure_world(&mut self, peer_app_token: u64, events: &mut Vec<OrderEvent>) {
+    fn ensure_world(&mut self, peer_app_token: u64, events: &mut impl FnMut(OrderEvent)) {
         if peer_app_token == 0 || peer_app_token == self.world_app_token {
             return;
         }
         for order in self.read.map.values() {
-            events.push(OrderEvent::Removed(Arc::clone(order)));
+            events(OrderEvent::Removed(Arc::clone(order)));
         }
         self.read.map.clear();
         self.mirrors.clear();
@@ -332,7 +332,7 @@ impl OrderState {
         &mut self,
         now_ms: i64,
         market_exists: &dyn Fn(&str) -> bool,
-        events: &mut Vec<OrderEvent>,
+        events: &mut impl FnMut(OrderEvent),
     ) {
         let parked: Vec<u64> = self
             .mirrors
@@ -358,7 +358,7 @@ impl OrderState {
             );
             let order = Arc::new(order);
             self.read.map.insert(uid, Arc::clone(&order));
-            events.push(OrderEvent::Created(order));
+            events(OrderEvent::Created(order));
             if exact_terminal {
                 let delay = if self.read.map[&uid].status == OrderWorkerStatus::SellDone {
                     SELL_DONE_REMOVAL_GRACE_MS
@@ -381,7 +381,7 @@ impl OrderState {
         desc: Option<OrderDescription>,
         market_exists: &dyn Fn(&str) -> bool,
         now_ms: i64,
-        events: &mut Vec<OrderEvent>,
+        events: &mut impl FnMut(OrderEvent),
         repairs: &mut Vec<OrderRepair>,
     ) {
         let is_image = desc.is_some();
@@ -462,7 +462,7 @@ impl OrderState {
             );
             let order = Arc::new(order);
             self.read.map.insert(order_id, Arc::clone(&order));
-            events.push(OrderEvent::Created(order));
+            events(OrderEvent::Created(order));
         } else if applied_mask != 0 {
             let (mirrors, read) = (&self.mirrors, &mut self.read);
             let Some(mirror) = mirrors.get(&order_id) else {
@@ -472,7 +472,7 @@ impl OrderState {
                 return;
             };
             Arc::make_mut(entry).apply_canonical(&mirror.state, applied_mask);
-            events.push(OrderEvent::Updated(Arc::clone(entry)));
+            events(OrderEvent::Updated(Arc::clone(entry)));
         }
 
         if exact
@@ -496,7 +496,7 @@ impl OrderState {
         from_uid: u64,
         range_end_uid: u64,
         catalog: &[OrderCatalogRecord],
-        events: &mut Vec<OrderEvent>,
+        events: &mut impl FnMut(OrderEvent),
         repairs: &mut Vec<OrderRepair>,
     ) {
         for item in catalog {
@@ -520,7 +520,7 @@ impl OrderState {
                 };
                 if let Some(entry) = read.map.get_mut(&item.order_id) {
                     Arc::make_mut(entry).apply_canonical(&mirror.state, ORDER_RECONCILE_MASK);
-                    events.push(OrderEvent::Updated(Arc::clone(entry)));
+                    events(OrderEvent::Updated(Arc::clone(entry)));
                 }
             }
         }
@@ -542,7 +542,7 @@ impl OrderState {
         }
     }
 
-    fn apply_gone(&mut self, order_id: u64, events: &mut Vec<OrderEvent>) {
+    fn apply_gone(&mut self, order_id: u64, events: &mut impl FnMut(OrderEvent)) {
         let Some(mirror) = self.mirrors.get(&order_id) else {
             self.record_tombstone(order_id);
             return;
@@ -555,7 +555,7 @@ impl OrderState {
             .retain(|pending| pending.uid != order_id);
         self.record_tombstone(order_id);
         if let Some(order) = self.remove_order_arc(order_id) {
-            events.push(OrderEvent::Removed(order));
+            events(OrderEvent::Removed(order));
         }
     }
 }

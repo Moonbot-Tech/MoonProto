@@ -48,6 +48,16 @@ pub struct MarketCommandHeader {
 
 impl MarketCommandHeader {
     pub fn read(r: &mut &[u8]) -> Option<Self> {
+        Self::read_with_name(r, true)
+    }
+
+    // Visual apply uses the order UID, not the inherited routing name. Validate
+    // the entire name range but do not materialize it in this internal result.
+    pub(crate) fn read_for_apply(r: &mut &[u8]) -> Option<Self> {
+        Self::read_with_name(r, false)
+    }
+
+    fn read_with_name(r: &mut &[u8], retain_name: bool) -> Option<Self> {
         let base = BaseCommandHeader::read(r)?;
         if r.len() < 2 {
             return None;
@@ -55,7 +65,7 @@ impl MarketCommandHeader {
         let currency = r[0];
         let platform = r[1];
         *r = &r[2..];
-        let market_name = read_str(r)?;
+        let market_name = read_str(r, retain_name)?;
         Some(Self {
             base,
             currency,
@@ -73,7 +83,7 @@ impl MarketCommandHeader {
     }
 }
 
-fn read_str(r: &mut &[u8]) -> Option<String> {
+fn read_str(r: &mut &[u8], retain_name: bool) -> Option<String> {
     if r.len() < 2 {
         return None;
     }
@@ -81,7 +91,7 @@ fn read_str(r: &mut &[u8]) -> Option<String> {
     if r.len() < 2 + len {
         return None;
     }
-    let s = decode_utf8_delphi(&r[2..2 + len]);
+    let s = if retain_name { decode_utf8_delphi(&r[2..2 + len]) } else { String::new() };
     *r = &r[2 + len..];
     Some(s)
 }

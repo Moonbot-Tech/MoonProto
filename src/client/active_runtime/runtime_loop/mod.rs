@@ -269,15 +269,11 @@ pub(super) fn runtime_loop(
             shared_config_refresh.poll(&client, &dispatcher);
             dispatcher.poll_settings_snapshot(&client);
         }
-        if state_changed && startup.is_none() {
-            publish_snapshot_profiled(&client, &dispatcher, &snapshot);
-        }
-
         #[cfg(any(test, feature = "diagnostics"))]
         let events_profile = crate::client::thread_cpu::ProfileTimer::start();
         if startup.is_none() {
             let events =
-                take_queued_events_and_publish_snapshot(&client, &mut dispatcher, &snapshot);
+                take_queued_events_and_publish_snapshot(&client, &mut dispatcher, &snapshot, state_changed);
             // Snapshot was published before events were emitted, while the
             // runtime still held the state that produced those events. Event
             // delivery itself runs after state apply and snapshot publish, not
@@ -729,9 +725,10 @@ pub(super) fn take_queued_events_and_publish_snapshot(
     client: &Client,
     dispatcher: &mut crate::events::EventDispatcher,
     snapshot: &RwLock<Option<MoonClientSnapshot>>,
+    state_changed: bool,
 ) -> Vec<crate::events::Event> {
     let events = dispatcher.take_queued_events();
-    if !events.is_empty() {
+    if state_changed || !events.is_empty() {
         publish_snapshot_profiled(client, dispatcher, snapshot);
     }
     events
@@ -780,6 +777,9 @@ fn publish_snapshot_profiled(
 }
 
 #[cfg(test)]
+mod optimization_bench;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::engine_api::ServerInfo;
@@ -813,7 +813,7 @@ mod tests {
         assert!(!refresh.request_due(0x2222, 10_000));
     }
 
-    fn dummy_cfg() -> ClientConfig {
+    pub(super) fn dummy_cfg() -> ClientConfig {
         ClientConfig {
             server_ip: "127.0.0.1".to_string(),
             server_port: 3000,
@@ -1048,7 +1048,7 @@ mod tests {
             2,
             0.0,
             &|_| true,
-            &mut events,
+            &mut |event| events.push(event),
             &mut repairs,
         );
         assert!(repairs.is_empty());
@@ -2684,6 +2684,35 @@ mod tests {
         let second = snapshot.read().clone().expect("second snapshot");
         assert_eq!(second.revision(), 2);
         assert_eq!(second.orders().len(), first.orders().len());
+    }
+
+    #[test]
+    fn runtime_tail_publishes_once_before_releasing_events() {
+        let client = Client::new(dummy_cfg());
+        for changed in [false, true] {
+            for has_events in [false, true] {
+                let mut dispatcher = crate::events::EventDispatcher::new();
+                let snapshot = RwLock::new(None);
+                publish_snapshot(&dispatcher, &snapshot);
+                if has_events {
+                    dispatcher.queue_events([
+                        crate::Event::Order(crate::state::OrderEvent::CorridorChanged(1)),
+                        crate::Event::Order(crate::state::OrderEvent::CorridorChanged(2)),
+                    ]);
+                }
+                let events = take_queued_events_and_publish_snapshot(&client, &mut dispatcher, &snapshot, changed);
+                assert_eq!(snapshot.read().as_ref().unwrap().revision(), 1 + u64::from(changed || has_events));
+                if has_events {
+                    assert!(matches!(events.as_slice(), [
+                        crate::Event::Order(crate::state::OrderEvent::CorridorChanged(1)),
+                        crate::Event::Order(crate::state::OrderEvent::CorridorChanged(2)),
+                    ]));
+                } else {
+                    assert!(events.is_empty());
+                }
+                assert!(dispatcher.take_queued_events().is_empty());
+            }
+        }
     }
 
     #[test]

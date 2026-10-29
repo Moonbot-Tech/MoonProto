@@ -11,7 +11,7 @@ impl EventDispatcher {
         now_ms: i64,
         out: &mut Vec<Event>,
     ) {
-        match TradeCommand::parse(payload) {
+        match TradeCommand::parse_for_apply(payload) {
             Some(TradeCommand::ClosedSellOrderReport(report)) => {
                 out.push(Event::ClosedSellOrderReport(ClosedSellOrderReportEvent {
                     db_id: report.db_id,
@@ -107,7 +107,6 @@ impl EventDispatcher {
         let server_time_delta = self.current_server_time_delta();
         let markets = &self.markets;
         let market_exists = |name: &str| markets.get(name).is_some();
-        let mut events = Vec::new();
         self.orders.apply_protocol(
             command,
             now_ms,
@@ -115,19 +114,16 @@ impl EventDispatcher {
             self.last_known_peer_app_token,
             server_time_delta,
             &market_exists,
-            &mut events,
+            &mut |event| out.push(Event::Order(event)),
             &mut self.order_repairs,
         );
-        out.extend(events.into_iter().map(Event::Order));
     }
 
     pub(super) fn rescan_parked_orders(&mut self, now_ms: i64, out: &mut Vec<Event>) {
         let markets = &self.markets;
         let market_exists = |name: &str| markets.get(name).is_some();
-        let mut events = Vec::new();
         self.orders
-            .rescan_parked(now_ms, &market_exists, &mut events);
-        out.extend(events.into_iter().map(Event::Order));
+            .rescan_parked(now_ms, &market_exists, &mut |event| out.push(Event::Order(event)));
     }
 
     pub(crate) fn tick_orders_into(&mut self, now_ms: i64, out: &mut Vec<Event>) {

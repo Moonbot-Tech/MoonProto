@@ -195,6 +195,86 @@ fixture, middle exact matches used about 55% fewer CPU cycles, prefix matches 47
 fewer and substring matches 24% fewer. These are lookup costs, not an estimate of
 station-wide CPU savings.
 
+## Order dispatch and runtime follow-ups
+
+Order state now appends events directly to the dispatch output, removing a
+temporary allocation without retaining another buffer. The internal visual
+command parser validates and skips the unused routing name for Corridor/Trace;
+the full wire parser still returns the full name. Existing order snapshots remain immutable.
+
+The runtime tail publishes once when state changed, events are pending, or both.
+Publication still precedes event delivery. Snapshot revisions remain monotonic
+publication identifiers, not counts of events or state changes. Command/startup
+publication points are unchanged. The diagnostic `runtime.events` phase now
+includes that tail publication; `snapshot.publish` remains its inclusive child.
+
+History subscription intent keeps its existing immutable shared scope. Repeated
+packets compare identity instead of every selected market name. A different scope
+is still compared by value; an equal replacement is adopted without restarting
+history or backfilling again. Real changes still reconfigure the history worker.
+
+MM/liquidation sections that are not retained read only their first row to establish
+packet time conversion. Complete section bounds are still validated, empty sections
+do not establish a time shift, and later WatcherFills use the same conversion.
+Retained sections still keep every row. Ordinary trade-row processing is unchanged.
+The general event queue still releases its buffer after delivery; capacity reuse
+is not part of this change. Compact polling remains 30 ms.
+
+```sh
+cargo test --release --locked --lib followup_ -- --ignored --nocapture --test-threads=1
+```
+
+Measured on Windows x86-64, Rust 1.96.0 MSVC, Release, on 2026-10-30, against
+public `b531977`. Both executables used the same test harness, five warmup batches
+and 20 measured batches per case. Five alternating before/after pairs were pinned
+to the same logical processor, without concurrent builds or load generators.
+Values are medians of run medians and run p95s. CPU is measured on the calling
+thread, not inferred from wall time. Allocation counts/bytes are requested
+allocations, including reallocations, not retained memory or peak RSS.
+
+| Operation | Calls/batch | CPU Mcycles, before → after | Wall ms p50, before → after | Wall ms p95, before → after | Allocations/call, before → after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Corridor apply, no held snapshot | 8192 | 3.179 → 1.791 | 0.843 → 0.471 | 0.879 → 0.475 | 1 → 0 |
+| Corridor apply, held snapshot | 8192 | 11.717 → 10.793 | 3.089 → 2.842 | 3.175 → 2.869 | 4 → 3 |
+| Corridor parse | 32768 | 10.351 → 5.937 | 2.726 → 1.563 | 2.844 → 1.586 | 1 → 0 |
+| Trace parse | 32768 | 10.834 → 6.580 | 2.856 → 1.733 | 2.974 → 1.757 | 1 → 0 |
+| Tail with changed state and an event | 8192 | 12.768 → 6.981 | 3.391 → 1.851 | 3.550 → 1.927 | 3 → 2 |
+| Unchanged scope, one selected market | 8192 | 0.736 → 0.167 | 0.193 → 0.044 | 0.195 → 0.046 | 0 → 0 |
+| Unchanged scope, 1000 selected markets | 8192 | 419.547 → 0.182 | 110.971 → 0.047 | 126.032 → 0.050 | 0 → 0 |
+| Unretained MM, 250 rows/packet | 8192 | 12.160 → 1.788 | 3.203 → 0.470 | 3.273 → 0.476 | 0 → 0 |
+| Unretained liquidations, 250 rows/packet | 8192 | 12.163 → 1.856 | 3.202 → 0.488 | 3.288 → 0.495 | 0 → 0 |
+
+The order fixture has one live order and clears a preallocated output after each
+call. The held-snapshot case takes/releases a fresh snapshot on each call, forcing
+copy-on-write; that necessary cost remains. The scratch buffer removal saves 64
+requested bytes per apply. Parser fixtures use a seven-byte name and save seven
+requested bytes each. Parse and typed apply are separate measurements, not full
+packet reception. The snapshot fixture has empty domain state and one queued event.
+The scope fixture disables history-worker creation and uses an empty catalog to
+isolate the repeated scope check; it does not represent applying data to 1000 markets.
+
+Controls show the boundaries of these gains:
+
+| Control | Calls/batch | CPU Mcycles, before → after | Wall ms p50, before → after | Wall ms p95, before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Scope All | 8192 | 0.165 → 0.169 | 0.043 → 0.044 | 0.044 → 0.050 |
+| Tail, no change/no event | 8192 | 0.184 → 0.175 | 0.048 → 0.046 | 0.048 → 0.046 |
+| Tail, changed state only | 8192 | 5.848 → 5.635 | 1.549 → 1.494 | 1.607 → 1.598 |
+| Tail, event only | 8192 | 6.968 → 6.991 | 1.846 → 1.853 | 1.875 → 1.878 |
+| Unretained MM, one row | 8192 | 1.859 → 1.797 | 0.489 → 0.473 | 0.497 → 0.481 |
+| Unretained liquidation, one row | 8192 | 1.849 → 1.851 | 0.487 → 0.487 | 0.497 → 0.498 |
+| Retained MM, 250 rows | 256 | 3.605 → 3.630 | 0.950 → 0.956 | 1.113 → 1.088 |
+| Retained liquidations, 250 rows | 256 | 1.256 → 1.249 | 0.330 → 0.328 | 0.380 → 0.403 |
+| Unchanged event queue, 4096 events | 256 | 33.980 → 34.236 | 8.963 → 9.035 | 9.640 → 9.203 |
+
+Retained controls include producer-side construction and queueing into the real
+history worker; worker CPU and the final flush are outside their timer. They keep
+the same allocation counts and show no material producer CPU change (within 1%);
+the unchanged queue control varies similarly. Small constant-time cases are near
+the harness floor. These measurements do not establish station-wide CPU savings:
+the benefit depends on command frequency, held snapshots, selected-market scope
+and history settings. Do not add percentages from these separate operations.
+
 ## Bulk receive buffers
 
 Full candle snapshots and market-history archives retain their receive buffers

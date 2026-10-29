@@ -28,13 +28,22 @@ pub struct OrderTracePoint {
 impl OrderTracePoint {
     pub fn read(r: &mut &[u8]) -> Option<Self> {
         let market = MarketCommandHeader::read(r)?;
+        Some(Self::read_body(r, market))
+    }
+
+    pub(crate) fn read_for_apply(r: &mut &[u8]) -> Option<Self> {
+        let market = MarketCommandHeader::read_for_apply(r)?;
+        Some(Self::read_body(r, market))
+    }
+
+    fn read_body(r: &mut &[u8], market: MarketCommandHeader) -> Self {
         let trace_time = read_f64_zero_tail(r);
         let trace_price = read_f32_zero_tail(r);
         let base_price = read_f32_zero_tail(r);
         let stop_price = read_f32_zero_tail(r);
         let ord_type = OrderType::from_byte(read_u8_zero_tail(r));
         let flags = read_u8_zero_tail(r);
-        Some(Self {
+        Self {
             market,
             trace_time,
             trace_price,
@@ -42,7 +51,7 @@ impl OrderTracePoint {
             stop_price,
             ord_type,
             flags,
-        })
+        }
     }
 
     pub fn is_temp(&self) -> bool {
@@ -82,12 +91,21 @@ pub struct CorridorUpdate {
 impl CorridorUpdate {
     pub fn read(r: &mut &[u8]) -> Option<Self> {
         let market = MarketCommandHeader::read(r)?;
+        Some(Self::read_body(r, market))
+    }
+
+    pub(crate) fn read_for_apply(r: &mut &[u8]) -> Option<Self> {
+        let market = MarketCommandHeader::read_for_apply(r)?;
+        Some(Self::read_body(r, market))
+    }
+
+    fn read_body(r: &mut &[u8], market: MarketCommandHeader) -> Self {
         let price_down = read_f32_zero_tail(r);
         let price_up = read_f32_zero_tail(r);
-        Some(Self {
+        Self {
             market,
             price_down,
             price_up,
-        })
+        }
     }
 }

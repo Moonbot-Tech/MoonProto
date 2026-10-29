@@ -191,7 +191,8 @@ impl EventDispatcher {
                     if collect_market_history {
                         history_mm_order_rows.reserve(row_count);
                     }
-                    for row in rows {
+                    let rows_to_read = if collect_market_history { row_count } else { 1 };
+                    for row in rows.take(rows_to_read) {
                         Self::ensure_trades_packet_time_shift(
                             decoded.base_time,
                             row.time_delta_ms,
@@ -233,7 +234,8 @@ impl EventDispatcher {
                     if collect_market_history {
                         history_trade_rows.reserve(row_count);
                     }
-                    for trade in rows {
+                    let rows_to_read = if collect_market_history { row_count } else { 1 };
+                    for trade in rows.take(rows_to_read) {
                         Self::ensure_trades_packet_time_shift(
                             decoded.base_time,
                             trade.time_delta_ms,

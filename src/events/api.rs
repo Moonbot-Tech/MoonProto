@@ -236,7 +236,7 @@ impl EventDispatcher {
                 .apply_markets_prices_payload_collecting_last_price_at(
                     &resp.data,
                     self.trade_storage_scope
-                        .as_ref()
+                        .as_deref()
                         .map(|scope| (scope, &mut last_price_rows)),
                     now_ms,
                 )

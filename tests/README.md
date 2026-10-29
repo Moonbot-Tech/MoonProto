@@ -60,11 +60,22 @@ across aliases and canonical names, all matching fields, ASCII case handling,
 whitespace, missing inputs and stable-handle identity. Reproducible receive and
 single-market lookup benchmarks are documented in [performance](../docs/performance.md).
 
-The combined receive and lookup changes passed the full live FireTest profile on
-2026-10-30 in 254.49 seconds: startup state, manual statistics, archives, 10%/50%
+Dispatch follow-up regressions cover visual-header truncation and invalid UTF-8,
+future-version/world gates, unchanged held order snapshots, equal/replaced history
+scopes and MM intent changes, first-row time conversion across skipped/empty
+sections, complete retained MM/liquidation rows, and single snapshot publication
+before ordered event delivery. The `followup_` benchmarks measure CPU/allocations
+for these paths, including retained-history and unchanged event-queue controls.
+
+The receive, lookup and dispatch follow-ups passed the full live FireTest profile
+on 2026-10-30 in 239.65 seconds: startup state, manual statistics, archives, 10%/50%
 packet-loss recovery, order lifecycle, strategy synchronization, settings restore,
 forced disconnect and automatic reconnect. This functional run is separate from
-the synthetic CPU measurements.
+the synthetic CPU measurements. An earlier run missed several startup state
+messages on one client and failed the mandatory health gate. The saved public
+baseline then passed (235.21 seconds), followed by the current build above, without
+relaxing the gate or changing delivery code. The failed run has no per-message
+send/ACK trace to identify its cause; these optimizations do not claim to fix it.
 
 Tests under `src/events/tests.rs` and `src/state/**/tests.rs` protect Active Lib
 state application and retained read models. Direct state/dispatcher use here is

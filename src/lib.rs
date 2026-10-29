@@ -249,3 +249,6 @@ pub use state::{
 pub use time::DelphiTime;
 pub use time::{MoonTime, ServerClock};
 pub use transport::MoonKey;
+
+#[cfg(test)]
+mod bench_support;

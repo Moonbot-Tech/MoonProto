@@ -238,7 +238,7 @@ pub(crate) struct EventDispatcher {
     /// Active Lib retained-storage scope from `Client::subscribe_*trades*`.
     /// `None` means trades stream is not subscribed and retained trade/candle/
     /// derived state must stay disabled.
-    trade_storage_scope: Option<TradeStorageScope>,
+    trade_storage_scope: Option<Arc<TradeStorageScope>>,
     /// Local MM-history intent. The server broadcasts one shared trades packet,
     /// so MM sections may be present even when this client requested
     /// `TradesOnly`; only explicit local intent may retain them.
@@ -251,7 +251,7 @@ pub(crate) struct EventDispatcher {
     /// `ServerInfo::exchange_code`. Hidden from public API; unknown/missing
     /// exchange falls back to the Huobi-class profile.
     eps_profile: EpsProfile,
-    last_market_history_scope: Option<TradeStorageScope>,
+    last_market_history_scope: Option<Arc<TradeStorageScope>>,
     last_market_history_markets_version: Option<u64>,
     #[cfg(test)]
     panic_next_active_dispatch: bool,
@@ -891,3 +891,6 @@ impl EventDispatcher {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod optimization_bench;
