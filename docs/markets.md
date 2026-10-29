@@ -115,6 +115,30 @@ selected handle; raw arb `market_index` blocks are diagnostic protocol details.
 Arb price entries expose `time()` / `unix_millis()` helpers; the fixed ring
 cursor is diagnostics/test-only.
 
+## Caching Market Lookups
+
+Use `MarketsState::markets_version()` to invalidate cached name/symbol lookups,
+including "not found" results. Read the revision and perform the lookup on the
+**same snapshot**, so a new list cannot be paired with an older revision:
+
+```rust
+let Some(state) = client.snapshot() else { return; };
+let markets = state.markets();
+let revision = markets.markets_version();
+let market = markets.find("BTC");
+// Cache `market` (including None) with this revision and the query.
+```
+
+The revision changes when new market names become visible; a full-list apply
+may also advance it without adding names. Compare it for equality only within
+one client, and clear the cache when replacing that client. Include any other
+lookup inputs, such as quote currency, in your cache key.
+
+This is not a revision of all market data: prices, volumes, deltas, tags,
+trading status, and server-index order can change independently. Keep reading
+live values from retained handles; this revision does not invalidate caches
+that filter or sort by those values.
+
 ## Manual Volumes And Deltas
 
 Call `client.markets().refresh_stats()?` when the user requests an update. One

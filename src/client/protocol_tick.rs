@@ -36,7 +36,7 @@ impl ProtocolCore<'_> {
     }
 
     pub(crate) fn idle_wait_duration(&self) -> Duration {
-        Duration::from_millis(if self.client.cfg.market_history.is_compact() { 15 } else { DEFAULT_SLEEP_MS })
+        Duration::from_millis(if self.client.cfg.market_history.is_compact() { 30 } else { DEFAULT_SLEEP_MS })
     }
 
     pub(crate) fn wait_for_data(&mut self) {

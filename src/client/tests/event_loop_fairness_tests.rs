@@ -70,9 +70,9 @@ fn idle_wait_changes_only_for_compact_history_profiles() {
         (MarketHistorySizing::Auto, 5),
         (MarketHistorySizing::auto_with_budget_percent(75), 5),
         (MarketHistorySizing::auto_with_budget_percent(800), 5),
-        (MarketHistorySizing::Compact, 15),
-        (MarketHistorySizing::compact_with_budget_percent(75), 15),
-        (MarketHistorySizing::compact_with_budget_percent(200), 15),
+        (MarketHistorySizing::Compact, 30),
+        (MarketHistorySizing::compact_with_budget_percent(75), 30),
+        (MarketHistorySizing::compact_with_budget_percent(200), 30),
     ] {
         let mut client = Client::new(dummy_cfg().with_market_history(sizing));
         assert_eq!(ProtocolCore { client: &mut client }.idle_wait_duration(), Duration::from_millis(millis));

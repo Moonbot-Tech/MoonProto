@@ -179,7 +179,16 @@ impl MarketsState {
         std::mem::take(&mut self.new_markets_added)
     }
 
-    pub(crate) fn markets_version(&self) -> u64 {
+    /// Revision of the retained market-name universe for name-lookup caches.
+    ///
+    /// Changes when new market names become visible. A full-list apply may
+    /// also advance it without adding names. It does not track live prices,
+    /// volumes, deltas, tags, trading status, or server-index order.
+    ///
+    /// Read this revision and perform the lookup on the same snapshot's
+    /// `MarketsState`. Compare revisions for equality within one client;
+    /// discard cached results when replacing the client. The counter can wrap.
+    pub fn markets_version(&self) -> u64 {
         self.markets_version
     }
 
