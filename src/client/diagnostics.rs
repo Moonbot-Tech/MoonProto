@@ -551,11 +551,14 @@ pub(crate) fn err_emu_drop_decision(cmd: u8) -> Option<ErrEmuDropDecision> {
         return None;
     }
     let drop_rate = err_emu_drop_rate_for_cmd(base_rate, cmd);
-    let roll: u8 = rand::random::<u8>() % 100;
     Some(ErrEmuDropDecision {
         configured_rate: base_rate,
-        dropped: roll < drop_rate,
+        dropped: sample_err_emu_drop(&mut rand::thread_rng(), drop_rate),
     })
+}
+
+fn sample_err_emu_drop(rng: &mut impl rand::Rng, drop_rate: u8) -> bool {
+    rng.gen_ratio(u32::from(drop_rate), 100)
 }
 
 #[inline]
@@ -580,6 +583,20 @@ pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn err_emu_sampling_matches_configured_percentage() {
+        use rand::SeedableRng;
+        const SAMPLES: usize = 1_000_000;
+        for rate in [0, 5, 10, 25, 50, 100] {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(20261030);
+            let dropped = (0..SAMPLES).filter(|_| sample_err_emu_drop(&mut rng, rate)).count();
+            let expected = SAMPLES * usize::from(rate) / 100;
+            println!("ErrEmu rate={rate} dropped={dropped}/{SAMPLES} expected={expected}");
+            let tolerance = if rate == 0 || rate == 100 { 0 } else { SAMPLES / 200 };
+            assert!(dropped.abs_diff(expected) <= tolerance, "biased loss rate: {rate}%");
+        }
+    }
 
     fn sliced_payload(datagram_num: u16, block_num: u8, max_block_num: u8) -> Vec<u8> {
         let mut out = Vec::new();

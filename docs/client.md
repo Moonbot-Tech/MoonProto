@@ -246,6 +246,11 @@ FireTest uses it to emulate packet loss, attribute sliced-response recovery, and
 check that receive/apply/enqueue paths stay bounded. These counters are passive;
 they never change retry, ACK, reconnect, queueing, or drop decisions.
 
+Packet-loss emulation is an explicit exception: `set_err_emu(percent)` drops
+incoming packets at the configured probability (half that rate for service
+packets). Sampling is unbiased; before the 2026-10-30 correction, a configured
+10% actually meant 11.71875%, and 50% meant 58.59375%.
+
 For day-to-day development use the test guide in `tests/README.md`. Low-level
 wire tracing is a separate `diagnostic-trace` feature and is intended only for
 investigating concrete packet-flow bugs.
@@ -268,6 +273,12 @@ queues the order snapshot, client strategy snapshot, settings, MM-orders, and
 balance resync intents. Their replies are normal domain updates and may arrive
 after `Ready`. `InitConfig` adds local strategies, optional stream
 subscriptions, and timing.
+
+`Ready` does not guarantee receipt of every initial core state. If all delivery
+attempts for an initial runtime, license, profit or strategy-running state are
+lost, that state can still be absent after `Ready`. Restoring connectivity alone
+does not request those missing states again. Treat an absent value as unknown,
+not as a received zero or `false`.
 
 The runtime keeps the client loop running while it waits for the connection and
 for each Engine API response on the mandatory spine. It applies state in the

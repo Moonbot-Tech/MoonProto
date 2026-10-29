@@ -77,6 +77,22 @@ baseline then passed (235.21 seconds), followed by the current build above, with
 relaxing the gate or changing delivery code. The failed run has no per-message
 send/ACK trace to identify its cause; these optimizations do not claim to fix it.
 
+A subsequent focused investigation reproduced the same missing-state pattern in
+3 of 10 connections at configured 50% loss, enabled only for the first six seconds. Each
+missing initial state had all three transmission attempts dropped; initialization
+then reached `Ready` after loss was disabled, without recovering those states.
+This proves a startup-delivery limitation, but does not retrospectively identify
+the untraced original failure. Temporary packet probes were removed.
+
+That investigation also corrected biased packet-loss sampling. A fixed-seed
+regression checks one million samples at each of 0%, 5%, 10%, 25%, 50% and 100%.
+It fails against the old byte-modulo sampler and passes with unbiased sampling.
+Older runs above used configured rates; their actual probabilities were
+11.71875% and 58.59375%, respectively. Mandatory startup-health checks remain
+unchanged; correcting the emulator does not fix missing startup-state recovery.
+After the correction, all 1,229 unit tests and the full live FireTest profile
+passed (251.32 seconds), with the same mandatory health gates and configured rates.
+
 Tests under `src/events/tests.rs` and `src/state/**/tests.rs` protect Active Lib
 state application and retained read models. Direct state/dispatcher use here is
 intentional: these tests prove exact parser/apply behavior without needing a live
