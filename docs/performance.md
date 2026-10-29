@@ -92,6 +92,109 @@ excluding time spent asleep. Nested runtime and dispatch phases remain inclusive
 Diagnostic Windows and Linux builds also name the runtime, lifecycle, and history threads
 for external per-thread CPU accounting. Normal builds contain no phase timers.
 
+## Ordinary receive buffers and indexed market updates
+
+Ordinary Engine API responses are parsed and, when necessary, inflated once through active
+delivery. Client bookkeeping and state application reuse that result. A registered
+receiver that also needs an independent response gets one body copy; a pending
+market-list/price owner receives the response directly and applies it later as before.
+
+Ordinary, non-grouped datagrams retain their owned receive buffer through AES-GCM
+and active delivery. Header removal advances a slice boundary instead of moving
+the payload. Grouped subcommands and pre-authentication buffering still materialize
+their independently owned data. Socket input and decompressed output still allocate.
+
+Indexed updates resolve the current server index directly to a local market
+position. Both server-map changes and local-list changes rebuild the table;
+stale-session gates still apply. A published snapshot retains its mapping.
+This adds about 16 KB per 1000 markets per client on 64-bit targets, plus a linear
+rebuild when the mapping changes. Normal price/trade updates do not rebuild it.
+The public API and Compact's 30 ms idle wait are unchanged.
+
+Run the synchronous receive benchmark without a server or credentials:
+
+```sh
+cargo test --release --locked --lib receive_hot_path_benchmark -- --ignored --nocapture --test-threads=1
+```
+
+The benchmark replays generated datagrams through transport validation, optional
+AES-GCM, API parsing, bookkeeping and active market-state application. Each batch
+contains 256 updates of 1000 markets, or 8192 encrypted updates of one market.
+The server index order is reversed and every final bid/ask is checked. Each case
+has five warmups and 20 measured batches. Encryption, fixture construction, slider
+reset and result comparisons are outside the timer in both versions. The decoded
+workload is identical; encryption IVs are generated during fixture construction.
+
+This is a synthetic receive-path comparison, including test-build diagnostics
+and thread-local allocation counting. It excludes sockets, OS fragmentation,
+Sliced reassembly, waiting, outgoing sends, and retained-history workers. The large
+direct datagrams isolate receive/parse/apply costs; they do not model the core's
+normal packetization. Allocation bytes mean requested allocation/reallocation
+sizes, not retained memory. Use normal `runtime_bench` builds and the station's
+own profiler to measure whole-process CPU; these numbers are not a predicted
+station-wide saving or Linux allocator result.
+
+Measured on Windows x86-64, Rust 1.96.0 MSVC, Release, on 2026-10-29. The baseline
+is public `98420c6d`. Both executables used the same harness; values are medians
+of three run medians (and medians of each run's p95), with alternating order and
+no concurrent builds or load generators. CPU values are measured thread cycles,
+not wall time converted through a nominal clock frequency.
+
+| Update per message | Messages/batch | CPU Mcycles, before → after | Wall ms p50, before → after | Wall ms p95, before → after | Allocations/message, before → after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1000 prices | 256 | 131.064 → 94.738 | 34.958 → 25.681 | 36.705 → 26.510 | 4 → 2 |
+| 1000 prices, DEFLATE | 256 | 213.934 → 139.271 | 57.805 → 37.556 | 65.264 → 39.404 | 6 → 3 |
+| 1000 prices, AES-GCM | 256 | 152.224 → 112.537 | 40.270 → 30.010 | 42.040 → 32.064 | 4 → 2 |
+| One price, AES-GCM | 8192 | 129.466 → 117.500 | 35.945 → 33.277 | 40.408 → 35.814 | 4 → 2 |
+
+Requested allocation bytes per message fell from approximately 108633 to 54589,
+211293 to 105919, 108697 to 54635, and 799 to 686 respectively. The extra persistent
+index table is created before timing and is accounted for separately above.
+The combined changes reduced measured receive CPU by about 26–35% for the large
+fixtures and 9% for the small encrypted fixture. These are combined results,
+not independent savings that can be added together.
+
+## Single-market search
+
+`MarketsState::find` scans without allocating match lists. It returns immediately
+on the first exact match; otherwise it keeps the first prefix and substring
+candidates and returns the better one. Matching fields, ASCII case handling,
+whitespace trimming, ranking, market-list tie order and stable handles are unchanged.
+Only the returned handle is cloned. No cache or additional persistent state is added.
+`search` continues to return a ranked list for autocomplete.
+
+```sh
+cargo test --release --locked --lib market_find_benchmark -- --ignored --nocapture --test-threads=1
+```
+
+Measured on Windows x86-64, Rust 1.96.0 MSVC, Release, on 2026-10-30. Both
+executables used the same harness and the same 1000-market catalog. The baseline
+used `search(input, 1)` as in public `98420c6d`. Five alternating before/after pairs
+were pinned to the same logical processor, without concurrent builds or load
+generators. Each case used five warmups and 20 measured batches of 128 lookups.
+The table gives medians of run medians and run p95s. The timer includes lookup,
+stable-handle identity checks and result release in both versions. Catalog creation
+and reference lookup are outside timing. Allocation counting is test-only;
+requested bytes include reallocations, not retained memory or peak usage.
+
+| Query | CPU Mcycles/batch, before → after | Wall ms p50, before → after | Wall ms p95, before → after | Allocations/lookup, before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Exact, first market | 60.837 → 0.016 | 16.153 → 0.004 | 20.280 → 0.004 | 2 → 0 |
+| Exact, middle market | 61.609 → 27.820 | 16.376 → 7.361 | 17.079 → 8.009 | 2 → 0 |
+| Exact, last market | 60.857 → 60.064 | 16.120 → 15.964 | 17.652 → 17.536 | 2 → 0 |
+| Prefix, many matches | 15.463 → 8.135 | 4.112 → 2.152 | 5.009 → 2.595 | 10 → 0 |
+| Substring, many matches | 26.526 → 20.159 | 7.036 → 5.380 | 7.656 → 6.031 | 10 → 0 |
+| No match | 25.836 → 25.374 | 6.820 → 6.708 | 7.070 → 7.474 | 0 → 0 |
+
+Requested bytes per successful lookup fell from 120 for exact matches and 49080
+for the many-match cases to zero. Empty input remained allocation-free and took
+about 0.002 ms per batch in both versions. The first-match result is near the
+timer/harness floor; do not extrapolate its ratio to typical queries. Last-match
+and missing queries still scan the catalog and show no material speedup. In this
+fixture, middle exact matches used about 55% fewer CPU cycles, prefix matches 47%
+fewer and substring matches 24% fewer. These are lookup costs, not an estimate of
+station-wide CPU savings.
+
 ## Bulk receive buffers
 
 Full candle snapshots and market-history archives retain their receive buffers

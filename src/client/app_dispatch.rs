@@ -1,13 +1,39 @@
 use super::metrics::ProtocolMetrics;
+use crate::commands::engine_api::{parse_engine_response, EngineResponse};
+use crate::protocol::payload::Payload;
 use crate::protocol::Command;
 #[cfg(any(test, feature = "diagnostics"))]
 use std::time::Instant;
 
 type DispatchBuffers = (
     Vec<crate::events::Event>,
-    Vec<(Command, Vec<u8>)>,
+    Vec<(Command, DecodedPayload)>,
     Vec<crate::events::ActiveAction>,
 );
+
+/// Keeps receive storage and an optional parse result through active delivery.
+/// `Some(None)` remembers a failed parse so malformed compressed bodies are not retried.
+pub(crate) struct DecodedPayload {
+    pub(crate) raw: Payload,
+    pub(crate) parsed_api: Option<Option<EngineResponse>>,
+}
+
+impl<T: Into<Payload>> From<T> for DecodedPayload {
+    fn from(raw: T) -> Self {
+        Self { raw: raw.into(), parsed_api: None }
+    }
+}
+
+impl DecodedPayload {
+    pub(crate) fn parse_api(&mut self) -> &mut Option<EngineResponse> {
+        self.parsed_api.get_or_insert_with(|| parse_engine_response(&self.raw))
+    }
+}
+
+impl std::ops::Deref for DecodedPayload {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { &self.raw }
+}
 
 /// Single active receive delivery path.
 ///
@@ -21,7 +47,7 @@ pub(crate) struct RunMode<'a> {
     /// Reusable event buffer (avoids alloc per packet).
     pub(crate) event_buf: Vec<crate::events::Event>,
     /// Reusable buffer of decoded payloads before the dispatcher.
-    pub(crate) payload_buf: Vec<(Command, Vec<u8>)>,
+    pub(crate) payload_buf: Vec<(Command, DecodedPayload)>,
     /// Reusable buffer of active-library side effects.
     pub(crate) active_actions_buf: Vec<crate::events::ActiveAction>,
 }
@@ -35,7 +61,7 @@ impl<'a> RunMode<'a> {
     pub(crate) fn with_buffers(
         dispatcher: &'a mut crate::events::EventDispatcher,
         event_buf: Vec<crate::events::Event>,
-        payload_buf: Vec<(Command, Vec<u8>)>,
+        payload_buf: Vec<(Command, DecodedPayload)>,
         active_actions_buf: Vec<crate::events::ActiveAction>,
     ) -> Self {
         Self {

@@ -115,7 +115,7 @@ pub(crate) fn transport_unpack(
     mask_ver: u8,
 ) -> Option<(ServerMsgHeader, Vec<u8>)> {
     let mac_ctx = MacContext::new(mac_key);
-    transport_unpack_with_mac(&mac_ctx, raw, mask_ver)
+    transport_unpack_with_mac(&mac_ctx, raw, mask_ver).map(|(header, payload)| (header, payload.into_vec()))
 }
 
 /// Hot-path unpack with a cached [`MacContext`]: derive the SipHash keyed initial
@@ -130,7 +130,7 @@ pub(crate) fn transport_unpack_with_mac(
     mac_ctx: &MacContext,
     raw: &[u8],
     mask_ver: u8,
-) -> Option<(ServerMsgHeader, Vec<u8>)> {
+) -> Option<(ServerMsgHeader, crate::protocol::payload::Payload)> {
     let mut buf: Vec<u8> = extended::unwrap_server_packet(raw, normalize_mode(mask_ver))?;
 
     if buf.len() < header::SERVER_HDR_SIZE {
@@ -162,10 +162,9 @@ pub(crate) fn transport_unpack_with_mac(
         return None;
     }
 
-    // Move payload bytes to the front inside the existing buffer. This avoids a
-    // second Vec while keeping the parser-facing payload contiguous.
-    buf.drain(..header::SERVER_HDR_SIZE);
-    Some((hdr, buf))
+    let mut payload = crate::protocol::payload::Payload::from(buf);
+    payload.restrict(header::SERVER_HDR_SIZE..payload.len());
+    Some((hdr, payload))
 }
 
 #[inline]

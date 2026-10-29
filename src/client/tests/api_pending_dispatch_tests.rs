@@ -12,6 +12,12 @@ mod bulk_receive_bench;
 #[path = "bulk_receive_tests.rs"]
 mod bulk_receive_tests;
 
+#[path = "receive_hot_path_bench.rs"]
+mod receive_hot_path_bench;
+
+#[path = "receive_ownership_tests.rs"]
+mod receive_ownership_tests;
+
 fn write_str8(out: &mut Vec<u8>, value: &str) {
     out.push(value.len() as u8);
     out.extend_from_slice(value.as_bytes());

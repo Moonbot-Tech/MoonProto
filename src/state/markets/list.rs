@@ -320,6 +320,7 @@ impl MarketsState {
         }
         self.by_name = Arc::new(by_name);
         self.handles_by_name = Arc::new(handles_by_name);
+        self.rebuild_server_market_positions();
     }
 
     fn bump_markets_version(&mut self) {

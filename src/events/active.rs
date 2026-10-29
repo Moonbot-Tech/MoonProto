@@ -128,6 +128,7 @@ impl EventDispatcher {
     /// in one dispatch call, even when a grouped payload contains several
     /// matching control events. Trades gap resend is checked after a successful
     /// trades packet, matching Delphi `ProcessTradesStream`.
+    #[cfg(test)]
     pub(crate) fn dispatch_into_active_actions(
         &mut self,
         cmd: Command,
@@ -136,6 +137,19 @@ impl EventDispatcher {
         out: &mut Vec<Event>,
         ctx: &ActiveDispatchContext,
         actions: &mut Vec<ActiveAction>,
+    ) {
+        self.dispatch_into_active_actions_with_response(cmd, payload, now_ms, out, ctx, actions, None);
+    }
+
+    pub(crate) fn dispatch_into_active_actions_with_response(
+        &mut self,
+        cmd: Command,
+        payload: &[u8],
+        now_ms: i64,
+        out: &mut Vec<Event>,
+        ctx: &ActiveDispatchContext,
+        actions: &mut Vec<ActiveAction>,
+        parsed_api: Option<Option<crate::commands::engine_api::EngineResponse>>,
     ) {
         #[cfg(test)]
         if self.panic_next_active_dispatch {
@@ -261,7 +275,7 @@ impl EventDispatcher {
         }
 
         let start_len = out.len();
-        self.dispatch_into_with_history(cmd, payload, now_ms, Some(ctx), out, actions);
+        self.dispatch_into_with_history(cmd, payload, now_ms, Some(ctx), out, actions, parsed_api);
         self.sync_market_history_storage();
         for repair in self.order_repairs.drain(..) {
             actions.push(ActiveAction::RequestOrderStatus {

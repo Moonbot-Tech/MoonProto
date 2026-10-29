@@ -114,14 +114,28 @@ impl Client {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn dispatch_api_pending(api_pending: &ApiPending, cmd: u8, payload: &[u8]) -> bool {
+        Self::dispatch_api_pending_decoded(api_pending, cmd, &mut DecodedPayload::from(payload.to_vec()))
+    }
+
+    pub(crate) fn dispatch_api_pending_decoded(api_pending: &ApiPending, cmd: u8, payload: &mut DecodedPayload) -> bool {
         if cmd != Command::API.to_byte() {
             return false;
         }
         let Some(uid) = Self::engine_response_request_uid_from_payload(payload) else {
             return false;
         };
-        api_pending.dispatch_registered_with(uid, || parse_engine_response(payload))
+        api_pending.dispatch_registered_with(uid, || {
+            let response = payload.parse_api();
+            if method_applies_after_pending(response.as_ref()?.method) {
+                response.take()
+            } else {
+                // The pending receiver and active state are independent owners.
+                // Clone only for a live waiter; parsing/inflation still happens once.
+                response.clone()
+            }
+        })
     }
 
     pub(crate) fn dispatch_chunked_api_response(pending_api: &mut PendingApi, cmd: u8, payload: &mut Payload) -> bool {
@@ -159,11 +173,12 @@ impl Client {
     pub(crate) fn client_new_data_decoded(
         &mut self,
         cmd: u8,
-        payload: Vec<u8>,
+        payload: impl Into<DecodedPayload>,
         api_pending_consumed_by_reader: bool,
         chunked_response_consumed_by_reader: bool,
-        payload_buf: &mut Vec<(Command, Vec<u8>)>,
+        payload_buf: &mut Vec<(Command, DecodedPayload)>,
     ) {
+        let payload = payload.into();
         if cmd == Command::API.to_byte() {
             match self.process_api_command_decoded(
                 payload,
@@ -186,21 +201,19 @@ impl Client {
 
     pub(crate) fn process_api_command_decoded(
         &mut self,
-        payload: Vec<u8>,
+        mut payload: DecodedPayload,
         api_pending_consumed_by_reader: bool,
         chunked_response_consumed_by_reader: bool,
-        payload_buf: &mut Vec<(Command, Vec<u8>)>,
-    ) -> Result<(), Vec<u8>> {
+        payload_buf: &mut Vec<(Command, DecodedPayload)>,
+    ) -> Result<(), DecodedPayload> {
         // Engine API responses first enter their registered pending collector.
         // Unregistered responses remain available to the ordinary data path.
         if chunked_response_consumed_by_reader {
             return Ok(());
         }
-        let mut payload = Payload::from(payload);
-        if Self::dispatch_chunked_api_response(&mut self.pending_api, Command::API.to_byte(), &mut payload) {
+        if Self::dispatch_chunked_api_response(&mut self.pending_api, Command::API.to_byte(), &mut payload.raw) {
             return Ok(());
         }
-        let payload = payload.into_vec();
         if let Some(meta) = Self::engine_response_meta_from_payload(&payload) {
             // An unregistered response falls back to the ordinary pending/event
             // path used by fire-and-forget API callers.
@@ -217,15 +230,15 @@ impl Client {
                 return Ok(());
             }
 
-            let Some(resp) = parse_engine_response(&payload) else {
+            let Some(resp) = payload.parse_api().as_ref() else {
                 return Err(payload);
             };
 
-            self.apply_engine_response_client_bookkeeping(&resp);
+            self.apply_engine_response_client_bookkeeping(resp);
 
             // 2. Pending registry (ordinary async API).
             if !api_pending_consumed_by_reader {
-                let _ = self.pending_api.api_pending.dispatch(resp);
+                self.pending_api.api_pending.dispatch_registered_with(resp.request_uid, || Some(resp.clone()));
             }
             // Active state must update regardless of whether user code also
             // awaited this response via a Receiver.

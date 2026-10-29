@@ -46,12 +46,13 @@ impl ProtocolCore<'_> {
     pub(crate) fn client_new_data(
         &mut self,
         cmd: u8,
-        payload: Vec<u8>,
+        payload: impl Into<DecodedPayload>,
         api_pending_consumed_by_reader: bool,
         chunked_response_consumed_by_reader: bool,
         cur_tm: i64,
         mode: &mut RunMode<'_>,
     ) {
+        let payload = payload.into();
         let command = Command::from_byte(cmd);
         let trace_runtime_state =
             trace_io_enabled() && is_strat_runtime_state_payload(command, &payload);
@@ -194,7 +195,7 @@ impl ProtocolCore<'_> {
             return;
         }
         let mut decoded_payloads = std::mem::take(&mut mode.payload_buf);
-        for (c, p) in decoded_payloads.drain(..) {
+        for (c, mut p) in decoded_payloads.drain(..) {
             let trace_runtime_dispatch =
                 trace_io_enabled() && is_strat_runtime_state_payload(c, &p);
             let dispatch_result = catch_unwind(AssertUnwindSafe(|| {
@@ -214,13 +215,15 @@ impl ProtocolCore<'_> {
                     crate::client::thread_cpu::ThreadCpuTimer::start();
                 #[cfg(any(test, feature = "diagnostics"))]
                 let active_dispatch_inner_start = crate::client::thread_cpu::ProfileTimer::start();
-                mode.dispatcher.dispatch_into_active_actions(
+                let parsed_api = p.parsed_api.take();
+                mode.dispatcher.dispatch_into_active_actions_with_response(
                     c,
                     &p,
                     cur_tm,
                     &mut mode.event_buf,
                     &ctx,
                     &mut mode.active_actions_buf,
+                    parsed_api,
                 );
                 #[cfg(any(test, feature = "diagnostics"))]
                 self.client

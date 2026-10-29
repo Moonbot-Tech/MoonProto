@@ -215,7 +215,7 @@ impl ProtocolCore<'_> {
                     .load(Ordering::Relaxed);
                 self.route_command(
                     hdr.cmd,
-                    &payload,
+                    payload,
                     recv_bytes,
                     total_recv_after,
                     timestamp_ms,
@@ -245,7 +245,7 @@ impl ProtocolCore<'_> {
                         } else {
                             self.route_command(
                                 hdr.cmd,
-                                &payload,
+                                payload,
                                 recv_bytes,
                                 total_recv_after,
                                 timestamp_ms,
@@ -256,7 +256,7 @@ impl ProtocolCore<'_> {
                     } else {
                         self.route_command(
                             hdr.cmd,
-                            &payload,
+                            payload,
                             recv_bytes,
                             total_recv_after,
                             timestamp_ms,
@@ -269,7 +269,7 @@ impl ProtocolCore<'_> {
                 {
                     self.route_command(
                         hdr.cmd,
-                        &payload,
+                        payload,
                         recv_bytes,
                         total_recv_after,
                         timestamp_ms,
@@ -333,13 +333,18 @@ impl ProtocolCore<'_> {
     pub(crate) fn route_command(
         &mut self,
         raw_cmd: u8,
-        payload: &[u8],
+        payload: impl Into<Payload>,
         recv_bytes: u64,
         total_recv_after: u64,
         timestamp_ms: i64,
         mode: &mut RunMode<'_>,
         protocol_wait: &mut Duration,
     ) -> bool {
+        let payload = payload.into();
+        #[cfg(any(test, feature = "diagnostics"))]
+        let payload_len = payload.len();
+        #[cfg(any(test, feature = "diagnostics"))]
+        let api_method = metric_api_method(Command::from_byte(raw_cmd), &payload);
         #[cfg(any(test, feature = "diagnostics"))]
         let route_start = crate::client::thread_cpu::ProfileTimer::start();
         #[cfg(any(test, feature = "diagnostics"))]
@@ -363,8 +368,8 @@ impl ProtocolCore<'_> {
                     .elapsed()
                     .excluding_wait(protocol_wait.saturating_sub(route_wait_before)),
                 raw_cmd,
-                metric_api_method(Command::from_byte(raw_cmd), payload),
-                payload.len(),
+                api_method,
+                payload_len,
             );
         result
     }
@@ -372,7 +377,7 @@ impl ProtocolCore<'_> {
     fn route_command_inner(
         &mut self,
         raw_cmd: u8,
-        payload: &[u8],
+        payload: Payload,
         recv_bytes: u64,
         total_recv_after: u64,
         timestamp_ms: i64,
@@ -380,7 +385,7 @@ impl ProtocolCore<'_> {
         protocol_wait: &mut Duration,
     ) -> bool {
         if Command::from_byte(raw_cmd) == Command::WantNewHello {
-            self.on_handshake_control(Command::WantNewHello, payload, recv_bytes, timestamp_ms);
+            self.on_handshake_control(Command::WantNewHello, &payload, recv_bytes, timestamp_ms);
             return true;
         }
 
@@ -399,46 +404,43 @@ impl ProtocolCore<'_> {
                 if !self.client.authorized {
                     return true;
                 }
-                self.on_new_ping(payload, recv_bytes, total_recv_after, timestamp_ms, mode);
+                self.on_new_ping(&payload, recv_bytes, total_recv_after, timestamp_ms, mode);
             }
             Command::WrongHello | Command::WantNewHello => {
                 self.on_handshake_control(
                     Command::from_byte(raw_cmd),
-                    payload,
+                    &payload,
                     recv_bytes,
                     timestamp_ms,
                 );
             }
             Command::WhoAreYou => {
-                *protocol_wait += self.on_who_are_you(payload, recv_bytes, timestamp_ms);
+                *protocol_wait += self.on_who_are_you(&payload, recv_bytes, timestamp_ms);
             }
             Command::Fine => {
-                self.on_fine(payload, recv_bytes, timestamp_ms);
+                self.on_fine(&payload, recv_bytes, timestamp_ms);
                 self.drain_deferred_pre_auth_crypted(mode);
             }
             Command::SizeTest => {
-                self.on_new_size_test(payload);
+                self.on_new_size_test(&payload);
             }
             Command::ProbeMTU => {
-                self.on_new_probe_mtu(payload);
+                self.on_new_probe_mtu(&payload);
             }
             Command::SlicedACK => {
-                self.on_new_sliced_ack(payload);
+                self.on_new_sliced_ack(&payload);
             }
             Command::Sliced => {
-                if !self.on_new_sliced(payload, recv_bytes, timestamp_ms, mode) {
+                if !self.on_new_sliced(&payload, recv_bytes, timestamp_ms, mode) {
                     return false;
                 }
             }
             _ => {
-                self.dispatch_packet_commands(
-                    raw_cmd,
-                    payload,
-                    recv_bytes,
-                    timestamp_ms,
-                    false,
-                    mode,
-                );
+                if Command::from_byte(raw_cmd & 0x7F) == Command::Grouped {
+                    self.dispatch_packet_commands(raw_cmd, &payload, recv_bytes, timestamp_ms, false, mode);
+                } else {
+                    self.dispatch_command_owned(raw_cmd, payload, recv_bytes, timestamp_ms, false, None, mode);
+                }
             }
         }
 
@@ -682,7 +684,7 @@ impl ProtocolCore<'_> {
     fn finish_decoded_command(
         &mut self,
         cmd: u8,
-        mut payload: Payload,
+        payload: Payload,
         timestamp_ms: i64,
         sliced_stats: Option<ReaderSlicedStats>,
         mode: &mut RunMode<'_>,
@@ -698,8 +700,9 @@ impl ProtocolCore<'_> {
             _ => {}
         }
 
+        let mut payload = DecodedPayload::from(payload);
         let api_pending_consumed =
-            Client::dispatch_api_pending(self.client.pending_api.api_pending.as_ref(), cmd, &payload);
+            Client::dispatch_api_pending_decoded(self.client.pending_api.api_pending.as_ref(), cmd, &mut payload);
         #[cfg(any(test, feature = "diagnostics"))]
         if let Some(stats) = sliced_stats.as_ref() {
             self.client
@@ -766,7 +769,7 @@ impl ProtocolCore<'_> {
         #[cfg(any(test, feature = "diagnostics"))]
         let dispatch_payload_len = payload.len();
         let chunked_response_consumed =
-            Client::dispatch_chunked_api_response(&mut self.client.pending_api, cmd, &mut payload);
+            Client::dispatch_chunked_api_response(&mut self.client.pending_api, cmd, &mut payload.raw);
         if let Some(stats) = sliced_stats {
             self.apply_reader_sliced_stats(stats);
         }
@@ -774,7 +777,7 @@ impl ProtocolCore<'_> {
         let dispatch_start = crate::client::thread_cpu::ProfileTimer::start();
         self.client_new_data(
             cmd,
-            payload.into_vec(),
+            payload,
             api_pending_consumed,
             chunked_response_consumed,
             timestamp_ms,

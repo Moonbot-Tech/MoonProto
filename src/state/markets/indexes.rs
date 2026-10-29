@@ -26,6 +26,12 @@ impl MarketsState {
         }
         self.market_indexes = Arc::new(names);
         self.market_index_by_name = Arc::new(by_name);
+        self.rebuild_server_market_positions();
+    }
+
+    pub(super) fn rebuild_server_market_positions(&mut self) {
+        self.server_market_positions = Arc::new(self.market_indexes.iter()
+            .map(|name| self.by_name.get(name).copied()).collect());
     }
 
     /// Mark current market indexes as stale after server process restart.
@@ -41,16 +47,13 @@ impl MarketsState {
         if !self.indexes_synchronized {
             return false;
         }
-        self.market_indexes
-            .get(m_index as usize)
-            .is_some_and(|name| self.by_name.contains_key(name))
+        self.server_market_positions.get(m_index as usize).is_some_and(Option::is_some)
     }
 
     pub(super) fn local_pos_for_server_index(&self, m_index: u16) -> Option<usize> {
         let server_pos = m_index as usize;
         if self.indexes_synchronized {
-            let market_name = self.market_indexes.get(server_pos)?;
-            return self.by_name.get(market_name).copied();
+            return self.server_market_positions.get(server_pos).copied().flatten();
         }
 
         // Cold-start compatibility: before the first explicit indexes response,
@@ -66,10 +69,7 @@ impl MarketsState {
     pub(super) fn price_row_points_to_missing_market(&self, m_index: u16) -> bool {
         let server_pos = m_index as usize;
         if self.indexes_synchronized {
-            return self
-                .market_indexes
-                .get(server_pos)
-                .is_none_or(|name| !self.by_name.contains_key(name));
+            return !self.has_server_market_index(m_index);
         }
         self.market_indexes.is_empty() && server_pos >= self.markets.len()
     }

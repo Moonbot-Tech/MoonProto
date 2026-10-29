@@ -124,6 +124,7 @@ impl ApiPending {
     /// Returns `Some(resp)` if the UID is **not registered** (the response arrived "on its own",
     /// with no active waiter — the consumer may handle it via `on_data`).
     /// Returns `None` if the UID was found and the response was sent to the receiver.
+    #[cfg(test)]
     pub(crate) fn dispatch(&self, resp: EngineResponse) -> Option<EngineResponse> {
         let mut state = self.lock_state();
         let now = Instant::now();

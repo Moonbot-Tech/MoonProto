@@ -843,7 +843,7 @@ impl EventDispatcher {
         now_ms: i64,
         out: &mut Vec<Event>,
     ) {
-        self.dispatch_into_with_history(cmd, payload, now_ms, None, out, &mut Vec::new());
+        self.dispatch_into_with_history(cmd, payload, now_ms, None, out, &mut Vec::new(), None);
     }
 
     fn dispatch_into_with_history(
@@ -854,6 +854,7 @@ impl EventDispatcher {
         active_ctx: Option<&ActiveDispatchContext>,
         out: &mut Vec<Event>,
         actions: &mut Vec<ActiveAction>,
+        parsed_api: Option<Option<crate::commands::engine_api::EngineResponse>>,
     ) {
         let history_now_time_days = active_ctx.map(|ctx| ctx.now_time_days);
         match cmd {
@@ -874,7 +875,7 @@ impl EventDispatcher {
             Command::Strat => self.client_new_data_strat(payload, out),
             Command::UI => self.client_new_data_ui(payload, out),
             Command::API => {
-                self.client_new_data_api(payload, now_ms, history_now_time_days, active_ctx, out)
+                self.client_new_data_api(payload, now_ms, history_now_time_days, active_ctx, out, parsed_api)
             }
             Command::LogMsg => self.client_new_data_log_msg(payload, out),
             #[cfg(any(test, feature = "diagnostics"))]

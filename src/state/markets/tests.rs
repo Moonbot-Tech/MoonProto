@@ -9,7 +9,7 @@ use crate::commands::trade::OrderType;
 use crate::commands::ui::LevManage;
 use crate::MoonTime;
 
-fn mk_market(name: &str, idx: u16) -> Market {
+pub(crate) fn mk_market(name: &str, idx: u16) -> Market {
     Market {
         bn_market_name: name.to_string(),
         market_currency: name.to_string(),
@@ -258,6 +258,55 @@ fn market_search_returns_stable_handles_by_user_input_meaning() {
         .collect();
     assert_eq!(names, vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()]);
     assert!(st.get("BTCUSDT").unwrap().ptr_eq(&st.find("BTC").unwrap()));
+}
+
+#[test]
+fn market_find_preserves_ranking_and_first_alias_match() {
+    let mut st = MarketsState::new();
+    let mut contains = mk_market("FIRST", 0);
+    contains.market_currency = "X-TOKEN-X".to_string();
+    contains.market_name_mb_classic = "X-PREFIX-X".to_string();
+    contains.market_currency_long = "X-CONTAINS-X".to_string();
+    let mut prefix = mk_market("SECOND", 1);
+    prefix.market_currency = "TOKEN-A".to_string();
+    prefix.market_name_mb_classic = "PREFIX-A".to_string();
+    let mut exact = mk_market("THIRD", 2);
+    exact.market_currency_long = "TOKEN".to_string();
+    let mut later = mk_market("TOKEN", 3);
+    later.market_name_mb_classic = "PREFIX-B".to_string();
+    later.market_currency_long = "X-CONTAINS-Y".to_string();
+    st.apply_markets_list(MarketsListResponse {
+        markets: vec![contains, prefix, exact, later],
+        corr_markets: vec![],
+    });
+
+    // A later exact alias beats an earlier prefix/substring. It also beats a
+    // still later exact canonical name: ties keep market-list order.
+    assert!(st.find(" token ").unwrap().ptr_eq(&st.get("THIRD").unwrap()));
+    assert!(st.find("prefix").unwrap().ptr_eq(&st.get("SECOND").unwrap()));
+    assert!(st.find("contains").unwrap().ptr_eq(&st.get("FIRST").unwrap()));
+    assert!(st.find("unknown").is_none());
+    assert!(st.find(" \t\n ").is_none());
+}
+
+#[test]
+fn market_find_matches_search_across_all_alias_fields() {
+    let mut st = MarketsState::new();
+    let mut market = mk_market("BINANCE", 0);
+    market.market_name = "DISPLAY".to_string();
+    market.market_name_mb_classic = "CLASSIC".to_string();
+    market.market_currency = "COIN".to_string();
+    market.market_currency_canonic = "CANONICAL".to_string();
+    market.market_currency_long = "Token Éclair".to_string();
+    st.apply_markets_list(MarketsListResponse { markets: vec![market], corr_markets: vec![] });
+    let expected = st.get("BINANCE").unwrap();
+    for query in ["binance", " display ", "classic", "coin", "canonical", "token Éclair", "Écl", "anc"] {
+        let found = st.find(query).unwrap();
+        assert!(found.ptr_eq(&expected), "query={query}");
+        assert!(found.ptr_eq(&st.search(query, 1)[0]), "query={query}");
+    }
+    // Identifier matching ignores ASCII case only.
+    assert!(st.find("éclair").is_none());
 }
 
 #[test]
@@ -1720,6 +1769,50 @@ fn market_index_helpers_use_server_mapping() {
     );
     assert_eq!(st.market_index_by_name("BTCUSDT"), Some(1));
     assert_eq!(st.market_index_by_name("NOPE"), None);
+}
+
+#[test]
+fn index_resync_replaces_positions_without_changing_universe_or_old_snapshot() {
+    let mut state = MarketsState::new();
+    state.apply_markets_list(MarketsListResponse {
+        markets: vec![mk_market("A", 0), mk_market("B", 1)], corr_markets: vec![],
+    });
+    let version = state.markets_version();
+    let old = state.clone();
+    state.apply_markets_indexes(vec!["B".into(), "UNKNOWN".into(), "A".into()]);
+    assert_eq!(state.markets_version(), version);
+    assert_eq!(state.local_pos_for_server_index(0), Some(1));
+    assert_eq!(state.local_pos_for_server_index(1), None);
+    assert_eq!(state.local_pos_for_server_index(2), Some(0));
+    assert_eq!(old.market_by_index(0).unwrap().name_str(), "A");
+    assert_eq!(state.market_by_index(0).unwrap().name_str(), "B");
+    assert!(!state.has_server_market_index(1));
+    assert!(state.price_row_points_to_missing_market(1));
+    // An ordinary list refresh must preserve the authoritative server mapping.
+    state.apply_markets_list(MarketsListResponse {
+        markets: vec![mk_market("B", 0), mk_market("A", 1)], corr_markets: vec![],
+    });
+    assert_eq!(state.market_by_index(0).unwrap().name_str(), "B");
+    assert_eq!(state.market_by_index(2).unwrap().name_str(), "A");
+    state.mark_indexes_stale();
+    assert_eq!(state.local_pos_for_server_index(0), None);
+    assert!(state.market_by_index(0).is_none());
+    assert!(!state.has_server_market_index(0));
+}
+
+#[test]
+fn newly_listed_market_resolves_after_unknown_server_slot() {
+    let mut state = MarketsState::new();
+    state.apply_markets_list(MarketsListResponse { markets: vec![mk_market("A", 0)], corr_markets: vec![] });
+    state.apply_markets_indexes(vec!["NEW".into(), "A".into()]);
+    assert!(state.market_by_index(0).is_none());
+    state.markets_list_refresh_needed = true;
+    state.apply_markets_list(MarketsListResponse {
+        markets: vec![mk_market("NEW", 0), mk_market("A", 1)], corr_markets: vec![],
+    });
+    assert_eq!(state.market_by_index(0).unwrap().name_str(), "NEW");
+    assert_eq!(state.local_pos_for_server_index(0), Some(1));
+    assert!(state.has_server_market_index(0));
 }
 
 #[test]

@@ -43,7 +43,22 @@ impl MarketsState {
     /// result is a stable [`MarketHandle`] that UI can keep for the selected
     /// chart instead of re-searching by name on every frame.
     pub fn find(&self, input: &str) -> Option<MarketHandle> {
-        self.search(input, 1).into_iter().next()
+        let query = input.trim();
+        if query.is_empty() {
+            return None;
+        }
+
+        let mut prefix = None;
+        let mut contains = None;
+        for handle in self.markets.iter() {
+            match handle.with(|market| market_search_quality(market, query)) {
+                MarketSearchQuality::Exact => return Some(handle.clone()),
+                MarketSearchQuality::Prefix if prefix.is_none() => prefix = Some(handle),
+                MarketSearchQuality::Contains if contains.is_none() => contains = Some(handle),
+                _ => {}
+            }
+        }
+        prefix.or(contains).cloned()
     }
 
     /// Search markets for popup/autocomplete UI.
@@ -100,8 +115,10 @@ impl MarketsState {
 
     /// Resolve a server `mIndex` into a stable market handle.
     pub(crate) fn market_by_index(&self, m_index: u16) -> Option<&MarketHandle> {
-        let name = self.market_name_by_index(m_index)?;
-        self.handles_by_name.get(name)
+        if !self.indexes_synchronized {
+            return None;
+        }
+        self.markets.get(self.local_pos_for_server_index(m_index)?)
     }
 
     /// Resolve a market name into the current server `mIndex`.

@@ -28,6 +28,7 @@ impl EventDispatcher {
         history_now_time_days: Option<f64>,
         active_ctx: Option<&super::ActiveDispatchContext>,
         out: &mut Vec<Event>,
+        parsed_api: Option<Option<EngineResponse>>,
     ) {
         if let Some(cmd) = parse_candle_timeframe_state_command(payload) {
             self.process_candle_timeframe_state_command(cmd, active_ctx, out);
@@ -37,7 +38,7 @@ impl EventDispatcher {
             self.process_candle_update_command(cmd, active_ctx, out);
             return;
         }
-        match parse_engine_response(payload) {
+        match parsed_api.unwrap_or_else(|| parse_engine_response(payload)) {
             Some(resp) => self.process_api_command(resp, now_ms, history_now_time_days, out),
             None => Self::push_parse_failed(out, Command::API, payload),
         }

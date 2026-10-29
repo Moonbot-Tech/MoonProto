@@ -13,6 +13,11 @@ impl From<Vec<u8>> for Payload {
     }
 }
 
+#[cfg(test)]
+impl<T: AsRef<[u8]> + ?Sized> From<&T> for Payload {
+    fn from(bytes: &T) -> Self { bytes.as_ref().to_vec().into() }
+}
+
 impl Payload {
     pub(crate) fn restrict(&mut self, range: Range<usize>) {
         assert!(range.start <= range.end && range.end <= self.len());

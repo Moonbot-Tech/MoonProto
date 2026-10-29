@@ -298,10 +298,8 @@ impl Client {
         raw_cmd: u8,
         data: &[u8],
     ) -> Option<(u8, Vec<u8>)> {
-        // Keep the borrowed/decompressed split explicit until the final owner
-        // handoff. The current dispatcher path still returns `Vec<u8>` because
-        // worker delivery owns payload bytes; removing that final copy belongs
-        // to the planned hot-path delivery optimization.
+        // Grouped subcommands borrow the enclosing packet and need their own
+        // decoded storage. Ordinary datagrams use the owned decoder directly.
         use std::borrow::Cow;
         let mut cmd = raw_cmd;
         let mut was_crypted = false;

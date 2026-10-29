@@ -9,7 +9,7 @@
 use crate::api_pending::ApiPending;
 use crate::commands::candles::{CandlesAggregator, CandlesChunkResult};
 use crate::commands::engine_api::{
-    parse_auth_check_response, parse_base_check_response, parse_engine_response, AuthCheckResponse,
+    parse_auth_check_response, parse_base_check_response, AuthCheckResponse,
     EngineMethod, EngineResponse,
 };
 use crate::compression;
@@ -115,7 +115,7 @@ pub(crate) use send_queue::{SendPriority, UniqueKey};
 pub(crate) use sender::{ClientSender, SubscribeError};
 pub use subscriptions::{ActiveSubscriptions, LiveCandleSubscription, TradesSubscription};
 
-use app_dispatch::{metric_api_method, RunMode};
+use app_dispatch::{metric_api_method, DecodedPayload, RunMode};
 pub(crate) use candles::{
     ChunkProgress, EngineResponseMeta, MergedMarketHistory, PartialCandles, PartialMarketHistory,
 };

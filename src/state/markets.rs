@@ -58,6 +58,8 @@ pub struct MarketsState {
     /// After `GetMarketsIndexes`, this reverse map keeps the public
     /// name-to-index helper O(1) instead of scanning the whole index vector.
     pub(crate) market_index_by_name: Arc<HashMap<String, u16>>,
+    /// Server index -> local position, rebuilt with either side of the mapping.
+    server_market_positions: Arc<Vec<Option<usize>>>,
     /// Correlation markets used for BTC/reference calculations, keyed by `bn_market_name`.
     ///
     /// Fat per-market/aggregate fields are `Arc`-wrapped (like `by_name`,
@@ -209,3 +211,6 @@ impl MarketsState {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::mk_market;

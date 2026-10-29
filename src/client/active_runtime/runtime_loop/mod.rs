@@ -692,7 +692,7 @@ impl SharedConfigRefresh {
 #[derive(Default)]
 struct InlineDispatchBuffers {
     event_buf: Vec<crate::events::Event>,
-    payload_buf: Vec<(Command, Vec<u8>)>,
+    payload_buf: Vec<(Command, DecodedPayload)>,
     active_actions_buf: Vec<crate::events::ActiveAction>,
 }
 

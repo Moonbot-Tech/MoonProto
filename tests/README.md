@@ -46,11 +46,25 @@ application examples: some are intentionally low-level protocol guards.
 Tests under `src/client/tests/` protect protocol mechanics: handshake,
 reconnect, PMTU, send queues, pending Engine API routing, subscriptions, and
 wire-compatible timing/retry semantics. They may instantiate internal `Client` or
-`EventDispatcher` directly because their job is to lock down machine-effect
-parity, not to demonstrate the public API.
+`EventDispatcher` directly because their job is to lock down wire-compatible
+behavior and recovery, not to demonstrate the public API.
 Regression coverage includes encrypted startup profit delivery before Init,
 replays before/after Init, zero-valued live updates, candle refusal/retry timing
 with partial and duplicate chunks, cancellation, and missing versus zero RTT.
+Receive regressions also cover retained buffer addresses through transport/AES
+and delivery, reuse of a parsed response across pending/state consumers, malformed
+compressed responses retaining their waiter, grouped reordering/replays/truncated
+tails, and index remapping with old snapshots and newly listed markets.
+Market-search regressions cover exact/prefix/substring ranking, first-match ties
+across aliases and canonical names, all matching fields, ASCII case handling,
+whitespace, missing inputs and stable-handle identity. Reproducible receive and
+single-market lookup benchmarks are documented in [performance](../docs/performance.md).
+
+The combined receive and lookup changes passed the full live FireTest profile on
+2026-10-30 in 254.49 seconds: startup state, manual statistics, archives, 10%/50%
+packet-loss recovery, order lifecycle, strategy synchronization, settings restore,
+forced disconnect and automatic reconnect. This functional run is separate from
+the synthetic CPU measurements.
 
 Tests under `src/events/tests.rs` and `src/state/**/tests.rs` protect Active Lib
 state application and retained read models. Direct state/dispatcher use here is
