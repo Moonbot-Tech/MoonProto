@@ -80,6 +80,93 @@ fn idle_wait_changes_only_for_compact_history_profiles() {
 }
 
 #[test]
+fn udp_rearm_follows_consumed_notifications_across_bursts_timeouts_and_rebind() {
+    let mut client = Client::new(dummy_cfg().with_market_history(crate::state::MarketHistorySizing::Compact));
+    client.testing_set_domain_ready(true);
+    client.authorized = true;
+    client.auth_status = AuthStatus::AuthDone;
+    client.server_token = 1;
+    client.reconnect.subscribed_book_server_token = 1;
+    client.transport.socket = Some(UdpSocket::bind("127.0.0.1:0").unwrap());
+    client.register_recv_poller();
+    let mut dispatcher = EventDispatcher::new();
+    dispatcher.markets.indexes_synchronized = true;
+    let mut mode = RunMode::new(&mut dispatcher);
+    let mut core = ProtocolCore { client: &mut client };
+    let rearm_count = |client: &Client| {
+        client.protocol_metrics_snapshot().profile_phases.iter()
+            .find(|phase| phase.name == "socket.rearm").map_or(0, |phase| phase.count)
+    };
+    let wait_readable = |core: &mut ProtocolCore<'_>| {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            core.wait_for_data();
+            if !core.client.transport.recv_events.is_empty() { break; }
+            assert!(Instant::now() < deadline, "UDP readiness lost");
+        }
+    };
+
+    // Idle timeouts do not consume the one-shot interest or require rearming.
+    for _ in 0..2 {
+        core.wait_for_data();
+        assert!(core.client.transport.recv_events.is_empty());
+    }
+    assert_eq!(rearm_count(core.client), 0);
+
+    for _ in 0..8 {
+        send_server_packet_to_client_socket(core.client, Command::OrderBook, &[0xAA]);
+    }
+    wait_readable(&mut core);
+    for _ in 0..8 {
+        assert!(core.recv_one_phase(1, &mut mode));
+        assert_eq!(rearm_count(core.client), 0, "no per-packet rearm while draining a burst");
+    }
+    assert!(!core.recv_one_phase(1, &mut mode));
+    assert_eq!(mode.dispatcher.take_queued_events().len(), 8);
+
+    // Packet arrives after WouldBlock but before rearm/wait: it must wake us.
+    send_server_packet_to_client_socket(core.client, Command::OrderBook, &[0xBB]);
+    wait_readable(&mut core);
+    assert_eq!(rearm_count(core.client), 1);
+
+    // Simulate stale/spurious readiness: the datagram is gone before recv.
+    let mut scratch = [0u8; 256];
+    core.client.transport.socket.as_ref().unwrap().recv_from(&mut scratch).unwrap();
+    assert!(!core.recv_one_phase(2, &mut mode));
+    core.wait_for_data();
+    assert!(core.client.transport.recv_events.is_empty());
+    assert_eq!(rearm_count(core.client), 2, "rearm even when readiness yielded no datagram");
+    core.wait_for_data();
+    assert_eq!(rearm_count(core.client), 2, "timeout must not cause another rearm");
+
+    // Arrival during a wait must wake it, including after empty timeouts.
+    let addr = core.client.transport.socket.as_ref().unwrap().local_addr().unwrap();
+    let packet = pack_server_packet(&core.client.cfg.mac_key, Command::OrderBook, &[0xCC]);
+    let sender = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(2));
+        UdpSocket::bind("127.0.0.1:0").unwrap().send_to(&packet, addr).unwrap();
+    });
+    wait_readable(&mut core);
+    sender.join().unwrap();
+    assert!(core.recv_one_phase(3, &mut mode));
+    assert_eq!(rearm_count(core.client), 2);
+
+    // Rebinding discards the old consumed notification and arms the new socket.
+    core.client.clear_recv_poller();
+    core.client.transport.socket = Some(UdpSocket::bind("127.0.0.1:0").unwrap());
+    core.client.register_recv_poller();
+    assert!(core.client.transport.recv_events.is_empty());
+    send_server_packet_to_client_socket(core.client, Command::OrderBook, &[0xDD]);
+    assert!(core.recv_one_phase(4, &mut mode));
+    // Reading before the first wait does not consume the new registration.
+    send_server_packet_to_client_socket(core.client, Command::OrderBook, &[0xEE]);
+    wait_readable(&mut core);
+    assert!(core.recv_one_phase(5, &mut mode));
+    assert_eq!(rearm_count(core.client), 2);
+    core.client.clear_recv_poller();
+}
+
+#[test]
 fn send_phase_runs_with_ready_send_queue() {
     let mut client = Client::new(dummy_cfg());
     client.testing_set_domain_ready(true);

@@ -106,9 +106,6 @@ impl ProtocolCore<'_> {
         }
 
         self.client.transport.recv_buf = buf;
-        if drained_any {
-            self.rearm_recv_poller();
-        }
         if deadline_reached && trace_io_enabled() {
             eprintln!(
                 "[mp-recv-yield] t={} reason=run_deadline drained_any={}",

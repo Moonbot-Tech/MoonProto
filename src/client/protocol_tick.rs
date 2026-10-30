@@ -46,6 +46,12 @@ impl ProtocolCore<'_> {
         if !self.client.send_lock.lock().is_empty() {
             return;
         }
+        // Only wait consumes a one-shot notification. Keep it in recv_events
+        // while processing packets, then rearm once before the next wait.
+        // Empty timeouts leave the socket armed; registration clears this buffer.
+        if !self.client.transport.recv_events.is_empty() {
+            self.rearm_recv_poller();
+        }
         let timeout = self.idle_wait_duration();
         let Some(poller) = self.client.transport.recv_poller.as_ref() else {
             thread::sleep(timeout);

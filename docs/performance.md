@@ -92,6 +92,61 @@ excluding time spent asleep. Nested runtime and dispatch phases remain inclusive
 Diagnostic Windows and Linux builds also name the runtime, lifecycle, and history threads
 for external per-thread CPU accounting. Normal builds contain no phase timers.
 
+## UDP readiness rearming
+
+The runtime rearms its one-shot UDP notification once before the next wait after
+receiving a notification, instead of after every datagram. Receiving a datagram
+does not itself consume a notification. Empty timeouts therefore do not rearm;
+socket replacement clears old notifications. The existing event buffer carries
+this information, with no additional state or public configuration.
+
+The runtime still processes one datagram per turn before command/maintenance
+work. Compact still waits up to 30 ms when idle, and incoming UDP wakes that wait.
+No packets are combined or discarded by this optimization.
+
+Reproduce the isolated before/after OS benchmark:
+
+```text
+cargo test --release --test udp_rearm_bench -- --ignored --nocapture --test-threads=1
+```
+
+The test compares both rearm policies using the same vendored poller. Each sample
+receives 8192 numbered 128-byte datagrams, checking delivery and order. Sending is
+outside receiver timings. It does not include protocol parsing, state updates or
+application work, and has no per-packet protocol diagnostic timers. CPU clocks
+are sampled at burst boundaries; their common overhead matters most for single
+packets. These are socket-path results, not whole-application CPU savings.
+
+Measurements on 2026-10-30: Release builds, Rust 1.97.1 on Linux and Rust 1.96.0
+GNU on Windows 11. Three runs of 12 alternating pairs, the first two pairs of
+each run excluded from summaries; receiver and sender pinned to one logical CPU.
+Medians of the remaining 30 samples per policy:
+
+| Platform / CPU | Packets per burst | Receiver CPU, before → after | Receiver wall ms, before → after |
+| --- | ---: | ---: | ---: |
+| Linux 6.8 / Xeon W-2295 | 1 | 21.169 → 21.072 ms | 18.406 → 18.334 |
+| Linux 6.8 / Xeon W-2295 | 32 | 7.240 → 5.016 ms | 7.151 → 4.926 |
+| Linux 6.8 / Xeon W-2295 | 128 | 7.080 → 4.763 ms | 7.058 → 4.739 |
+| Windows / Ryzen 7 5800X | 1 | 132.721 → 132.704 Mcycles | 32.895 → 32.639 |
+| Windows / Ryzen 7 5800X | 32 | 27.232 → 25.849 Mcycles | 7.152 → 6.774 |
+| Windows / Ryzen 7 5800X | 128 | 25.080 → 24.154 Mcycles | 6.637 → 6.395 |
+
+Bursts reduce receiver CPU by about 31–33% on this Linux host and 4–5% on this
+Windows host. Single-packet CPU is effectively unchanged. No new allocation,
+retained capacity, thread, or timeout is introduced in the runtime.
+
+A separate paced test sends 200 numbered packets per window, 12 windows per
+policy, measuring send-to-receive latency including scheduling. Median window
+p50/p95/p99 in microseconds: Linux 70.36/75.02/83.78 → 70.42/75.98/84.36;
+Windows 18.85/51.25/64.60 → 18.80/49.75/60.80. Worst observed samples were
+115.61 → 105.10 us and 707.30 → 281.50 us respectively. The small differences
+are not a claim of faster wakeups; no systematic wake-latency penalty was observed.
+
+Production-path regressions cover bursts, idle timeouts, arrival between an empty
+receive and the next wait, stale readiness with no datagram, arrival during a
+wait, reading before the first wait, and socket replacement. Existing scheduling
+tests retain one-packet turns and outgoing-command service.
+
 ## Ordinary receive buffers and indexed market updates
 
 Ordinary Engine API responses are parsed and, when necessary, inflated once through active
