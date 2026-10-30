@@ -156,6 +156,10 @@ pub(crate) fn auth_check() -> Vec<u8> {
     build_engine_request(EngineMethod::AuthCheck, "", &[])
 }
 
+pub(crate) fn get_startup_state() -> Vec<u8> {
+    build_engine_request(EngineMethod::GetStartupState, "", &[])
+}
+
 /// `emk_GetMarketsList`: fetch the full market list.
 pub(crate) fn get_markets_list() -> Vec<u8> {
     build_engine_request(EngineMethod::GetMarketsList, "", &[])

@@ -274,11 +274,19 @@ balance resync intents. Their replies are normal domain updates and may arrive
 after `Ready`. `InitConfig` adds local strategies, optional stream
 subscriptions, and timing.
 
-`Ready` does not guarantee receipt of every initial core state. If all delivery
-attempts for an initial runtime, license, profit or strategy-running state are
-lost, that state can still be absent after `Ready`. Restoring connectivity alone
-does not request those missing states again. Treat an absent value as unknown,
-not as a received zero or `false`.
+When the core advertises startup-state recovery, Init requests a complete snapshot
+of runtime, license, profit, Hyperliquid request allowance and strategy-running
+state. `Ready` waits for this response; lost requests or responses are retried
+without restarting completed market/schema steps. Recovery fills missing states
+and preserves values already received through ordinary updates. The extra exchange
+may extend connection time; it adds no polling after startup.
+
+Older cores remain supported: without the advertised capability, Init uses the
+previous sequence and sends no unsupported request. Such cores can still leave
+initial states absent after `Ready` if all initial delivery attempts are lost.
+An absent value is unknown, not a received zero or `false`. The Hyperliquid
+allowance remains `None` for non-Hyperliquid cores. Other asynchronously requested
+domain states are not covered by this startup snapshot.
 
 The runtime keeps the client loop running while it waits for the connection and
 for each Engine API response on the mandatory spine. It applies state in the
@@ -325,7 +333,7 @@ strategy commands remain closed until `domain_ready`.
 Periodic market refresh starts only after the mandatory strategy schema has
 completed and init opens the domain gate, so startup requests do not compete
 with background refresh traffic.
-Critical BaseCheck/AuthCheck waits use a 12-second attempt timeout.
+Critical BaseCheck/AuthCheck and core-startup-state waits use a 12-second attempt timeout.
 `UpdateMarketsList`, `GetMarketsList`, and the larger strategy schema each get
 45 seconds. Expiry retries only the current step and preserves completed init
 gates. Transport traffic, including unrelated Sliced blocks, never extends an
@@ -352,9 +360,9 @@ and an internal non-fatal parse note is recorded.
 
 If the first BaseCheck/AuthCheck block fails, init follows the MoonBot core
 startup retry path:
-wait 200 ms, send one more BaseCheck, then send AuthCheck again. The retry
-branch's final gate is the second AuthCheck result; the second BaseCheck still
-updates `client.server_info()` if it succeeds.
+wait 200 ms, send one more BaseCheck, then send AuthCheck again. Both must succeed:
+a lost or failed BaseCheck cannot be interpreted as an older core without
+startup-state recovery. A failed second BaseCheck ends Init before AuthCheck.
 
 `BaseCheck` retry follows the MoonBot core behavior. A normal init sends one BaseCheck
 request. If a version/switch action marked `ServerUpdateSent` before init, the

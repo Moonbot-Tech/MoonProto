@@ -661,6 +661,11 @@ mod base_check_tests {
             }
             info.version_suffix = Some(suffix.into());
             assert_eq!(parse_base_check_response(&payload), info);
+            assert_eq!(super::parse_base_check_with_capabilities(&payload).1, 0);
+            let mut capable = payload.clone();
+            capable.extend_from_slice(&1_u32.to_le_bytes());
+            assert_eq!(super::parse_base_check_with_capabilities(&capable), (info.clone(), 1));
+            assert_eq!(parse_base_check_response(&capable), info);
             payload.extend_from_slice(&[1, 2, 3]); // Future tail does not change known fields.
             assert_eq!(parse_base_check_response(&payload), info);
             info.version_suffix = None;

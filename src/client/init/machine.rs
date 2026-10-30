@@ -77,6 +77,10 @@ enum RuntimeInitPhase {
         pending: PendingEngineInit,
     },
     WaitStrategySchema,
+    SendStartupState,
+    WaitStartupState {
+        pending: PendingEngineInit,
+    },
     PostInit,
     PostInitFlush {
         until: Instant,
@@ -158,6 +162,7 @@ impl RuntimeInitMachine {
             RuntimeInitPhase::SendUpdateMarketsList
             | RuntimeInitPhase::WaitUpdateMarketsList { .. } => Some(InitStep::UpdateMarketsList),
             RuntimeInitPhase::WaitStrategySchema => Some(InitStep::StrategySchema),
+            RuntimeInitPhase::SendStartupState | RuntimeInitPhase::WaitStartupState { .. } => Some(InitStep::CoreStartupState),
             RuntimeInitPhase::PostInit | RuntimeInitPhase::PostInitFlush { .. } => {
                 Some(InitStep::PostInitFlush)
             }
@@ -265,6 +270,10 @@ impl RuntimeInitMachine {
                     }
                     PendingEnginePoll::Response(resp) => {
                         let status = self.apply_base_check_response(client, resp);
+                        if matches!(attempt, BaseAttempt::InitRetry) && !status.is_ok() {
+                            self.phase = RuntimeInitPhase::Done;
+                            return RuntimeInitPoll::Failed(ConnectError::from(status.final_error("BaseCheck").unwrap()));
+                        }
                         if status.is_ok() {
                             self.mark_completed(InitStep::BaseCheck);
                             fire_init_step(client, "BaseCheck", self.init_started_at);
@@ -324,9 +333,7 @@ impl RuntimeInitMachine {
                             }
                             BaseAttempt::InitRetry => {
                                 self.base_status = status;
-                                self.phase = RuntimeInitPhase::SendAuthCheck {
-                                    attempt: AuthAttempt::InitRetry,
-                                };
+                                self.phase = RuntimeInitPhase::SendAuthCheck { attempt: AuthAttempt::InitRetry };
                                 continue;
                             }
                         }
@@ -379,10 +386,8 @@ impl RuntimeInitMachine {
                             }
                             BaseAttempt::InitRetry => {
                                 self.base_status = status;
-                                self.phase = RuntimeInitPhase::SendAuthCheck {
-                                    attempt: AuthAttempt::InitRetry,
-                                };
-                                continue;
+                                self.phase = RuntimeInitPhase::Done;
+                                return RuntimeInitPoll::Failed(ConnectError::from(InitError::CriticalStepTimedOut("BaseCheck")));
                             }
                         }
                     }
@@ -622,7 +627,7 @@ impl RuntimeInitMachine {
                         StrategySchemaPoll::Ready => {
                             self.mark_completed(InitStep::StrategySchema);
                             fire_init_step(client, "StrategySchema", self.init_started_at);
-                            self.phase = RuntimeInitPhase::PostInit;
+                            self.phase = RuntimeInitPhase::SendStartupState;
                             changed = true;
                             continue;
                         }
@@ -644,6 +649,58 @@ impl RuntimeInitMachine {
                             return RuntimeInitPoll::Failed(ConnectError::from(err));
                         }
                     }
+                }
+                RuntimeInitPhase::SendStartupState => {
+                    if !self.result.startup_state_supported {
+                        self.phase = RuntimeInitPhase::PostInit;
+                        continue;
+                    }
+                    if !client.is_authorized() {
+                        self.phase = RuntimeInitPhase::SendStartupState;
+                        return RuntimeInitPoll::Pending { changed };
+                    }
+                    self.record_attempt(InitStep::CoreStartupState);
+                    let pending = begin_engine_init_step(
+                        client,
+                        crate::commands::engine_request::get_startup_state(),
+                        self.timeouts.base_auth,
+                    );
+                    self.phase = RuntimeInitPhase::WaitStartupState { pending };
+                    continue;
+                }
+                RuntimeInitPhase::WaitStartupState { mut pending } => {
+                    let response = match self.poll_required_engine_response(client, &mut pending, "CoreStartupState") {
+                        Ok(RequiredEngineResponsePoll::Pending) => {
+                            self.phase = RuntimeInitPhase::WaitStartupState { pending };
+                            return RuntimeInitPoll::Pending { changed };
+                        }
+                        Ok(RequiredEngineResponsePoll::Timeout) => {
+                            self.phase = RuntimeInitPhase::SendStartupState;
+                            return RuntimeInitPoll::Pending { changed };
+                        }
+                        Ok(RequiredEngineResponsePoll::Response(response)) => response,
+                        Err(error) => {
+                            self.phase = RuntimeInitPhase::Done;
+                            return RuntimeInitPoll::Failed(ConnectError::from(error));
+                        }
+                    };
+                    let state = if response.method == crate::commands::engine_api::EngineMethod::GetStartupState {
+                        crate::commands::engine_api::parse_startup_state(&response.data)
+                    } else {
+                        None
+                    };
+                    let Some(state) = state else {
+                        self.phase = RuntimeInitPhase::Done;
+                        return RuntimeInitPoll::Failed(ConnectError::from(InitError::CriticalStepFailed {
+                            step: "CoreStartupState", message: "incomplete or unsupported initial state snapshot".into(),
+                        }));
+                    };
+                    dispatcher.apply_startup_state(state);
+                    self.mark_completed(InitStep::CoreStartupState);
+                    fire_init_step(client, "CoreStartupState", self.init_started_at);
+                    self.phase = RuntimeInitPhase::PostInit;
+                    changed = true;
+                    continue;
                 }
                 RuntimeInitPhase::PostInit => {
                     client.set_domain_ready(true);
@@ -706,6 +763,9 @@ impl RuntimeInitMachine {
                 EngineMethod::UpdateMarketsList.to_byte(),
             ),
             RuntimeInitPhase::WaitStrategySchema => (Command::Strat.to_byte(), u8::MAX),
+            RuntimeInitPhase::SendStartupState | RuntimeInitPhase::WaitStartupState { .. } => (
+                Command::API.to_byte(), EngineMethod::GetStartupState.to_byte(),
+            ),
             RuntimeInitPhase::PostInit | RuntimeInitPhase::PostInitFlush { .. } => {
                 (Command::Grouped.to_byte(), u8::MAX)
             }
@@ -733,7 +793,8 @@ impl RuntimeInitMachine {
     ) -> CriticalInitStatus {
         if resp.success {
             self.result.base_check_ok = true;
-            let info = parse_base_check_response(&resp.data);
+            let (info, capabilities) = crate::commands::engine_api::parse_base_check_with_capabilities(&resp.data);
+            self.result.startup_state_supported = capabilities & 1 != 0;
             client.set_server_info(info);
             CriticalInitStatus::Ok
         } else {
@@ -802,6 +863,110 @@ mod progress_tests {
 
     fn test_client() -> Client {
         Client::new(ClientConfig::new("127.0.0.1", 3000, [0; 16], [0; 16]))
+    }
+
+    fn startup_response(uid: u64) -> EngineResponse {
+        EngineResponse {
+            ver: 4, request_uid: uid, method: crate::commands::engine_api::EngineMethod::GetStartupState,
+            success: true, error_code: 0, error_msg: String::new(),
+            data: crate::commands::engine_api::startup_state_fixture(),
+        }
+    }
+
+    fn take_startup_uid(client: &mut Client) -> u64 {
+        let (sliced, _, _) = client.take_send_queues_for_test();
+        let request = sliced.iter().find(|item| item.cmd == Command::API.to_byte() && item.data.get(11) == Some(&36)).unwrap();
+        engine_request_uid(&request.data).unwrap()
+    }
+
+    #[test]
+    fn startup_snapshot_is_required_even_if_all_ordinary_pushes_were_lost() {
+        let mut client = test_client();
+        client.authorized = true;
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut machine = RuntimeInitMachine::new(ConnectConfig::default(), &mut dispatcher);
+        machine.result.startup_state_supported = true;
+        machine.phase = RuntimeInitPhase::SendStartupState;
+        assert!(matches!(machine.poll(&mut client, &mut dispatcher), RuntimeInitPoll::Pending { .. }));
+        assert!(!client.is_domain_ready());
+        assert!(dispatcher.settings().profit_state.is_none());
+        assert_eq!(machine.current_step(), Some(InitStep::CoreStartupState));
+        let uid = take_startup_uid(&mut client);
+        assert!(client.pending_api.api_pending.dispatch(startup_response(uid)).is_none());
+        assert!(matches!(machine.poll(&mut client, &mut dispatcher), RuntimeInitPoll::Pending { .. }));
+        assert!(client.is_domain_ready());
+        assert!(machine.completed_steps.contains(InitStep::CoreStartupState));
+        assert!(dispatcher.settings().runtime_state.is_some());
+        assert!(dispatcher.settings().kernel_license_state.is_some());
+        assert_eq!(dispatcher.settings().profit_state.unwrap().rep_total_profit, 123.5);
+        assert_eq!(dispatcher.strats().strategies_running(), Some(true));
+        assert!(client.pending_api.api_pending.dispatch(startup_response(uid)).is_some(), "duplicate has no active waiter");
+    }
+
+    #[test]
+    fn lost_snapshot_retries_with_new_uid_and_does_not_repeat_market_initialization() {
+        let mut client = test_client();
+        client.authorized = true;
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut machine = RuntimeInitMachine::new(ConnectConfig::new(InitConfig {
+            step_timeout: Some(Duration::ZERO), ..Default::default()
+        }), &mut dispatcher);
+        machine.result.startup_state_supported = true;
+        machine.mark_completed(InitStep::GetMarketsList);
+        machine.mark_completed(InitStep::StrategySchema);
+        machine.phase = RuntimeInitPhase::SendStartupState;
+        assert!(matches!(machine.poll(&mut client, &mut dispatcher), RuntimeInitPoll::Pending { .. }));
+        let old_uid = take_startup_uid(&mut client);
+        assert!(!client.is_domain_ready());
+        machine.timeouts.base_auth = Duration::from_secs(5);
+        assert!(matches!(machine.poll(&mut client, &mut dispatcher), RuntimeInitPoll::Pending { .. }));
+        let new_uid = take_startup_uid(&mut client);
+        assert_ne!(new_uid, old_uid);
+        assert!(client.pending_api.api_pending.dispatch(startup_response(old_uid)).is_some());
+        assert!(!client.is_domain_ready());
+        assert!(client.pending_api.api_pending.dispatch(startup_response(new_uid)).is_none());
+        assert!(matches!(machine.poll(&mut client, &mut dispatcher), RuntimeInitPoll::Pending { .. }));
+        assert!(client.is_domain_ready());
+        assert_eq!(machine.retry_counts[InitStep::CoreStartupState as usize], 1);
+        assert!(machine.completed_steps.contains(InitStep::GetMarketsList));
+        assert!(machine.completed_steps.contains(InitStep::StrategySchema));
+    }
+
+    #[test]
+    fn malformed_snapshot_fails_without_publishing_partial_state() {
+        let mut client = test_client();
+        client.authorized = true;
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut machine = RuntimeInitMachine::new(ConnectConfig::default(), &mut dispatcher);
+        machine.result.startup_state_supported = true;
+        machine.phase = RuntimeInitPhase::SendStartupState;
+        machine.poll(&mut client, &mut dispatcher);
+        let uid = take_startup_uid(&mut client);
+        let mut response = startup_response(uid);
+        response.data.pop();
+        assert!(client.pending_api.api_pending.dispatch(response).is_none());
+        assert!(matches!(machine.poll(&mut client, &mut dispatcher), RuntimeInitPoll::Failed(_)));
+        assert!(!client.is_domain_ready());
+        assert!(dispatcher.settings().runtime_state.is_none());
+        assert!(dispatcher.settings().profit_state.is_none());
+    }
+
+    #[test]
+    fn legacy_core_does_not_receive_an_unsupported_startup_request() {
+        let mut client = test_client();
+        client.authorized = true;
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut machine = RuntimeInitMachine::new(ConnectConfig::default(), &mut dispatcher);
+        machine.apply_base_check_response(&mut client, EngineResponse {
+            method: crate::commands::engine_api::EngineMethod::BaseCheck,
+            data: Vec::new(), ..startup_response(1)
+        });
+        machine.phase = RuntimeInitPhase::SendStartupState;
+        machine.poll(&mut client, &mut dispatcher);
+        assert!(client.is_domain_ready());
+        assert!(!machine.completed_steps.contains(InitStep::CoreStartupState));
+        let (sliced, _, _) = client.take_send_queues_for_test();
+        assert!(sliced.iter().all(|item| item.cmd != Command::API.to_byte() || item.data.get(11) != Some(&36)));
     }
 
     #[test]

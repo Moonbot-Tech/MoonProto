@@ -14,7 +14,7 @@ use std::env;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use moonproto::state::OrderBookEvent;
+use moonproto::state::{BalanceEvent, OrderBookEvent};
 use moonproto::{
     parse_key_info, ClientConfig, ConnectConfig, Event, ExchangeCode, InitConfig,
     InitialStrategies, LifecycleEvent, MoonClient, TradesStreamMode,
@@ -146,7 +146,7 @@ fn runtime_smoke_full_happy_path() {
     let mut balance_events = 0u32;
     while Instant::now() < balance_deadline {
         for event in client.drain_events() {
-            if let Event::Balance(_) = event {
+            if let Event::Balance(BalanceEvent::SnapshotApplied { .. }) = event {
                 balance_events += 1;
                 break;
             }
@@ -158,18 +158,16 @@ fn runtime_smoke_full_happy_path() {
     }
     assert!(
         balance_events > 0,
-        "FAIL: no Balance event after request_balance_snapshot"
+        "FAIL: no full balance snapshot after request_balance_snapshot"
     );
     let snapshot = client
         .snapshot()
         .expect("FAIL: no snapshot after balance refresh");
     let global = snapshot.balances().global();
     assert!(
-        global.btc_balance_total.abs()
-            + global.btc_balance_full.abs()
-            + global.special_coin_balance.abs()
-            > 0.0,
-        "FAIL: maintained global balances are zero after balance refresh"
+        [global.btc_balance_total, global.btc_balance_locked, global.btc_balance_full,
+            global.special_coin_balance, global.total_pnl].iter().all(|value| value.is_finite()),
+        "FAIL: maintained global balances contain non-finite values after balance refresh"
     );
     println!(
         "OK: maintained_balance_state events={balance_events} btc_total={:.8} btc_full={:.8} special_coin={:.8}",

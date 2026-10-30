@@ -178,8 +178,8 @@ pub(crate) fn run_init_sequence(
 
     // Delphi `TCryptoPumpTool.InitInt`: if either BaseCheck or AuthCheck failed,
     // sleep 200ms, call BaseCheck once more, then assign Result from AuthCheck.
-    // The second BaseCheck still refreshes local ServerInfo if it succeeds, but
-    // the retry branch's final gate is the second AuthCheck.
+    // BaseCheck must succeed as well: a missing response cannot establish
+    // whether the core supports mandatory startup-state recovery.
     let used_init_auth_retry = !base_status.is_ok() || !auth_status.is_ok();
     if used_init_auth_retry {
         check_init_shutdown(client)?;
@@ -190,6 +190,9 @@ pub(crate) fn run_init_sequence(
         );
         check_init_shutdown(client)?;
         base_status = run_base_check_once(client, dispatcher, &mut result, timeouts.base_auth)?;
+        if let Some(err) = base_status.final_error("BaseCheck") {
+            return Err(err);
+        }
         if base_status.is_ok() {
             fire_init_step(client, "BaseCheck", init_started_at);
             if strategy_schema.is_none() {
@@ -284,6 +287,19 @@ pub(crate) fn run_init_sequence(
         return Err(err);
     }
     fire_init_step(client, "StrategySchema", init_started_at);
+
+    if result.startup_state_supported {
+        let response = run_required_engine_step(
+            client, dispatcher, &mut result, "CoreStartupState",
+            crate::commands::engine_request::get_startup_state(), timeouts.base_auth,
+        )?;
+        let state = crate::commands::engine_api::parse_startup_state(&response.data)
+            .ok_or_else(|| InitError::CriticalStepFailed {
+                step: "CoreStartupState", message: "incomplete or unsupported initial state snapshot".into(),
+            })?;
+        dispatcher.apply_startup_state(state);
+        fire_init_step(client, "CoreStartupState", init_started_at);
+    }
 
     client.set_domain_ready(true);
     send_post_init_resync(client, dispatcher, &cfg, &mut result);

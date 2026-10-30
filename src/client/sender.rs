@@ -21,7 +21,7 @@ pub(crate) enum SubscribeError {
     /// can no longer enqueue work.
     Disconnected,
     /// Domain gate is still closed. Only the mandatory init Engine API methods
-    /// (`BaseCheck`, `AuthCheck`, `GetMarketsList`, `UpdateMarketsList`) are
+    /// (`BaseCheck`, `AuthCheck`, `GetMarketsList`, `UpdateMarketsList`, `GetStartupState`) are
     /// allowed before Init.
     DomainNotReady,
 }

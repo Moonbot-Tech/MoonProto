@@ -98,7 +98,7 @@ use moonproto::Command;
 use moonproto::{
     parse_key_info, ClientConfig, ClientSettingsCommand, ConnectConfig, DeepHistoryKind,
     EngineMethod, EngineResponse, ExchangeCode, ExchangeKind, ExchangeOrder, FieldValue,
-    ImportedKeys, InitConfig, InitialStrategies, KernelHealth, LifecycleEvent, MoonClient,
+    ImportedKeys, InitConfig, InitStep, InitialStrategies, KernelHealth, LifecycleEvent, MoonClient,
     MoonShotStrategy, MoonStateSnapshot, MoonTime, NewsEvent, OrderType, OrderWorkerStatus,
     ProfitStateCommand, ProtocolMetricsSnapshot, ReportAliveMapComplete, ReportAliveMapOutcome,
     ReportEvent, ReportHistoryDepth, ReportRow, ReportSchema, ReportSyncCheckpoint,
@@ -962,6 +962,15 @@ impl Session {
             "FIRETEST {label}: MoonClient did not connect within {:?}",
             cfg.connect_timeout
         );
+        assert!(session.client.startup_status().completed_steps.contains(InitStep::CoreStartupState),
+            "FIRETEST {label}: core must support and complete startup-state recovery before Ready");
+        let initial = session.client.snapshot().expect("Ready must publish a snapshot");
+        assert!(initial.settings().runtime_state.is_some()
+            && initial.settings().kernel_license_state.is_some()
+            && initial.settings().profit_state.is_some()
+            && initial.strats().strategies_running().is_some(),
+            "FIRETEST {label}: initial snapshot must contain runtime, license, profit and strategy state");
+        println!("OK: FIRETEST {label}: repeatable core startup snapshot completed before Ready");
         session
     }
 
@@ -5712,6 +5721,7 @@ impl MoonClientPathStats {
         self.strategy_snapshot_events > 0
             && self.lifecycle_connected
             && self.lifecycle_ready
+            && self.has_init_step("CoreStartupState")
             && self.kernel_health_events > 0
             && self.kernel_health.is_some_and(kernel_health_is_complete)
             && self.profit_state_events > 0
@@ -9688,7 +9698,7 @@ fn fire_test_retained_memory_warmup() {
 }
 
 #[test]
-#[ignore = "live MoonBot server required; measures TStratRuntimeState delivery"]
+#[ignore = "live MoonBot server required; checks startup recovery under packet loss"]
 fn fire_test_strategy_runtime_state_delivery_stats() {
     let _live_test_lock = firetest_live_test_lock();
     let cfg = FireConfig::load_required();
@@ -9712,7 +9722,7 @@ fn fire_test_strategy_runtime_state_delivery_stats() {
     let expected_one_client_miss = p.powi(high_attempts);
     let expected_any_client_miss = 1.0 - (1.0 - expected_one_client_miss).powi(2);
     println!(
-        "FIRETEST StratRuntimeState delivery math: runs={} clients_per_run=2 err_emu={} high_attempts={} expected_one_client_miss={:.6}% expected_any_client_miss_per_run={:.6}%",
+        "FIRETEST initial push loss model (without snapshot recovery): runs={} clients_per_run=2 err_emu={} high_attempts={} expected_one_client_miss={:.6}% expected_any_client_miss_per_run={:.6}%",
         runs,
         err_emu_percent,
         high_attempts,

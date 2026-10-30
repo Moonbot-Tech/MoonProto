@@ -76,6 +76,7 @@ pub(super) fn engine_method_allowed_before_domain_ready(method: EngineMethod) ->
             | EngineMethod::AuthCheck
             | EngineMethod::GetMarketsList
             | EngineMethod::UpdateMarketsList
+            | EngineMethod::GetStartupState
     )
 }
 

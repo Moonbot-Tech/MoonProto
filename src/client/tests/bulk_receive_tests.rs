@@ -354,3 +354,24 @@ fn manual_stats_response_survives_compression_sliced_reordering_and_duplicates()
         ).is_none(), "replayed encrypted stats must not be delivered again");
     }
 }
+
+#[test]
+fn startup_snapshot_survives_sliced_reordering_and_duplicate_blocks() {
+    let mut client = Client::new(dummy_cfg());
+    let key = install_server_decode_session(&mut client, 42);
+    let body = crate::commands::engine_api::startup_state_fixture();
+    let response = build_engine_response_payload(456, EngineMethod::GetStartupState, &body);
+    let wire = build_server_crypted_payload(&key, 1, Command::API, &response);
+    let assembled = reassemble(&wire, true);
+    let (_, decoded) = Client::decode_command_payload_owned(
+        &mut client.recv.data_read_state, Command::Crypted.to_byte(), assembled.into_vec(),
+    ).unwrap();
+    let parsed = parse_engine_response(&decoded).unwrap();
+    assert_eq!(parsed.method, EngineMethod::GetStartupState);
+    let snapshot = crate::commands::engine_api::parse_startup_state(&parsed.data).unwrap();
+    assert_eq!(snapshot.profit.rep_total_profit, 123.5);
+    assert_eq!(snapshot.hyperliquid.requests_left, Some(321));
+    assert!(Client::decode_command_payload_owned(
+        &mut client.recv.data_read_state, Command::Crypted.to_byte(), wire,
+    ).is_none(), "replayed encrypted snapshot must not be delivered again");
+}

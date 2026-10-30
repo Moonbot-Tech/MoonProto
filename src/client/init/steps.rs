@@ -34,11 +34,14 @@ pub(super) fn begin_engine_init_step(
     timeout: Duration,
 ) -> PendingEngineInit {
     let request_uid = engine_request_uid(&request_payload);
+    // The step deadline must not outlive the registry deadline: expiry there
+    // closes the receiver, which is a retryable timeout rather than a disconnect.
+    let deadline = Instant::now() + timeout;
     let rx = client.send_api_request_async_with_timeout(&request_payload, timeout);
     PendingEngineInit {
         request_uid,
         rx,
-        deadline: Instant::now() + timeout,
+        deadline,
     }
 }
 
@@ -48,13 +51,14 @@ pub(super) fn poll_engine_init_step(
 ) -> PendingEnginePoll {
     match pending.rx.try_recv() {
         Ok(resp) => PendingEnginePoll::Response(resp),
-        Err(mpsc::TryRecvError::Disconnected) => PendingEnginePoll::Disconnected,
-        Err(mpsc::TryRecvError::Empty) => {
+        Err(error) => {
             if Instant::now() >= pending.deadline {
                 if let Some(uid) = pending.request_uid {
                     client.pending_api.api_pending.remove(uid);
                 }
                 PendingEnginePoll::Timeout
+            } else if error == mpsc::TryRecvError::Disconnected {
+                PendingEnginePoll::Disconnected
             } else {
                 PendingEnginePoll::Pending
             }
@@ -81,20 +85,27 @@ mod tests {
             .api_pending
             .deadline(uid)
             .expect("Init request must be registered");
-        let registration_lead = pending
-            .deadline
-            .checked_duration_since(registered_deadline)
-            .expect("ApiPending registration must precede the Init deadline");
+        let registration_delay = registered_deadline
+            .checked_duration_since(pending.deadline)
+            .expect("registry expiry must never precede the Init deadline");
 
         assert!(
-            registration_lead < Duration::from_secs(1),
-            "ApiPending UID and Init step must expire together"
+            registration_delay < Duration::from_secs(1),
+            "registry and Init deadlines should differ only by request registration time"
         );
+    }
+
+    #[test]
+    fn expired_waiter_cleanup_is_a_retryable_timeout_not_a_disconnect() {
+        let mut client = Client::new(ClientConfig::new("127.0.0.1", 3000, [0; 16], [0; 16]));
+        let mut pending = begin_engine_init_step(&client, crate::commands::engine_request::get_startup_state(), Duration::ZERO);
+        client.pending_api.api_pending.remove(pending.request_uid.unwrap());
+        assert!(matches!(poll_engine_init_step(&mut client, &mut pending), PendingEnginePoll::Timeout));
     }
 }
 
 /// Run the full init sequence: BaseCheck → AuthCheck → GetMarketsList →
-/// UpdateMarketsList → strategy schema → post-init resync → optional
+/// UpdateMarketsList → strategy schema → core startup state → post-init resync → optional
 /// subscriptions.
 ///
 /// Until this function completes successfully,
@@ -119,9 +130,10 @@ mod tests {
 /// wait up to 34 * 300 ms for `AuthDone`, clear the marker, send BaseCheck once,
 /// and if it still fails retry it 10 times with 2000 ms pauses. The mandatory
 /// request waits are BaseCheck, AuthCheck, market list/prices, and strategy
-/// schema; post-init resync commands must be queued/flushed, but their replies
-/// are not part of the Ready barrier. A mandatory timeout/error means Init failed
-/// and `domain_ready` stays closed.
+/// schema and, on capable cores, the complete startup state. Post-init resync
+/// commands must be queued/flushed, but their replies are not part of the Ready
+/// barrier. Required snapshot steps retry a timeout; a negative response fails
+/// Init. In both cases `domain_ready` stays closed until all required steps succeed.
 ///
 /// [`ServerInfo`]: crate::commands::engine_api::ServerInfo
 #[derive(Debug, Clone)]
@@ -191,7 +203,8 @@ pub(super) fn run_base_check_once(
     match client.request_engine_response_for_init(dispatcher, &req, timeout) {
         Ok(resp) if resp.success => {
             result.base_check_ok = true;
-            let info = parse_base_check_response(&resp.data);
+            let (info, capabilities) = crate::commands::engine_api::parse_base_check_with_capabilities(&resp.data);
+            result.startup_state_supported = capabilities & 1 != 0;
             client.set_server_info(info);
             Ok(CriticalInitStatus::Ok)
         }

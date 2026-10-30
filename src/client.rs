@@ -9,7 +9,7 @@
 use crate::api_pending::ApiPending;
 use crate::commands::candles::{CandlesAggregator, CandlesChunkResult};
 use crate::commands::engine_api::{
-    parse_auth_check_response, parse_base_check_response, AuthCheckResponse,
+    parse_auth_check_response, AuthCheckResponse,
     EngineMethod, EngineResponse,
 };
 use crate::compression;

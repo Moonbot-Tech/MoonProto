@@ -21,6 +21,34 @@ use crate::state::LiveCandleApply;
 use crate::state::{MarketHistoryLastPriceBatch, MarketHistoryLastPriceInput, MarketsEvent};
 
 impl EventDispatcher {
+    pub(crate) fn apply_startup_state(&mut self, state: crate::commands::engine_api::StartupSnapshot) {
+        use crate::commands::strat::StratCommand;
+        use crate::commands::ui::UICommand;
+
+        // Recovery only fills missing initial states. A live update may overtake
+        // this Sliced reply, so an already received value must not be replaced.
+        let settings = &mut self.settings;
+        let missing = [
+            (settings.runtime_state.is_none(), UICommand::RuntimeState(state.runtime)),
+            (settings.kernel_license_state.is_none(), UICommand::KernelLicenseState(state.license)),
+            (settings.profit_state.is_none(), UICommand::ProfitState(state.profit)),
+            (settings.hyperliquid_requests_left.is_none() && state.hyperliquid.requests_left.is_some(),
+                UICommand::HyperliquidRequestLimitState(state.hyperliquid)),
+        ];
+        for (needed, command) in missing {
+            if needed {
+                if let Some(event) = settings.apply(command) {
+                    self.queued_events.extend([Event::Settings(event)]);
+                }
+            }
+        }
+        if self.strats.strategies_running().is_none() {
+            if let Some(event) = self.strats.apply(StratCommand::RuntimeState(state.strategies)) {
+                self.queued_events.extend([Event::Strat(event)]);
+            }
+        }
+    }
+
     pub(super) fn client_new_data_api(
         &mut self,
         payload: &[u8],
@@ -289,5 +317,52 @@ impl EventDispatcher {
         };
         let rows = self.markets.current_last_price_history_rows(scope);
         self.queue_last_price_history(Some(now_time_days), rows);
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    use crate::commands::engine_api::{parse_startup_state, startup_state_fixture};
+    use crate::commands::strat::{StratCommand, StratRuntimeState};
+    use crate::commands::ui::UICommand;
+
+    #[test]
+    fn lost_initial_pushes_are_recovered_once() {
+        let mut dispatcher = EventDispatcher::new();
+        let data = startup_state_fixture();
+        dispatcher.apply_startup_state(parse_startup_state(&data).unwrap());
+        assert!(dispatcher.settings.runtime_state.unwrap().is_started);
+        assert!(dispatcher.settings.kernel_license_state.is_some());
+        assert_eq!(dispatcher.settings.profit_state.unwrap().rep_total_profit, 123.5);
+        assert_eq!(dispatcher.settings.hyperliquid_requests_left, Some(321));
+        assert_eq!(dispatcher.strats.strategies_running(), Some(true));
+        assert_eq!(dispatcher.queued_events.len(), 5);
+        dispatcher.apply_startup_state(parse_startup_state(&data).unwrap());
+        assert_eq!(dispatcher.queued_events.len(), 5, "duplicate recovery must not emit duplicate states");
+    }
+
+    #[test]
+    fn live_updates_before_and_after_recovery_keep_their_values() {
+        let mut dispatcher = EventDispatcher::new();
+        let data = startup_state_fixture();
+        let mut newer = parse_startup_state(&data).unwrap();
+        newer.runtime.is_started = false;
+        newer.license.order_count = 42;
+        dispatcher.settings.apply(UICommand::RuntimeState(newer.runtime));
+        dispatcher.settings.apply(UICommand::KernelLicenseState(newer.license));
+        dispatcher.settings.hyperliquid_requests_left = Some(999);
+        dispatcher.strats.apply(StratCommand::RuntimeState(StratRuntimeState { strategies_running: false }));
+        dispatcher.apply_startup_state(parse_startup_state(&data).unwrap());
+        assert!(!dispatcher.settings.runtime_state.unwrap().is_started);
+        assert_eq!(dispatcher.settings.kernel_license_state.unwrap().order_count, 42);
+        assert_eq!(dispatcher.settings.hyperliquid_requests_left, Some(999));
+        assert_eq!(dispatcher.strats.strategies_running(), Some(false));
+        assert_eq!(dispatcher.queued_events.len(), 1, "only the missing profit state is recovered");
+        let mut profit = dispatcher.settings.profit_state.unwrap();
+        profit.rep_total_profit = 500.0;
+        dispatcher.settings.apply(UICommand::ProfitState(profit));
+        dispatcher.apply_startup_state(parse_startup_state(&data).unwrap());
+        assert_eq!(dispatcher.settings.profit_state.unwrap().rep_total_profit, 500.0);
     }
 }

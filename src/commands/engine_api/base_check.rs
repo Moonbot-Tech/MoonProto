@@ -162,12 +162,17 @@ impl ServerInfo {
 /// the rest as `None`, matching the protocol's append-only optional-field
 /// pattern.
 pub(crate) fn parse_base_check_response(data: &[u8]) -> ServerInfo {
+    parse_base_check_with_capabilities(data).0
+}
+
+/// The optional capability tail is internal; the public identity type stays unchanged.
+pub(crate) fn parse_base_check_with_capabilities(data: &[u8]) -> (ServerInfo, u32) {
     let mut info = ServerInfo::default();
     let mut pos = 0usize;
 
     // 1. bot_id (i64 LE) — Delphi WriteInt64(cfg.UniqueBotID)
     if pos + 8 > data.len() {
-        return info;
+        return (info, 0);
     }
     info.bot_id = Some(i64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()));
     pos += 8;
@@ -175,12 +180,12 @@ pub(crate) fn parse_base_check_response(data: &[u8]) -> ServerInfo {
     // 2. server_name (string)
     match read_string(data, &mut pos) {
         Some(s) => info.server_name = Some(s),
-        None => return info,
+        None => return (info, 0),
     }
 
     // 3. exchange_code (u8) — Ord(cfg.Header.Current)
     if pos + 1 > data.len() {
-        return info;
+        return (info, 0);
     }
     info.exchange_code = Some(ExchangeCode::from_byte(data[pos]));
     pos += 1;
@@ -188,12 +193,12 @@ pub(crate) fn parse_base_check_response(data: &[u8]) -> ServerInfo {
     // 4. exchange_name (string)
     match read_string(data, &mut pos) {
         Some(s) => info.exchange_name = Some(s),
-        None => return info,
+        None => return (info, 0),
     }
 
     // 5. exchange_type_mask (u8)
     if pos + 1 > data.len() {
-        return info;
+        return (info, 0);
     }
     info.exchange_type_mask = Some(ExchangeTypeMask::from_byte(data[pos]));
     pos += 1;
@@ -201,18 +206,18 @@ pub(crate) fn parse_base_check_response(data: &[u8]) -> ServerInfo {
     // 6. dex_name (string)
     match read_string(data, &mut pos) {
         Some(s) => info.dex_name = Some(s),
-        None => return info,
+        None => return (info, 0),
     }
 
     // 7. base_currency_name (string)
     match read_string(data, &mut pos) {
         Some(s) => info.base_currency_name = Some(s),
-        None => return info,
+        None => return (info, 0),
     }
 
     // 8. base_currency_code (u8) — Ord(cfg.BaseCurrency)
     if pos + 1 > data.len() {
-        return info;
+        return (info, 0);
     }
     info.base_currency_code = Some(BaseCurrency::from_byte(data[pos]));
     pos += 1;
@@ -221,14 +226,14 @@ pub(crate) fn parse_base_check_response(data: &[u8]) -> ServerInfo {
     // Trust the server: version values grow monotonically from small positive
     // numbers (for example 763 for v7.63), so the signed/unsigned difference does not matter.
     if pos + 4 > data.len() {
-        return info;
+        return (info, 0);
     }
     info.server_version = Some(i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as u32);
     pos += 4;
 
     // 10. moonproto_version (i32 LE → u32)
     if pos + 4 > data.len() {
-        return info;
+        return (info, 0);
     }
     info.moonproto_version =
         Some(i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as u32);
@@ -237,5 +242,10 @@ pub(crate) fn parse_base_check_response(data: &[u8]) -> ServerInfo {
     // 11. version_suffix (optional string)
     info.version_suffix = read_string(data, &mut pos);
 
-    info
+    let capabilities = if info.version_suffix.is_some() && data.len() - pos >= 4 {
+        u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap())
+    } else {
+        0
+    };
+    (info, capabilities)
 }

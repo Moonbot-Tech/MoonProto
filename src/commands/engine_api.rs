@@ -12,11 +12,15 @@ mod auth_check;
 mod base_check;
 mod method;
 mod response;
+mod startup_state;
 
 pub(crate) use self::auth_check::parse_auth_check_response;
 pub use self::auth_check::{AuthCheckResponse, DexInfo, HyperDexIndex};
 #[allow(unused_imports)]
-pub(crate) use self::base_check::{exchange_type_flags, parse_base_check_response};
+pub(crate) use self::base_check::{exchange_type_flags, parse_base_check_response, parse_base_check_with_capabilities};
+pub(crate) use self::startup_state::{parse_startup_state, StartupSnapshot};
+#[cfg(test)]
+pub(crate) use self::startup_state::startup_state_fixture;
 pub use self::base_check::{ExchangeTypeMask, ServerInfo};
 pub use self::method::EngineMethod;
 pub use self::response::EngineResponse;

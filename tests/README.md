@@ -8,6 +8,8 @@ application examples: some are intentionally low-level protocol guards.
 - `integration_smoke.rs` is the small live `MoonClient` happy-path smoke test.
   It uses the same shape a desktop app should use: start `MoonClient`, wait for
   `LifecycleEvent::Ready`, read snapshots/events, then disconnect.
+  Balance refresh waits for a full balance snapshot; a session-profit event is
+  not that snapshot, and a received zero account balance is valid.
 - `fire_test.rs` is the live health/stress gate. It also uses the public
   `MoonClient` path, but it enables diagnostics and destructive scenarios to
   prove protocol recovery, retained state, and CPU gates. It is not a sample app.
@@ -51,6 +53,12 @@ behavior and recovery, not to demonstrate the public API.
 Regression coverage includes encrypted startup profit delivery before Init,
 replays before/after Init, zero-valued live updates, candle refusal/retry timing
 with partial and duplicate chunks, cancellation, and missing versus zero RTT.
+Startup recovery additionally covers complete loss of the ordinary initial
+states, a lost snapshot and a fresh request UID, late/duplicate replies, live
+updates before/after recovery, rejection of every truncated snapshot prefix,
+and older cores without the capability. FireTest requires the new core startup
+step to complete before Ready and checks the first retained runtime, license,
+profit and strategy-running states. The test core must therefore be updated.
 Receive regressions also cover retained buffer addresses through transport/AES
 and delivery, reuse of a parsed response across pending/state consumers, malformed
 compressed responses retaining their waiter, grouped reordering/replays/truncated
@@ -67,31 +75,31 @@ sections, complete retained MM/liquidation rows, and single snapshot publication
 before ordered event delivery. The `followup_` benchmarks measure CPU/allocations
 for these paths, including retained-history and unchanged event-queue controls.
 
-The receive, lookup and dispatch follow-ups passed the full live FireTest profile
-on 2026-10-30 in 239.65 seconds: startup state, manual statistics, archives, 10%/50%
-packet-loss recovery, order lifecycle, strategy synchronization, settings restore,
-forced disconnect and automatic reconnect. This functional run is separate from
-the synthetic CPU measurements. An earlier run missed several startup state
-messages on one client and failed the mandatory health gate. The saved public
-baseline then passed (235.21 seconds), followed by the current build above, without
-relaxing the gate or changing delivery code. The failed run has no per-message
-send/ACK trace to identify its cause; these optimizations do not claim to fix it.
+The startup-recovery build passed 1,240 unit tests and the full live FireTest on
+2026-10-30 in 258.34 seconds, including the Windows settings-archive gate:
+initial states before Ready, manual statistics, 10%/50% packet-loss recovery,
+order lifecycle, strategy synchronization, settings restore, forced disconnect
+and automatic reconnect. The added startup exchange took 310 and 405 ms for
+the two primary clients in this run; these observations are not latency bounds.
+The previous public library (`c416db6`) also passed quick FireTest against the
+updated core (11.26 seconds). The new library reached Ready against the older
+core without sending the unsupported startup request.
+Ten additional connections with configured 50% loss all reached Ready with the
+required initial states; measured receive loss was 49.463% (113.79 seconds).
 
-A subsequent focused investigation reproduced the same missing-state pattern in
-3 of 10 connections at configured 50% loss, enabled only for the first six seconds. Each
-missing initial state had all three transmission attempts dropped; initialization
-then reached `Ready` after loss was disabled, without recovering those states.
-This proves a startup-delivery limitation, but does not retrospectively identify
-the untraced original failure. Temporary packet probes were removed.
+The motivating investigation reproduced missing initial states in 3 of 10
+connections with configured 50% loss for the first six seconds: all three
+ordinary delivery attempts were dropped, and Ready did not recover the missing
+states. That trace establishes the old delivery limitation, not the cause of
+an earlier untraced failure. Temporary packet probes were removed. Deterministic
+tests now require recovery even when all ordinary initial pushes are absent.
 
-That investigation also corrected biased packet-loss sampling. A fixed-seed
+The same investigation corrected biased packet-loss sampling. A fixed-seed
 regression checks one million samples at each of 0%, 5%, 10%, 25%, 50% and 100%.
 It fails against the old byte-modulo sampler and passes with unbiased sampling.
-Older runs above used configured rates; their actual probabilities were
-11.71875% and 58.59375%, respectively. Mandatory startup-health checks remain
-unchanged; correcting the emulator does not fix missing startup-state recovery.
-After the correction, all 1,229 unit tests and the full live FireTest profile
-passed (251.32 seconds), with the same mandatory health gates and configured rates.
+Historical runs with configured 10%/50% used actual probabilities of 11.71875%
+and 58.59375%. The current full run uses the corrected sampler. Functional
+FireTest results are separate from the synthetic CPU measurements.
 
 Tests under `src/events/tests.rs` and `src/state/**/tests.rs` protect Active Lib
 state application and retained read models. Direct state/dispatcher use here is

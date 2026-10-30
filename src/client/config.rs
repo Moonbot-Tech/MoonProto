@@ -131,7 +131,7 @@ pub enum LifecycleEvent {
     /// contract.
     InitStepCompleted {
         /// Stable step name: `BaseCheck`, `AuthCheck`, `GetMarketsList`,
-        /// `UpdateMarketsList`, `StrategySchema`, `PostInitFlush`,
+        /// `UpdateMarketsList`, `StrategySchema`, `CoreStartupState`, `PostInitFlush`,
         /// `StartupSnapshot`, or `StartupEvents`.
         step: &'static str,
         /// Cumulative wall-clock time. Init-spine steps count from transport

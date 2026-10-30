@@ -412,7 +412,7 @@ fn base_check_after_server_update_uses_delphi_retry_count() {
 }
 
 #[test]
-fn init_base_auth_failure_uses_delphi_retry_branch() {
+fn init_cannot_treat_missing_base_check_as_legacy_capabilities() {
     let mut client = Client::new(dummy_cfg());
     client.authorized = true;
     client.connected = true;
@@ -429,15 +429,14 @@ fn init_base_auth_failure_uses_delphi_retry_branch() {
     )
     .expect_err("zero-timeout live requests must fail");
 
-    assert!(matches!(err, InitError::CriticalStepTimedOut("AuthCheck")));
+    assert!(matches!(err, InitError::CriticalStepTimedOut("BaseCheck")));
     assert_eq!(
         drain_api_methods(&client),
         vec![
             EngineMethod::BaseCheck.to_byte(),
             EngineMethod::BaseCheck.to_byte(),
-            EngineMethod::AuthCheck.to_byte(),
         ],
-        "Delphi InitInt retry branch is Sleep(200); BaseCheck; AuthCheck"
+        "failed capability discovery must stop before AuthCheck can bypass it"
     );
 }
 

@@ -42,15 +42,18 @@ pub enum InitStep {
     StartupSnapshot = 6,
     /// Publish startup events queued with that snapshot.
     StartupEvents = 7,
+    /// Recover initial runtime/license/profit states when supported by the core.
+    CoreStartupState = 8,
 }
 
 impl InitStep {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::BaseCheck,
         Self::AuthCheck,
         Self::GetMarketsList,
         Self::UpdateMarketsList,
         Self::StrategySchema,
+        Self::CoreStartupState,
         Self::PostInitFlush,
         Self::StartupSnapshot,
         Self::StartupEvents,
@@ -196,7 +199,7 @@ impl InitialStrategies {
 /// Configuration for the one-time Init sequence run by [`MoonClient`].
 ///
 /// Protocol-critical init steps are not configurable: BaseCheck, AuthCheck,
-/// GetMarketsList, UpdateMarketsList, balance refresh,
+/// GetMarketsList, UpdateMarketsList, core startup-state recovery when supported, balance refresh,
 /// orders, strategy snapshot sync, and settings sync are the init contract
 /// itself. This config only carries optional stream subscriptions and timing.
 #[derive(Debug, Clone)]
@@ -223,7 +226,7 @@ pub struct InitConfig {
     pub subscribe_orderbooks: Vec<String>,
     /// Per-step Engine API wait override.
     ///
-    /// By default, `BaseCheck`/`AuthCheck` use 12 seconds per attempt,
+    /// By default, `BaseCheck`/`AuthCheck`/`CoreStartupState` use 12 seconds per attempt,
     /// while `UpdateMarketsList`, `GetMarketsList`, and the larger strategy
     /// schema each use 45 seconds. Setting this value overrides every default.
     /// A pending server-update marker enables the update-aware
@@ -250,6 +253,7 @@ impl Default for InitConfig {
 pub(crate) struct InitResult {
     /// `BaseCheck` succeeded and `Client::server_info()` was updated.
     pub base_check_ok: bool,
+    pub startup_state_supported: bool,
     /// `AuthCheck` succeeded.
     pub auth_check_ok: bool,
     /// Parsed per-account metadata from the successful `AuthCheck`, when its

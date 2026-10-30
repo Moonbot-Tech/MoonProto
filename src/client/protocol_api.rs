@@ -347,6 +347,6 @@ impl Client {
 fn method_applies_after_pending(method: EngineMethod) -> bool {
     matches!(
         method,
-        EngineMethod::GetMarketsList | EngineMethod::UpdateMarketsList
+        EngineMethod::GetMarketsList | EngineMethod::UpdateMarketsList | EngineMethod::GetStartupState
     )
 }
