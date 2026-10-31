@@ -348,6 +348,7 @@ mod startup_tests {
         let data = startup_state_fixture();
         let mut newer = parse_startup_state(&data).unwrap();
         newer.runtime.is_started = false;
+        newer.runtime.prepared_release_version = Some(773);
         newer.license.order_count = 42;
         dispatcher.settings.apply(UICommand::RuntimeState(newer.runtime));
         dispatcher.settings.apply(UICommand::KernelLicenseState(newer.license));
@@ -355,6 +356,7 @@ mod startup_tests {
         dispatcher.strats.apply(StratCommand::RuntimeState(StratRuntimeState { strategies_running: false }));
         dispatcher.apply_startup_state(parse_startup_state(&data).unwrap());
         assert!(!dispatcher.settings.runtime_state.unwrap().is_started);
+        assert_eq!(dispatcher.settings.runtime_state.unwrap().prepared_release_version, Some(773));
         assert_eq!(dispatcher.settings.kernel_license_state.unwrap().order_count, 42);
         assert_eq!(dispatcher.settings.hyperliquid_requests_left, Some(999));
         assert_eq!(dispatcher.strats.strategies_running(), Some(false));

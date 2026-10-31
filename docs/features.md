@@ -106,6 +106,7 @@ See [strategies](strats.md), [UI and settings](ui.md), and [events](events.md).
 | Server logs | Authenticated core log lines, enabled by default; per-client opt-out survives reconnect. | `Event::ServerLog`, `InitConfig::subscribe_logs`, `settings().set_logs_subscription(...)`. |
 | Remote administration | Ask the core to run its release/named update flow, switch DEX/Spot selection, or shut down when no active take/sell order exists. | Use the typed methods on `client.settings()`; core shutdown is a one-shot request without an acknowledgement. |
 | Core-only update | Prepare an update on this core without instructing terminals to update. | `client.settings().request_core_update(name, is_release)`; `SettingsEvent::CoreUpdateResult`. |
+| Prepared release | Show the release already downloaded by the core (MoonBot 7.72 L6+). | `snapshot.settings().runtime_state` → `prepared_release_version`; `SettingsEvent::RuntimeStateUpdated`. |
 | Settings ZIP backup | Download the Windows core's settings package, including credentials, without stopping it. | `client.settings().download_settings_snapshot(path)`; `SettingsEvent::SettingsSnapshotDownloaded`. |
 | Core key replacement | Replace the active MoonProto key using its current and replacement export packages. | `client.settings().request_key_change(current, replacement)`; confirm through a new connection with the replacement key. |
 

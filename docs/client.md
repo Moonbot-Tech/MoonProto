@@ -299,6 +299,28 @@ maintains the user-requested active-lib state for that session.
 
 ### Core Version and Build
 
+Call `moonproto::core_compatibility()` to read this SDK build's minimum MoonBot
+version for its complete feature set and a human-readable explanation of what
+needs that version. The returned `CoreCompatibility` has two fields,
+`minimum_core_version` and `comment`, and can be serialized directly into an
+application's account/status response. It requires no connection or allocation.
+
+```rust
+let compatibility = moonproto::core_compatibility();
+println!("Minimum core: {}", compatibility.minimum_core_version);
+println!("{}", compatibility.comment);
+```
+
+The current requirement is **MoonBot 7.72 L6**, which reports prepared release
+updates. L5 supports startup-state recovery but does not report prepared releases.
+Earlier compatible cores can reach `Ready` without some initial runtime, license,
+profit, Hyperliquid allowance or strategy-running states after packet loss.
+The returned `comment` explains these limitations for account/status UI.
+
+This metadata does not reject older cores or describe the currently connected
+core. Older cores with a compatible protocol can still provide their supported
+features. Platform and exchange requirements of individual features still apply.
+
 Read `client.server_info()` (or `snapshot.server_info()`) for the core's
 numeric `server_version` and optional `version_suffix`. For example, `771` and
 `Some("R2")` identify version `7.71 R2`. The suffix describes the **running

@@ -18,6 +18,15 @@ application examples: some are intentionally low-level protocol guards.
   primary clients before mutation tests. Zero profit counters and a received
   zero-millisecond RTT are valid. Missing startup profit or Ping telemetry fails
   the health gate.
+  Both profiles require prepared-release availability from a MoonBot 7.72 L6+
+  core, including the passive runtime-state echo. Full checks compare it across
+  both clients and after reconnect. Zero means no prepared package and is valid.
+  Unit tests cover older cores without the field, incomplete/future tails,
+  startup recovery and live replacement of the retained value.
+  Order-flow checks require the filled buy and subsequent sell on both clients.
+  They do not require every intermediate phase event: a newer sell state can
+  supersede the buy-completed snapshot. A deterministic regression checks delayed
+  and duplicate buy-completed snapshots without rolling back the retained fill.
   Both profiles also require two manual volumes/deltas refreshes on a separate
   client with no trade, orderbook, or candle subscription. Every retained market
   must receive finite values, the response must contain nonzero core volumes

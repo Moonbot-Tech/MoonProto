@@ -8,6 +8,44 @@ fn header_bytes(cmd_id: u8, uid: u64) -> Vec<u8> {
 }
 
 #[test]
+fn runtime_state_accepts_old_core_and_optional_prepared_release() {
+    let mut old = header_bytes(CMD_RUNTIME_STATE, 91);
+    old.extend_from_slice(&[1, 0]);
+    for version in [0u32, 773] {
+        let bytes = version.to_le_bytes();
+        for len in 0..=4 {
+            let mut payload = old.clone();
+            payload.extend_from_slice(&bytes[..len]);
+            let UICommand::RuntimeState(state) = UICommand::parse(&payload).unwrap() else { panic!() };
+            assert!(state.is_started);
+            assert!(!state.auto_detect_active);
+            assert_eq!(state.prepared_release_version, (len == 4).then_some(version));
+        }
+        let mut future = old.clone();
+        future.extend_from_slice(&bytes);
+        future.extend_from_slice(&[5, 6, 7]);
+        let UICommand::RuntimeState(state) = UICommand::parse(&future).unwrap() else { panic!() };
+        assert_eq!(state.prepared_release_version, Some(version));
+    }
+}
+
+#[test]
+fn prepared_release_pushes_replace_retained_state_without_changing_old_snapshots() {
+    let mut settings = crate::state::SettingsState::new();
+    for version in [None, Some(0u32), Some(773), Some(774), Some(0), None] {
+        let before = settings.clone();
+        let previous = before.runtime_state;
+        let mut payload = header_bytes(CMD_RUNTIME_STATE, 92);
+        payload.extend_from_slice(&[1, 1]);
+        if let Some(version) = version { payload.extend_from_slice(&version.to_le_bytes()); }
+        assert!(matches!(settings.apply(UICommand::parse(&payload).unwrap()),
+            Some(crate::state::SettingsEvent::RuntimeStateUpdated)));
+        assert_eq!(settings.runtime_state.unwrap().prepared_release_version, version);
+        assert_eq!(before.runtime_state, previous);
+    }
+}
+
+#[test]
 fn parse_settings_request() {
     let payload = header_bytes(CMD_SETTINGS_REQUEST, 99);
     match UICommand::parse(&payload).unwrap() {

@@ -440,6 +440,32 @@ fn torn_patch_requests_repair_then_promotes_when_all_sections_arrive() {
 }
 
 #[test]
+fn sell_set_preserves_fill_when_buy_done_is_delayed_or_repeated() {
+    let uid = 11;
+    let mut orders = OrderState::new();
+    apply(&mut orders, image(uid, 1, desc("BTCUSDT"), state(OrderWorkerStatus::BuySet, 0)), APP_TOKEN, true);
+    let mut filled = state(OrderWorkerStatus::BuyDone, 0);
+    put_f64(&mut filled, 45, 2.0); // Executed buy quantity.
+    put_f64(&mut filled, 61, 101.0); // Mean fill price.
+    let mut selling = filled.clone();
+    selling.0[0] = OrderWorkerStatus::SellSet.to_byte();
+    let (events, repairs) = apply(&mut orders, image(uid, 3, desc("BTCUSDT"), selling), APP_TOKEN, true);
+    assert!(repairs.is_empty());
+    assert!(matches!(events.as_slice(), [OrderEvent::Updated(order)] if order.status == OrderWorkerStatus::SellSet));
+    for _ in 0..2 {
+        let (events, repairs) = apply(&mut orders, image(uid, 2, desc("BTCUSDT"), filled.clone()), APP_TOKEN, true);
+        assert!(events.is_empty());
+        assert!(repairs.is_empty());
+        let order = orders.get(uid).unwrap();
+        assert_eq!(order.status, OrderWorkerStatus::SellSet);
+        assert_eq!(order.buy_order.actual_q, 2.0);
+        assert_eq!(order.buy_order.mean_price, 101.0);
+        assert_eq!(order.buy_order.quantity_remaining, 0.0);
+        assert!(orders.mirrors[&uid].is_exact());
+    }
+}
+
+#[test]
 fn stale_patch_cannot_roll_back_newer_sections() {
     let uid = 11;
     let description = desc("BTCUSDT");

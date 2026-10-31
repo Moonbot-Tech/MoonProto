@@ -1607,6 +1607,10 @@ pub struct RuntimeStateCommand {
     pub is_started: bool,
     /// MoonBot `not PassiveMode`: automatic market detection is active.
     pub auto_detect_active: bool,
+    /// Release package prepared on the core, encoded as version * 100 (773 = 7.73).
+    /// `Some(0)` means no prepared package; `None` means an older core did not
+    /// report this field. This does not check the release server or install updates.
+    pub prepared_release_version: Option<u32>,
 }
 
 /// `TKernelLicenseStateCommand` (UI CmdId=22).

@@ -133,6 +133,7 @@
 mod api_pending;
 mod app_queue;
 pub mod client;
+mod compatibility;
 // `commands` is public only so diagnostics/integration tests can inspect exact
 // wire packets. That visibility is not an application-API or compatibility
 // promise; supported user types are the reviewed crate-root re-exports below.
@@ -249,6 +250,7 @@ pub use state::{
 pub use time::DelphiTime;
 pub use time::{MoonTime, ServerClock};
 pub use transport::MoonKey;
+pub use compatibility::{core_compatibility, CoreCompatibility};
 
 #[cfg(test)]
 mod bench_support;

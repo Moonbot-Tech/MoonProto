@@ -66,6 +66,14 @@ command packets.
 
 MoonProto has built-in transport modes **V0**, **V1**, and **V2**. The selected client mode must match the server-side connection setting; unsupported mode values normalize to `V0`.
 
+### Core compatibility
+
+Call `moonproto::core_compatibility()` for the minimum MoonBot version supporting
+this SDK's complete feature set and a comment explaining older-core limitations.
+It works without a connection and can be serialized into your account/status UI.
+See [core version and build](docs/client.md#core-version-and-build) for usage and
+the separate `client.server_info()` API for the connected core's actual version.
+
 ## Quick Start
 
 ### Credentials

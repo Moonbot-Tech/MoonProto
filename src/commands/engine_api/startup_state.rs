@@ -88,12 +88,26 @@ mod tests {
         let mut data = startup_state_fixture();
         let state = parse_startup_state(&data).unwrap();
         assert!(state.runtime.is_started && state.runtime.auto_detect_active);
+        assert_eq!(state.runtime.prepared_release_version, None, "L5 snapshot remains valid");
         assert_eq!(state.profit.rep_total_profit, 123.5);
         assert_eq!(state.profit.rep_total_trades, 7);
         assert_eq!(state.hyperliquid.requests_left, Some(321));
         assert!(state.strategies.strategies_running);
         data.extend_from_slice(b"future extension");
         assert!(parse_startup_state(&data).is_some());
+    }
+
+    #[test]
+    fn prepared_release_is_recovered_with_the_initial_runtime_state() {
+        let mut data = startup_state_fixture();
+        data[1..5].copy_from_slice(&17u32.to_le_bytes());
+        data.splice(18..18, 773u32.to_le_bytes());
+        let state = parse_startup_state(&data).unwrap();
+        assert_eq!(state.runtime.prepared_release_version, Some(773));
+        assert_eq!(state.profit.rep_total_profit, 123.5);
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        dispatcher.apply_startup_state(state);
+        assert_eq!(dispatcher.settings().runtime_state.unwrap().prepared_release_version, Some(773));
     }
 
     #[test]

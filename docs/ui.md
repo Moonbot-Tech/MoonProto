@@ -156,6 +156,33 @@ automatically.
 
 ### Version Update
 
+MoonBot **7.72 L6+** reports the release package already prepared by its own
+updater through `prepared_release_version` in the retained runtime state:
+
+- `None`: the core does not report this field, or runtime state has not arrived.
+- `Some(0)`: no release package is prepared. This does not prove that the core
+  has checked successfully or that no newer release exists on the update server.
+- `Some(version)`, where `version > 0`: a newer release package is prepared on
+  the core; for example, `773` means `7.73`.
+
+```rust
+if let Some(snapshot) = client.snapshot() {
+    let prepared = snapshot.settings().runtime_state
+        .and_then(|state| state.prepared_release_version);
+    if let Some(version) = prepared.filter(|version| *version > 0) {
+        println!("Core update ready: {}.{:02}", version / 100, version % 100);
+    }
+}
+```
+
+The value arrives with initial runtime state, is included in startup recovery
+and reconnect snapshots, and changes through `SettingsEvent::RuntimeStateUpdated`.
+The core checks its own platform's release channel and broadcasts changes to
+prepared availability. Reading the field performs no network request. It does
+not discover named test builds or describe the terminal application's version.
+After the user chooses to install the release, call
+`client.settings().request_core_update("", true)?`.
+
 There are two independent update flows:
 
 | Call | Scope | Event |

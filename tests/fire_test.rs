@@ -431,6 +431,7 @@ impl From<&MarketPrice> for MarketProbePrice {
 struct RuntimeStateProbe {
     is_started: bool,
     auto_detect_active: bool,
+    prepared_release_version: Option<u32>,
 }
 
 impl From<moonproto::RuntimeStateCommand> for RuntimeStateProbe {
@@ -438,6 +439,7 @@ impl From<moonproto::RuntimeStateCommand> for RuntimeStateProbe {
         Self {
             is_started: value.is_started,
             auto_detect_active: value.auto_detect_active,
+            prepared_release_version: value.prepared_release_version,
         }
     }
 }
@@ -971,6 +973,8 @@ impl Session {
             && initial.strats().strategies_running().is_some(),
             "FIRETEST {label}: initial snapshot must contain runtime, license, profit and strategy state");
         println!("OK: FIRETEST {label}: repeatable core startup snapshot completed before Ready");
+        assert!(initial.settings().runtime_state.unwrap().prepared_release_version.is_some(),
+            "FIRETEST {label}: core must report prepared release availability (MoonBot 7.72 L6+)");
         session
     }
 
@@ -6029,6 +6033,8 @@ fn run_moonclient_public_smoke(
     let runtime_state = stats
         .runtime_state
         .unwrap_or_else(|| panic!("FIRETEST {label}: missing RuntimeState before AutoDetect gate"));
+    assert!(runtime_state.prepared_release_version.is_some(),
+        "FIRETEST {label}: missing prepared release availability (MoonBot 7.72 L6+)");
     let before_runtime_events = stats.runtime_state_events;
     client
         .settings()
@@ -8580,8 +8586,8 @@ fn wait_ui_runtime_state(cfg: &FireConfig, a: &mut Session, b: &mut Session) -> 
         "clients disagree on UI runtime state: A={a_state:?} B={b_state:?}"
     );
     println!(
-        "FIRETEST UI RuntimeState: is_started={} auto_detect_active={}",
-        a_state.is_started, a_state.auto_detect_active
+        "FIRETEST UI RuntimeState: is_started={} auto_detect_active={} prepared_release_version={:?}",
+        a_state.is_started, a_state.auto_detect_active, a_state.prepared_release_version
     );
     a_state
 }
@@ -9362,7 +9368,7 @@ fn run_order_lifecycle_gate_body(
                     captured_order_state_since(session, from, server_uid, |event| {
                         event.kind == FireTestOrderStateEventKind::Updated
                             && (event.bulk_replace_buy
-                                || (event.status == OrderWorkerStatus::BuyDone
+                                || (matches!(event.status, OrderWorkerStatus::BuyDone | OrderWorkerStatus::SellSet)
                                     && event.buy_mean_price > initial_price * 1.005))
                     })
                 };
@@ -9375,28 +9381,8 @@ fn run_order_lifecycle_gate_body(
         describe_captured_order_states(a, server_uid),
         describe_captured_order_states(b, server_uid)
     );
-    assert!(
-        pump_pair_until_sessions(
-            a,
-            b,
-            cfg.connect_timeout,
-            "stable BuyDone state broadcast",
-            |a, b| {
-                let saw_buy_done = |session: &Session, from: usize| {
-                    captured_order_state_since(session, from, server_uid, |event| {
-                        event.status == OrderWorkerStatus::BuyDone
-                            && event.buy_mean_price > initial_price * 1.005
-                    })
-                };
-                saw_buy_done(a, a_replace_event_from)
-                    && saw_buy_done(b, b_replace_event_from)
-            }
-        ),
-        "order uid={} did not expose the stable BuyDone IMAGE to both clients; A.events=[{}] B.events=[{}]",
-        server_uid,
-        describe_captured_order_states(a, server_uid),
-        describe_captured_order_states(b, server_uid)
-    );
+    // A newer SellSet snapshot may supersede BuyDone before delivery. Verify the
+    // retained execution on both clients rather than requiring every intermediate phase.
     assert!(
         pump_pair_until_sessions(
             a,
@@ -9409,12 +9395,17 @@ fn run_order_lifecycle_gate_body(
                         .state_snapshot()
                         .orders()
                         .get(server_uid)
-                        .is_some_and(|order| order.status == OrderWorkerStatus::SellSet)
+                        .is_some_and(|order| {
+                            order.status == OrderWorkerStatus::SellSet
+                                && order.buy_order.mean_price > initial_price * 1.005
+                                && order.buy_order.actual_q > 0.0
+                                && order.buy_order.quantity_remaining == 0.0
+                        })
                 };
                 sell_set(a) && sell_set(b)
             }
         ),
-        "order uid={} did not reach SellSet on both clients after buy replace; A=[{}] B=[{}]",
+        "order uid={} did not reach SellSet with a filled buy on both clients after buy replace; A=[{}] B=[{}]",
         server_uid,
         describe_session_order(a, server_uid),
         describe_session_order(b, server_uid)
@@ -10358,6 +10349,8 @@ fn fire_test_active_library_health() {
     );
 
     let after_reconnect = a.snapshot();
+    let runtime_after_reconnect = wait_ui_runtime_state(&cfg, &mut a, &mut b);
+    run_auto_detect_echo_gate(&cfg, &mut a, runtime_after_reconnect);
     let trades_before = after_reconnect.trades_apply;
     let books_before = after_reconnect.orderbook_apply;
     assert!(

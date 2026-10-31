@@ -592,11 +592,13 @@ mod tests {
             uid: 1,
             is_started: true,
             auto_detect_active: false,
+            prepared_release_version: Some(773),
         }));
         assert!(matches!(ev, Some(SettingsEvent::RuntimeStateUpdated)));
         let runtime = st.runtime_state.unwrap();
         assert!(runtime.is_started);
         assert!(!runtime.auto_detect_active);
+        assert_eq!(runtime.prepared_release_version, Some(773));
     }
 
     #[test]

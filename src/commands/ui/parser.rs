@@ -293,10 +293,13 @@ impl UICommand {
             CMD_RUNTIME_STATE => {
                 let is_started = read_bool_zero_tail(payload, &mut pos);
                 let auto_detect_active = read_bool_zero_tail(payload, &mut pos);
+                let prepared_release_version = payload.get(pos..pos + 4)
+                    .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()));
                 Some(UICommand::RuntimeState(RuntimeStateCommand {
                     uid,
                     is_started,
                     auto_detect_active,
+                    prepared_release_version,
                 }))
             }
 
