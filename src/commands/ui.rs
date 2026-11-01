@@ -131,7 +131,7 @@ pub(crate) fn is_startup_state_payload(payload: &[u8]) -> bool {
     matches!(payload.first(), Some(
         &CMD_RUNTIME_STATE | &CMD_KERNEL_LICENSE_STATE | &CMD_PROFIT_STATE
         | &CMD_NEWS_RELAY | &CMD_NEWS_HISTORY | &CMD_HL_REQUEST_LIMIT_STATE
-        | &CMD_PROBLEMS_STATE | &CMD_PROBLEM_NOTIFY | &CMD_TELEGRAM_STATE
+        | &CMD_PROBLEMS_STATE | &CMD_PROBLEM_NOTIFY | &CMD_TELEGRAM_STATE | &58 | &61
     ))
 }
 
@@ -340,40 +340,182 @@ pub(crate) const ARB_CONFIG_VER: u8 = 1;
 /// wire blob is still kept on [`ClientSettingsCommand`] for exact roundtrip and
 /// append-only compatibility, but UI code should edit this typed view instead
 /// of hand-parsing bytes.
+/// The compact send path forces `auto_start`, `auto_detect_on`, `strategies_on`
+/// to true and `remember_state` to false; use SharedConfig for those saved preferences.
+/// [Startup and protection](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AutoStartConfig {
+    /// Start market monitoring automatically after startup analysis completes. Startup preference; changing it does
+    /// not start the running kernel immediately. The compact send path forces this to true; use SharedConfig to
+    /// edit this saved preference.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-auto-start).
     pub auto_start: bool,
+    /// Enable detection when auto-start or an automatic recovery starts monitoring. With `remember_state`, this
+    /// value is saved from the last running state. The compact send path forces this to true; use SharedConfig to
+    /// edit this saved preference.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-auto-detect-on).
     pub auto_detect_on: bool,
+    /// Start checked strategies on auto-start or automatic recovery. With `remember_state`, the kernel remembers
+    /// whether any strategy was active. The compact send path forces this to true; use SharedConfig to edit this
+    /// saved preference.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-strategies-on).
     pub strategies_on: bool,
+    /// Restrict monitoring and strategies to `work_time_from`..`work_time_to` in the kernel machine's local time.
+    /// Outside the window, stop strategies and cancel buys; existing sell positions remain managed. A window
+    /// crossing midnight is supported.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-work-time).
     pub work_time: bool,
+    /// Stop monitoring, detection and strategies and cancel buys when the trade-count loss check exceeds
+    /// `auto_stop_loss`. Compare the recent completed-trade buffer (when it has at least `stop_trades` entries)
+    /// with the latest report records after the profit-counter reset, using the worse result. At least
+    /// `stop_trades` entries in either count are required; `sell_if_loss` also closes positions.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-auto-stop-if-loss).
     pub auto_stop_if_loss: bool,
+    /// Remember monitoring, detection and strategy running state for the next startup. Overrides manual choices of
+    /// `auto_start`, `auto_detect_on` and `strategies_on` as the running state changes. The compact send path
+    /// forces this to false; use SharedConfig to edit this saved preference.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-remember-state).
     pub remember_state: bool,
+    /// Also close all positions when either loss stop is triggered. Has no effect by itself without
+    /// `auto_stop_if_loss` or `auto_stop_if_loss_hours`.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-sell-if-loss).
     pub sell_if_loss: bool,
+    /// Allow automatic update without waiting for all sell positions to finish. Applies to `auto_update`; this is
+    /// not a general rule for stopping trading.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-dont-wait-sells).
     pub dont_wait_sells: bool,
+    /// Positive loss threshold in the trading currency for `auto_stop_if_loss`. The trade-count window uses
+    /// `stop_trades`; the GUI stores the absolute value.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-auto-stop-loss).
     pub auto_stop_loss: f64,
+    /// Stop monitoring, cancel buys and close positions when the one-hour BTC delta is below `panic_btc_delta` or
+    /// above `panic_btc_delta_up`. Recovery is configured in `auto_start_2`.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-panic-btc).
     pub panic_btc: bool,
+    /// Stop monitoring, cancel buys and close positions when the one-hour average market delta is below
+    /// `panic_market_delta`. Recovery is configured in `auto_start_2`.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-panic-market).
     pub panic_market: bool,
+    /// Enable the separate loss stop for trades opened within `stop_hours`, after the profit counter's reset point.
+    /// Requires at least `stop_hours_trades` records; compares loss with `auto_stop_hours_val`.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-auto-stop-if-loss-hours).
     pub auto_stop_if_loss_hours: bool,
+    /// Automatically install an available kernel update. Normally waits for sell positions to finish;
+    /// `dont_wait_sells` removes that wait.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-auto-update).
     pub auto_update: bool,
+    /// Resume trading after an error stop once the error level has stayed below `errors_level` for
+    /// `restart_err_time` minutes. This resumes monitoring and configured detection/strategies; it does not restart
+    /// the process.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-restart-after-err).
     pub restart_after_err: bool,
+    /// Resume trading after a latency stop once latency has stayed at or below `ping_level` for `restart_ping_time`
+    /// minutes, within working hours. Does not restart the process.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-restart-after-ping).
     pub restart_after_ping: bool,
+    /// Exclude emulator trades from both loss-stop calculations. Does not switch the kernel out of emulator mode.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-ignore-emulator).
     pub ignore_emulator: bool,
+    /// Length of the trade-count loss window. GUI minimum 1. The kernel compares the recent completed-trade buffer
+    /// with the latest report records after the profit-counter reset; either count can satisfy the minimum.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-stop-trades).
     pub stop_trades: i32,
+    /// Error-free waiting period before automatic recovery, in minutes. GUI minimum 3; only used with
+    /// `restart_after_err`.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-restart-err-time).
     pub restart_err_time: i32,
+    /// Lower one-hour BTC delta threshold in percent. GUI stores a non-positive value; `panic_btc` triggers
+    /// strictly below it.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-panic-btc-delta).
     pub panic_btc_delta: f64,
+    /// Lower one-hour average market delta threshold in percent. GUI stores a non-positive value; `panic_market`
+    /// triggers strictly below it.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-panic-market-delta).
     pub panic_market_delta: f64,
+    /// Stop monitoring and strategies and cancel buys when the kernel's smoothed API-error score reaches
+    /// `errors_level`. `sell_all_on_errors` additionally closes positions.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-auto-stop-on-errors).
     pub auto_stop_on_errors: bool,
+    /// Stop monitoring and strategies and cancel buys when the kernel's smoothed exchange-response timing exceeds
+    /// `ping_level`. This does not measure MoonProto client-to-kernel RTT.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-auto-stop-on-ping).
     pub auto_stop_on_ping: bool,
+    /// Close positions as well as canceling buys when `auto_stop_on_errors` triggers. Depends on that stop being
+    /// enabled.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-sell-all-on-errors).
     pub sell_all_on_errors: bool,
+    /// Close positions as well as canceling buys when `auto_stop_on_ping` triggers. Depends on that stop being
+    /// enabled.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-sell-all-on-ping).
     pub sell_all_on_ping: bool,
+    /// Threshold for the smoothed API-error score, not an error count. GUI range 1..=5; the stop triggers at score
+    /// >= threshold.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-errors-level).
     pub errors_level: i32,
+    /// Exchange-response timing threshold in milliseconds. GUI range 100..=2000; the stop triggers strictly above
+    /// it. Not a 1..=5 level and not MoonProto RTT.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-ping-level).
     pub ping_level: i32,
+    /// Normal-latency waiting period before automatic recovery, in minutes. GUI minimum 1; only used with
+    /// `restart_after_ping`.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-restart-ping-time).
     pub restart_ping_time: i32,
+    /// Positive loss amount in the trading currency for the hourly loss window. Used with
+    /// `auto_stop_if_loss_hours`, `stop_hours` and `stop_hours_trades`.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-auto-stop-hours-val).
     pub auto_stop_hours_val: f64,
+    /// Length of the loss lookback window in hours. GUI minimum 1. Trades are selected by opening time and the last
+    /// counter-reset boundary.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-stop-hours).
     pub stop_hours: i32,
+    /// Minimum number of trades before the hourly loss stop can trigger. GUI minimum 0; 0 adds no trade-count
+    /// requirement.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-stop-hours-trades).
     pub stop_hours_trades: i32,
+    /// Upper one-hour BTC delta threshold in percent. GUI stores a non-negative value; `panic_btc` triggers
+    /// strictly above it.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-panic-btc-delta-up).
     pub panic_btc_delta_up: f64,
+    /// Work-window start as a fraction of a day in the kernel's local time: 0 = midnight, 0.5 = noon. GUI precision
+    /// is one minute. Used with `work_time`.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-work-time-from).
     pub work_time_from: f64,
+    /// Work-window end as a fraction of a day in the kernel's local time, in [0, 1). A start later than the end
+    /// means an overnight window. Boundaries are strict; equal endpoints do not mean an empty window.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig-work-time-to).
     pub work_time_to: f64,
 }
 
@@ -381,15 +523,52 @@ pub struct AutoStartConfig {
 ///
 /// Reserved wire fields are intentionally not exposed, but `set_*` /
 /// `update_*` helpers preserve the current reserved bytes in `as_cfg2`.
+/// Units match SharedConfig; compact `*_than` fields correspond to its `*_then` names.
+/// Recovery resumes trading, not the process.
+/// [Recovery policy](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AutoStartConfig2 {
+    /// Resume after the global delta panic when the one-hour BTC delta is between `btc_higher_than` and
+    /// `btc_lower_than` and the one-hour market delta exceeds `market_higher_than`. Working-hour restrictions still
+    /// apply.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2-restart-on-market).
     pub restart_on_market: bool,
+    /// Lower one-hour BTC delta bound for recovery, in percent. Requires `restart_on_market`; the comparison is
+    /// strict. GUI stores a non-positive value.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2-btc-higher-then).
     pub btc_higher_than: f64,
+    /// Upper one-hour BTC delta bound for recovery, in percent. Requires `restart_on_market`; the comparison is
+    /// strict. GUI stores a non-negative value.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2-btc-lower-then).
     pub btc_lower_than: f64,
+    /// Lower one-hour average market delta bound for recovery, in percent. Requires `restart_on_market`; the
+    /// comparison is strict. GUI stores a non-positive value.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2-market-higher-then).
     pub market_higher_than: f64,
+    /// Gate market-list option: allow markets that have price and volume data even if present in the
+    /// unavailable/delisted-market list. Does not enable trading on a closed exchange market; this is not a generic
+    /// notification toggle.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2-show-old-listing).
     pub show_old_listing: bool,
+    /// Reset each market's session profit after `rs_hours` without a completed trade on that market. This is an
+    /// inactivity timeout, not a global periodic reset.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2-reset-session).
     pub reset_session: bool,
+    /// Upper cap on accumulated per-market session profit in USD equivalent. 0 disables the cap. Does not limit
+    /// orders, account balance or loss; applied when a trade completes.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2-max-session-cap).
     pub max_session_cap: i32,
+    /// Inactivity timeout in hours for `reset_session`. GUI minimum 1; read the connected kernel's value rather
+    /// than using the offline default as a UI preset.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2-rs-hours).
     pub rs_hours: i32,
 }
 
@@ -400,6 +579,7 @@ pub struct AutoStartConfig2 {
 /// Compact arbitrage display config embedded into the settings snapshot.
 ///
 /// The compact form keeps a 256-bit wanted-platform mask plus display flags.
+/// [Display settings](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#arbviewconfig).
 #[derive(Debug, Clone)]
 pub struct ArbConfigCompact {
     /// 256-bit wanted-platform mask.
@@ -408,10 +588,29 @@ pub struct ArbConfigCompact {
     pub wanted: [bool; 256],
     #[cfg(not(any(test, feature = "diagnostics")))]
     pub(crate) wanted: [bool; 256],
+    /// Show absolute arbitrage price differences in the numeric block; requires `show_numbers`. May be combined
+    /// with `show_percent`.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#arbviewconfig-show-absolute).
     pub show_absolute: bool,
+    /// Show numeric arbitrage differences when arbitrage data is active. Does not create subscriptions or enable
+    /// arbitrage trading.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#arbviewconfig-show-numbers).
     pub show_numbers: bool,
+    /// Draw corresponding arbitrage price lines when arbitrage data is active. Independent of numeric-block
+    /// visibility.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#arbviewconfig-show-lines).
     pub show_lines: bool,
+    /// Show percentage differences in the numeric block. When both `show_percent` and `show_absolute` are false,
+    /// the renderer still uses percent as its fallback.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#arbviewconfig-show-percent).
     pub show_percent: bool,
+    /// Place the arbitrage numeric block on the right instead of the left of the chart.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#arbviewconfig-show-right).
     pub show_right: bool,
 }
 
@@ -657,7 +856,7 @@ impl TempBlacklistEntry<'_> {
     }
 }
 
-/// Full MoonBot UI/settings snapshot retained by Active Lib.
+/// Compact MoonBot live-settings snapshot retained by Active Lib.
 ///
 /// Many fields are append-only soft-read fields: depending on server version,
 /// part of the tail may be absent. Active Lib fills the missing tail from the
@@ -679,6 +878,10 @@ impl TempBlacklistEntry<'_> {
 /// High-level send helpers write a fresh wire UID and use the fixed settings
 /// UKey slot for queue deduplication. Terminal UI edits the settings values
 /// below; it does not choose the wire UID.
+/// The current core forces three startup flags on and remember-state off when
+/// applying this snapshot, and does not assign its `sign_orders` field. Use
+/// SharedConfig for those saved preferences. See the
+/// [settings API guide](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/10-settings-apis.md#compact-settings-and-leverage).
 #[derive(Debug, Clone, Default)]
 pub struct ClientSettingsCommand {
     /// Wire command UID. Leave it as `0` when using high-level send helpers.
@@ -689,33 +892,99 @@ pub struct ClientSettingsCommand {
     #[cfg(not(any(test, feature = "diagnostics")))]
     pub(crate) uid: u64,
     // --- always present (v1+) ---
+    /// Main sell target in percent before leverage adjustment. Positive values use `x_tmode`'s optional x10 scale,
+    /// capped at 900%; 0 selects scalp mode using `x_sell_scalp` / 50. `fixed_sell_mode` selects its own target.
+    /// Prefer the typed ClientSettingsCommand helpers for UI controls.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-x-sell).
     pub x_sell: i32,
+    /// Minimum scalp sell target in 1/50-percent units: 10 means 0.2%. Used when `x_sell` = 0 and `fixed_sell_mode`
+    /// is off; `sell_auto_move` can place the sell above this minimum based on the order book.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-x-sell-scalp).
     pub x_sell_scalp: i32,
+    /// Multiply the main/fixed sell percentage by 10. Does not multiply every numeric setting, and does not scale
+    /// `x_sell_scalp` / 50.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-x-t-mode).
     pub x_tmode: bool,
+    /// Use `fixed_sell_price` as the global sell percentage instead of the `x_sell` slider/scalp mode. This is a
+    /// fixed percentage target, not an absolute exchange price; strategy/per-order overrides remain separate.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-fixed-sell-mode).
     pub fixed_sell_mode: bool,
+    /// Sell-target percentage used in `fixed_sell_mode`, multiplied by 10 when `x_tmode` is on. It is not an
+    /// absolute quote price. Leverage-aware take-profit mode can further scale the resulting price distance.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-fixed-sell-price).
     pub fixed_sell_price: f64,
+    /// Global stop-loss price adjustment in percent, normally negative. Used when an order follows the global stop;
+    /// per-order/strategy settings can override it. Long price = entry * (1 + value/100); short price = entry / (1
+    /// + value/100), so the same numeric value is not a symmetric market move.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-price-drop-level).
     pub price_drop_level: f32,
+    /// Base trailing distance in percent, normally negative, for orders following the global trailing level.
+    /// `trailing_float` adjusts the distance as favorable price movement grows.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-trailing-drop).
     pub trailing_drop: f32,
-    /// Global trailing-stop toggle (`cfg.TrailingStop`).
+    /// Default trailing-stop enablement for orders using global settings. Strategy and individual-order trailing
+    /// settings remain separate.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-trailing-stop).
     pub trailing_stop: bool,
+    /// Profit threshold in percent for `use_g_take_profit`. Gates global trailing activation and constrains its
+    /// closing price; it is separate from the initial sell target `x_sell`. GUI range 0.5..=10.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-g-take-profit).
     pub g_take_profit: f64,
+    /// Require the global `g_take_profit` threshold before global trailing closes a non-strategy order. Does not
+    /// place a separate take-profit order by itself.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-use-g-take-profit).
     pub use_g_take_profit: bool,
     #[cfg(any(test, feature = "diagnostics"))]
     #[doc(hidden)]
     pub unused_spread: i32,
     #[cfg(not(any(test, feature = "diagnostics")))]
     pub(crate) unused_spread: i32,
+    /// Default stop-loss enablement for orders using global settings. Does not override every strategy's or already
+    /// edited order's individual stop state.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-panic-if-price-drop).
     pub panic_if_price_drop: bool,
+    /// Kernel trading-emulator mode; absent from portable SharedConfig.
+    /// Changes take effect through the core's normal emulator toggle.
     pub emu_mode: bool,
     // --- v2+ ---
+    /// Allow iceberg buy orders where the exchange engine and market support them. Quantity/minimum-notional checks
+    /// still apply; this flag does not emulate iceberg orders on unsupported exchanges.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-buy-iceberg).
     pub buy_iceberg: bool,
+    /// Allow iceberg sell orders where supported by the exchange engine and market. Does not guarantee an iceberg
+    /// for every sell; order quantity/type and market constraints still apply.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-sell-iceberg).
     pub sell_iceberg: bool,
-    /// `OrdersControl.SignOrders` value mirrored explicitly in the snapshot.
-    /// The core keeps this as global settings state rather than a separate
-    /// command field.
+    /// Mark buy orders as belonging to this Moonbot for control-bot coordination; also permits WatchDog keepalives
+    /// when a destination is configured. Does not enable exchange API cryptographic signing: authentication remains
+    /// independent. The current core does not apply edits to this compact field; use
+    /// `SharedConfig.trading.orders_control.sign_orders` or `client.watchdogs()`.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#orderscontrol-sign-orders).
     pub sign_orders: bool,
     // --- always present (v1+) ---
+    /// Comma-separated global coin blacklist, used with `use_coins_black_list`. Strategy-specific ignore/blacklist
+    /// rules still apply. Use coin symbols, not one symbol per line.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-coins-black-list-text).
     pub coins_black_list_text: String,
+    /// Enable `coins_black_list_text` in ordinary entry checks. A strategy may explicitly bypass the global
+    /// blacklist through its own settings.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-use-coins-black-list).
     pub use_coins_black_list: bool,
     #[cfg(any(test, feature = "diagnostics"))]
     #[doc(hidden)]
@@ -729,10 +998,32 @@ pub struct ClientSettingsCommand {
     #[cfg(not(any(test, feature = "diagnostics")))]
     pub(crate) temp_bl_times: Vec<f64>,
     // --- soft-read tail (optional in older packets) ---
+    /// Use the selected Manual strategy for manual order parameters. The strategy must exist; selecting it does not
+    /// start automatic strategy execution.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-use-manual-strategy).
     pub use_manual_strategy: bool,
+    /// Selected Manual strategy instance ID; SharedConfig stores its name instead.
+    /// `build_shared_config()` does not resolve this ID into a name.
+    /// [Manual strategy](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-manual-strategy).
     pub manual_strategy_id: u64,
+    /// Use full balance/position amounts in relevant futures sizing checks rather than only currently free funds;
+    /// in one-way mode, position-limit checks use the order's direction. Does not detect or close orphaned
+    /// positions. Exchange rejection remains possible.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-free-position-check).
     pub free_position_check: bool,
+    /// V-Stop price offset in half-percent units: 7 means +3.5% from entry. GUI -20..=20. Defines the price at
+    /// which available order-book volume is checked for an enabled per-order V-Stop; it is not the percentage by
+    /// which volume must fall.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-vol-drop-level).
     pub vol_drop_level: i32,
+    /// Allow supported server-side market-stop handling. The kernel's platform gate admits Binance spot and main
+    /// Binance Futures; compatible order/strategy stop conditions are also required. This is not a universal
+    /// conversion of all stops on every exchange.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-use-stop-market).
     pub use_stop_market: bool,
     /// AutoStart settings-page blob (104 bytes in the current wire version).
     #[cfg(any(test, feature = "diagnostics"))]
@@ -1063,6 +1354,9 @@ pub struct NewMarketNotify {
 }
 
 /// Leverage-management settings snapshot.
+/// Fixed leverage and target-based automatic leverage may coexist on different
+/// markets. A one-time market leverage change uses `client.account().set_leverage()`.
+/// [Leverage policy](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#how-automatic-leverage-uses-a-target).
 #[derive(Debug, Clone)]
 pub struct LevManage {
     #[cfg(any(test, feature = "diagnostics"))]
@@ -1077,13 +1371,51 @@ pub struct LevManage {
     pub cmd_ver: u8,
     #[cfg(not(any(test, feature = "diagnostics")))]
     pub(crate) cmd_ver: u8,
+    /// Choose leverage from exchange risk brackets so their maximum position size accommodates the amount
+    /// configured in `lev_control`. Needs loaded leverage/bracket data and a positive effective target for the
+    /// market; unsupported for inverse-base-currency mode. Lowering is allowed; raising additionally requires
+    /// `auto_lev_up`. This is not sizing an order from free balance.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#automanagelevconfig-auto-max-order).
     pub auto_max_order: bool,
+    /// Allow `auto_max_order` to increase leverage as well as decrease it. Has no independent effect when
+    /// `auto_max_order` is off or the market has no positive target amount.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#automanagelevconfig-auto-lev-up).
     pub auto_lev_up: bool,
+    /// Automatically request isolated futures margin. Exchange support and account/position restrictions still
+    /// apply. Mutually exclusive with `auto_cross` in the GUI; if both are received as true, isolated has priority.
+    /// Uses account-wide mode on engines with a global margin-mode setting, otherwise per-market mode.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#automanagelevconfig-auto-isolated).
     pub auto_isolated: bool,
+    /// Automatically request cross futures margin when `auto_isolated` is off. Subject to exchange support and
+    /// account/position restrictions; mutually exclusive with `auto_isolated` in the GUI.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#automanagelevconfig-auto-cross).
     pub auto_cross: bool,
+    /// Apply `fix_lev` automatically where `auto_max_order` is disabled or has no effective target amount for the
+    /// market. Exchange maximums and temporary change restrictions remain in force.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#automanagelevconfig-auto-fix-lev).
     pub auto_fix_lev: bool,
+    /// Requested fixed leverage multiplier, GUI integer 1..=500; each market is limited by its exchange maximum.
+    /// Used by `auto_fix_lev`, including new-listing initialization. It may coexist with `auto_max_order` for
+    /// markets without an effective target amount.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#automanagelevconfig-fix-lev).
     pub fix_lev: i32,
+    /// Report successful automatic leverage changes to Telegram. Does not control leverage selection itself or
+    /// exchange-request logging.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#automanagelevconfig-tlg-report).
     pub tlg_report: bool,
+    /// Target position-limit amounts for automatic leverage selection, not an enable flag. Example: `1k def 5k
+    /// BTC*` sets a default target of 1000 and 5000 for matching tickers; K/M suffixes and wildcard ticker masks
+    /// are supported. Empty text clears targets. Used by `auto_max_order`; `auto_lev_up` only permits upward
+    /// adjustments within that mode.
+    ///
+    /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-auto-lev-control).
     pub lev_control: String,
 }
 
@@ -1652,6 +1984,8 @@ pub struct KernelLicenseStateCommand {
 #[derive(Debug, Clone)]
 pub enum UICommand {
     TelegramState(std::sync::Arc<crate::state::TelegramState>),
+    WatchDogState(std::sync::Arc<crate::state::WatchDogState>),
+    ServiceSettingsResult(std::sync::Arc<crate::state::ServiceSettingsResult>),
     /// Full client settings snapshot. Boxed to keep the common `UICommand`
     /// envelope small when it is moved through event queues.
     ClientSettings(Box<ClientSettingsCommand>),
@@ -1716,7 +2050,7 @@ pub enum UICommand {
 //  Builders (C → S)
 // =============================================================================
 
-fn write_header(out: &mut Vec<u8>, cmd_id: u8, uid: u64) {
+pub(crate) fn write_header(out: &mut Vec<u8>, cmd_id: u8, uid: u64) {
     out.push(cmd_id);
     out.extend_from_slice(&CURRENT_PROTO_CMD_VER.to_le_bytes());
     out.extend_from_slice(&uid.to_le_bytes());

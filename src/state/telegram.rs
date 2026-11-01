@@ -11,7 +11,17 @@ use std::fmt;
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct TelegramState {
+    /// Monotonic snapshot revision within one core session.
+    pub revision: u64,
     pub enabled: bool,
+    /// Supports outgoing channel/token configuration on this core.
+    pub settings_supported: bool,
+    pub own_bot: bool,
+    pub token_set: bool,
+    pub channel_id: Option<i64>,
+    pub channel_name: Option<String>,
+    /// Sensitive channel-binding PIN, excluded from Debug output.
+    pub channel_pin: Option<String>,
     /// Saved proxy kind: 0 = none, 1 = SOCKS5, 2 = MTProto.
     pub proxy_type: Option<u8>,
     pub proxy_host: Option<String>,

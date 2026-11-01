@@ -2592,6 +2592,84 @@ mod tests {
     }
 
     #[test]
+    fn public_service_edits_preserve_credentials_and_independent_requests_through_startup() {
+        use crate::state::{WatchDogEdit, WatchDogSettings};
+        use serde_json::json;
+
+        let (tx, rx) = mpsc::channel();
+        let public = MoonClient {
+            tx,
+            server_time_delta_ms: Default::default(),
+            shutdown: Default::default(),
+            event_queue: None,
+            snapshot: Default::default(),
+            startup_status: Default::default(),
+            err_emu_diagnostics: Default::default(),
+            protocol_metrics: Default::default(),
+            subscription_registry: Default::default(),
+            join: Default::default(),
+            lifecycle_join: Default::default(),
+        };
+        let mut settings = WatchDogSettings {
+            entries: vec![WatchDogEdit { id: "core-id".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        for price in [f64::NAN, f64::INFINITY, -1.0] {
+            settings.entries[0].price = price;
+            assert!(public.watchdogs().apply(&settings).is_err());
+        }
+        settings.entries[0].price = 0.0;
+        settings.entries[0].time = -1;
+        assert!(public.watchdogs().apply(&settings).is_err());
+        assert!(rx.try_recv().is_err(), "invalid values must never reach the core");
+        settings.entries[0].time = 30;
+        let mut edit = json!(&settings);
+        edit["action"] = json!("apply");
+        let expected = [
+            (public.watchdogs().refresh().unwrap(), 59, json!({"action":"get"})),
+            (public.watchdogs().apply(&settings).unwrap(), 59, edit),
+            (public.watchdogs().remove("core-id").unwrap(), 59, json!({"action":"remove","id":"core-id"})),
+            (public.watchdogs().cancel_buys().unwrap(), 59, json!({"action":"cancel"})),
+            (public.telegram().set_outgoing_bot(true, None).unwrap(), 60, json!({"action":"apply","own_bot":true})),
+            (public.telegram().set_outgoing_bot(false, Some("")).unwrap(), 60,
+                json!({"action":"apply","own_bot":false,"token":""})),
+            (public.telegram().generate_channel_pin().unwrap(), 60, json!({"action":"pin"})),
+            (public.telegram().reset_channel().unwrap(), 60, json!({"action":"reset_channel"})),
+        ];
+        let mut client = Client::new(dummy_cfg());
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        let mut pending = RuntimePending::default();
+        let mut deferred = VecDeque::new();
+        drain_commands_during_startup(&rx, &mut deferred);
+        assert_eq!(deferred.len(), expected.len());
+        assert!(client.take_send_queues_for_test().0.is_empty());
+        client.testing_set_domain_ready(true);
+        let (_, changed) = drain_deferred_and_live_commands(
+            &mut client, &mut dispatcher, &rx, &mut pending, &mut deferred,
+        );
+        assert!(!changed, "enqueue must not pretend the core has applied the edit");
+        assert!(dispatcher.settings.telegram.is_none() && dispatcher.settings.watchdogs.is_none());
+        let (sliced, high, low) = client.take_send_queues_for_test();
+        assert!(high.is_empty() && low.is_empty());
+        assert_eq!(sliced.len(), expected.len(), "mutations must not coalesce");
+        for (item, (uid, id, value)) in sliced.iter().zip(expected) {
+            assert!(item.encrypted);
+            assert_eq!(item.cmd, Command::UI.to_byte());
+            assert_eq!(item.data[0], id);
+            assert_eq!(u64::from_le_bytes(item.data[3..11].try_into().unwrap()), uid);
+            assert_eq!(u32::from_le_bytes(item.data[11..15].try_into().unwrap()) as usize, item.data.len() - 15);
+            let actual: serde_json::Value = serde_json::from_slice(&item.data[15..]).unwrap();
+            assert_eq!(actual, value);
+            if actual["action"] == "apply" && id == 59 {
+                assert!(actual["entries"][0].get("api_key").is_none());
+                assert!(actual["entries"][0].get("api_secret").is_none());
+            }
+        }
+        drain_deferred_and_live_commands(&mut client, &mut dispatcher, &rx, &mut pending, &mut deferred);
+        assert!(client.take_send_queues_for_test().0.is_empty(), "intents are sent once");
+    }
+
+    #[test]
     fn transfer_assets_batch_emits_completion_after_all_kinds_finish() {
         let mut pending = RuntimePending::default();
         pending

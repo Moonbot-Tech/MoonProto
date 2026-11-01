@@ -11,6 +11,11 @@ The core's Telegram account and service have a separate typed handle,
 Applications normally receive UI updates through `Event::Settings` and send
 user intents through `MoonClient` settings/update/switch helpers.
 
+For control meanings, units and dependencies, use the
+[MoonDoc settings reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/README.md).
+Its [API selection guide](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/10-settings-apis.md)
+distinguishes saved configuration, compact controls and one-time actions.
+
 ## Receiving Settings
 
 ```rust
@@ -81,7 +86,7 @@ does not delay `Ready`.
 
 For UI code, use `client.settings().refresh()`. It queues a settings refresh
 request and returns immediately. The server answers by sending a
-full settings snapshot; Active Lib applies it, emits
+compact settings snapshot; Active Lib applies it, emits
 `Event::Settings(SettingsEvent::ClientSettingsUpdated)`, and stores the latest
 value in `snapshot().settings().client_settings`.
 
@@ -131,11 +136,17 @@ client.settings().set_triggers_for_markets(["BTCUSDT", "ETHUSDT"], &[1, 7])?;
 client.settings().clear_triggers_for_all(&[3])?;
 ```
 
-`settings().send(...)` sends a full settings snapshot. Normal UI code edits the
+`settings().send(...)` sends the complete compact settings snapshot. Normal UI code edits the
 latest snapshot received from the server; constructing a fresh
 `ClientSettingsCommand::default()` is useful for tests/tools, not for an already
 configured terminal session. Normal application code should use the high-level
 method names above.
+
+The current core's compact handler forces `auto_start`, `auto_detect_on` and
+`strategies_on` to true and `remember_state` to false. It also does not apply
+changes to the mirrored `sign_orders` field. Use
+[SharedConfig](shared_config.md) to edit those saved preferences. These are
+properties of the core's sending path, not restrictions on editing the Rust view.
 
 For strategy start/stop with an explicit checked-state delta, normal UI code
 uses `MoonClient`. The runtime owns strategy checked-state and sends only items
@@ -437,13 +448,16 @@ Leverage-management fields are UI controls, not protocol switches:
 
 | Field | UI meaning |
 |---|---|
-| `auto_max_order` | Auto-calculate leverage from the configured maximum order size / market leverage brackets. |
-| `auto_lev_up` | Allow automatic leverage increases; when off, automatic management only lowers leverage. |
-| `auto_isolated` | Force isolated margin where supported. |
-| `auto_cross` | Force cross margin where supported. |
-| `auto_fix_lev` / `fix_lev` | Force a fixed target leverage value. |
+| `auto_max_order` | Choose leverage whose risk bracket accommodates the positive target position-limit amount from `lev_control`. Does not size orders from free balance. |
+| `auto_lev_up` | Allow increases within `auto_max_order`; otherwise that mode only lowers leverage. No independent policy when there is no positive target. |
+| `auto_isolated` | Request isolated margin where supported; takes priority if both margin-mode flags are true. |
+| `auto_cross` | Request cross margin where supported, when `auto_isolated` is off. |
+| `auto_fix_lev` / `fix_lev` | Apply fixed leverage where auto-max is off or the market has no effective positive target, subject to the exchange maximum. |
 | `tlg_report` | Send leverage-change reports to Telegram. |
-| `lev_control` | Text config for the markets-table `MaxPos` values and auto-leverage worker. |
+| `lev_control` | Target position-limit amounts, with `def`, K/M suffixes and ticker masks. SharedConfig calls this `trading.auto_lev_control`. |
+
+Fixed leverage and auto-max can coexist for different markets. See the
+[leverage policy example](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#how-automatic-leverage-uses-a-target).
 
 Active Lib parses `lev_control` when `LevManage` arrives and applies the
 per-market values to retained markets. Terminal code should read
@@ -531,8 +545,8 @@ handle.
 
 ## ClientSettings
 
-`ClientSettingsCommand` is the full settings snapshot. It contains sell settings,
-stop/trailing/take-profit settings, iceberg flags, order-signing flag, coin
+`ClientSettingsCommand` is the compact live settings snapshot. It contains sell settings,
+stop/trailing/take-profit settings, iceberg flags, order-ownership marker flag, coin
 blacklist fields, manual strategy id, stop-market settings, AutoStart settings,
 fixed-sell button presets, multi-order join mode, and `ArbConfigCompact`.
 
@@ -604,12 +618,14 @@ Common settings controls:
 | Panic-on-price-drop protection | checkbox | `panic_if_price_drop` |
 | Emulator mode | checkbox/toggle | `emu_mode` |
 | Buy/sell iceberg flags | two checkboxes | `buy_iceberg`, `sell_iceberg` |
-| Signed order ids | checkbox | `sign_orders` |
+| Order ownership markers | display; edit through SharedConfig | `sign_orders` mirrors `trading.orders_control.sign_orders`; the current compact handler does not apply edits |
 | Global coin blacklist | multiline/token text editor + enable checkbox | `coins_black_list_text`, `use_coins_black_list` |
 | Exclude blacklist from market delta | checkbox | `client.settings().set_exclude_blacklisted_markets_from_exchange_delta(...)` |
 | Temporary coin blacklist | editable table | `temp_blacklist_entries()` / `set_temp_blacklist_entries(...)` with normal Rust `Duration` values |
 | Manual strategy override | checkbox + strategy selector | `use_manual_strategy`, `manual_strategy_id` |
-| Position/stop-market options | checkboxes + small numeric input | `free_position_check`, `use_stop_market`, `vol_drop_level` |
+| Full balance/position sizing checks | checkbox | [`free_position_check`](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-free-position-check); not orphan-position cleanup |
+| Supported exchange-side market stops | checkbox | [`use_stop_market`](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-use-stop-market); platform and order conditions apply |
+| V-Stop price offset | numeric input in half-percent units | [`vol_drop_level`](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-vol-drop-level); 7 means 3.5%, not a volume-drop percentage |
 | Multi-order join-sell mode | combo/segmented control | `JoinSellKind`, `join_sell_mode()`, `set_join_sell_mode(...)` |
 | Arbitrage display options | platform checklist + display toggles | `arb_config.is_wanted(...)`, `set_wanted(...)`, `wanted_platforms()`, plus display flags |
 | AutoStart pages | settings sub-panels | `auto_start_config()`, `auto_start_config2()` typed views |
@@ -641,9 +657,10 @@ views:
 if let Some(current) = &snapshot.settings().client_settings {
     let mut settings = current.clone();
     settings.update_auto_start_config(|auto| {
-        auto.auto_start = true;
-        auto.strategies_on = true;
-        auto.auto_update = true;
+        auto.auto_stop_on_ping = true;
+        auto.ping_level = 500; // exchange-response milliseconds
+        auto.restart_after_ping = true;
+        auto.restart_ping_time = 3; // minutes before resuming trading
     });
     settings.update_auto_start_config2(|auto| {
         auto.restart_on_market = true;
@@ -656,6 +673,18 @@ if let Some(current) = &snapshot.settings().client_settings {
 The hidden wire blobs are preserved for exact roundtrip and version
 compatibility when the typed views are written back.
 
+For the four startup preferences forced by the compact path, edit full shared
+configuration instead:
+
+```rust
+let mut config = client.settings().build_shared_config()?;
+config.trading.auto_start.remember_state = false;
+config.trading.auto_start.auto_start = false;
+client.settings().send_shared_config(&config)?;
+```
+
+Compare the returned state as described in [shared configuration](shared_config.md).
+
 ### AutoStart
 
 `AutoStartConfig` and `AutoStartConfig2` are the core's unattended-operation
@@ -666,17 +695,26 @@ policy, not client-side timers:
 | Start automatically, restore the previous mode, enable detection, and start checked strategies | `auto_start`, `remember_state`, `auto_detect_on`, `strategies_on` |
 | Restrict operation to a daily time window | `work_time`, `work_time_from`, `work_time_to` |
 | Install updates automatically and optionally wait for sells to finish | `auto_update`, `dont_wait_sells` |
-| Stop after session loss and an optional minimum trade count; optionally sell positions | `auto_stop_if_loss`, `auto_stop_loss`, `stop_trades`, `sell_if_loss` |
-| Stop by loss over the last N hours | `auto_stop_if_loss_hours`, `auto_stop_hours_val`, `stop_hours`, `stop_hours_trades` |
-| Stop on BTC/exchange delta thresholds | `panic_btc`, `panic_btc_delta`, `panic_btc_delta_up`, `panic_market`, `panic_market_delta` |
-| Stop, sell, or restart after API-error or ping thresholds | `auto_stop_on_errors`, `errors_level`, `sell_all_on_errors`, `restart_after_err`, `restart_err_time`, `auto_stop_on_ping`, `ping_level`, `sell_all_on_ping`, `restart_after_ping`, `restart_ping_time` |
+| Stop on the trade-count loss window from completed-trade and report results; optionally close positions | `auto_stop_if_loss`, `auto_stop_loss`, `stop_trades`, `sell_if_loss` |
+| Stop by loss in the hourly window, using opening time and the counter-reset boundary | `auto_stop_if_loss_hours`, `auto_stop_hours_val`, `stop_hours`, `stop_hours_trades` |
+| Stop on one-hour BTC/market delta thresholds | `panic_btc`, `panic_btc_delta`, `panic_btc_delta_up`, `panic_market`, `panic_market_delta` |
+| Stop, close positions, or resume trading after API-error/response-time recovery | `auto_stop_on_errors`, `errors_level`, `sell_all_on_errors`, `restart_after_err`, `restart_err_time`, `auto_stop_on_ping`, `ping_level`, `sell_all_on_ping`, `restart_after_ping`, `restart_ping_time` |
 | Exclude emulator trades from stop/loss accounting | `ignore_emulator` |
-| Restart after market deltas return to the configured range | `restart_on_market`, `btc_higher_than`, `btc_lower_than`, `market_higher_than` |
+| Resume trading after market deltas return to the configured range | `restart_on_market`, `btc_higher_than`, `btc_lower_than`, `market_higher_than` |
 | Listing/session policy | `show_old_listing`, `reset_session`, `rs_hours`, `max_session_cap` |
 
-Edit these values through `update_auto_start_config(...)` and
-`update_auto_start_config2(...)`, then send the full retained settings
-snapshot.
+`restart_err_time` and `restart_ping_time` are **minutes** before resuming
+trading, not seconds or process-restart timers. `errors_level` is a smoothed
+API-error score (GUI 1..5); `ping_level` is exchange-response time in
+milliseconds (GUI 100..2000), not terminal-to-core RTT. Both settings
+representations use the same units. Compact `*_than` field names correspond to
+the historical `*_then` spelling in SharedConfig; neither API name changes.
+
+Edit the compact views through `update_auto_start_config(...)` and
+`update_auto_start_config2(...)`, retaining the other values. Use SharedConfig
+for the startup preferences described above. Detailed loss windows, working
+hours and recovery conditions are in
+[startup and protection](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md).
 
 ## Pending Deduplication
 

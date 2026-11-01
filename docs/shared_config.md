@@ -5,6 +5,11 @@ MoonProto exposes the core's safe-share configuration as a typed
 editing configuration, while `ClientSettingsCommand` remains the compact live
 state used by frequently updated terminal controls.
 
+For field meanings, units, GUI ranges, exchange dependencies and inactive legacy
+fields, see the [MoonDoc core settings reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/README.md).
+Use that reference when building an editor: the Rust scalar type alone does not
+describe a valid control or imply that a stored flag takes effect on every exchange.
+
 ## Availability
 
 The runtime requests the full configuration in the background immediately
@@ -28,15 +33,27 @@ config.visual.chart_time_scale = 90;
 client.settings().send_shared_config(&config)?;
 ```
 
-The send call transfers one complete safe-share snapshot. After the core
-applies it, all connected clients receive fresh full and compact settings
-snapshots. Wait for `SettingsEvent::SharedConfigUpdated` before treating the
-edit as accepted.
+The send call queues one complete safe-share snapshot; success does not confirm
+application or saving to disk. After applying it, the core broadcasts fresh full
+and compact settings snapshots. Observe `SettingsEvent::SharedConfigUpdated`
+and compare the returned fields with the requested values. The event is not a
+request-specific acknowledgement and may reflect another editor's update.
+
+There is no compare-and-save revision check. Obtain a fresh base just before
+sending and transfer only the user's edits into it. This reduces accidental
+overwrites but cannot eliminate races between editors.
 
 If a compact settings or leverage update arrived after the latest full
 snapshot, `build_shared_config()` overlays those newer values first. This keeps
 an edit based on the newest state without allowing an older compact packet to
-overwrite a newer full snapshot.
+overwrite a newer full snapshot. This overlay does not provide concurrency control.
+
+INI import replaces each supplied section completely, removing keys absent from
+its entries. An empty entry list clears that section. Preserve keys you did not edit.
+Kernel import applies sections sequentially: a later failure does not roll back
+earlier changes. If the expected state does not arrive, call
+`refresh_shared_config()` and compare the fields you changed before deciding
+whether to retry.
 
 `refresh_shared_config()` is available for an explicit refresh; normal
 applications do not need to call it during startup because the runtime already

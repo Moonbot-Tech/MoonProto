@@ -31,6 +31,8 @@ pub(crate) mod order_books;
 pub(crate) mod orders;
 mod problems;
 mod telegram;
+mod services;
+pub use services::*;
 pub(crate) mod report;
 mod report_traces;
 pub(crate) mod seq_ring;

@@ -702,6 +702,10 @@ fn handle_ui_command(
             client.ui_problems_clear();
             false
         }
+        UiRuntimeCommand::ServiceSettings { id, uid, json } => {
+            client.ui_service_settings(id, uid, &json);
+            false
+        }
         UiRuntimeCommand::Telegram(action) => {
             client.ui_telegram(&action);
             false

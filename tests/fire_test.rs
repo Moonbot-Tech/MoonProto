@@ -9970,6 +9970,10 @@ fn fire_test_telegram_state() {
     let cfg = FireConfig::load_required();
     let keys = parse_key_info(&cfg.key_b64).expect("invalid FireTest key").keys;
     let _err_emu = ErrEmuGuard::set(0);
+    run_telegram_state_gate(&cfg, keys);
+}
+
+fn run_telegram_state_gate(cfg: &FireConfig, keys: ImportedKeys) {
     for connection in 1..=2 {
         let client = MoonClient::connect_blocking(
             ClientConfig::new(&cfg.host, cfg.port, keys.master_key, keys.mac_key)
@@ -10003,9 +10007,46 @@ fn fire_test_telegram_state() {
             println!("FIRETEST Telegram login unavailable: service disabled or full auth state not supported");
         }
         println!("FIRETEST Telegram account mutations SKIPPED: phone/QR/codes/password/proxy/logout require explicit user interaction");
+        run_service_settings_read_gate(&client, cfg.wait);
         client.disconnect().unwrap();
         client.wait_finished().unwrap();
     }
+}
+
+fn run_service_settings_read_gate(client: &MoonClient, timeout: Duration) {
+    if !client.telegram().state().is_some_and(|state| state.settings_supported) {
+        println!("FIRETEST service settings: older core does not advertise support; mutation controls stay unavailable");
+        return;
+    }
+    let deadline = Instant::now() + timeout;
+    while client.watchdogs().state().is_none() && Instant::now() < deadline {
+        std::thread::sleep(PUMP_SLICE);
+    }
+    let initial = client.watchdogs().state().expect("service-capable core must send a WatchDog snapshot");
+    let request_id = client.watchdogs().refresh().expect("read-only observer refresh").to_string();
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        for event in client.drain_events() {
+            if let Event::Settings(SettingsEvent::ServiceSettingsApplied(result)) = event {
+                if result.request_id != request_id {
+                    continue;
+                }
+                assert_eq!(result.action, "get");
+                assert!(result.applied && result.error.is_empty(), "read-only request failed: {}", result.error);
+                let moonproto::state::ServiceSettingsState::Watchdog(state) = &result.state else {
+                    panic!("observer request returned another service");
+                };
+                assert!(state.revision >= initial.revision);
+                let retained = client.watchdogs().state().expect("reply must update retained state");
+                assert!(retained.revision >= state.revision);
+                println!("OK: FIRETEST service settings: initial snapshot + correlated read-only refresh, revision={} observers={} supported={}",
+                    retained.revision, retained.entries.len(), retained.supported);
+                return;
+            }
+        }
+        std::thread::sleep(PUMP_SLICE);
+    }
+    panic!("service-capable core did not answer the observer refresh");
 }
 
 #[test]
@@ -10199,6 +10240,7 @@ fn fire_test_active_library_health() {
     run_high_loss_simple_ops_gate(&mut a, &mut b, &mut err_emu, cfg.high_loss_timeout);
     log_protocol_cpu_pair("after high-loss simple ops gate", &a, &b);
     err_emu.reset("high-loss simple ops gate");
+    run_telegram_state_gate(&cfg, keys);
     run_problems_gate(&cfg, keys, &mut a, &mut b);
     a.client
         .debug_reset_err_emu_diagnostics()

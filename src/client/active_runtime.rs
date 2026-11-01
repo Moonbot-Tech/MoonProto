@@ -11,6 +11,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 mod commands;
 mod telegram;
+mod services;
+pub use services::MoonWatchDogs;
 pub use telegram::MoonTelegram;
 mod handles;
 mod runtime_loop;

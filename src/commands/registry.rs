@@ -66,6 +66,7 @@ pub(crate) const UK_MARKET_SESSION_PROFIT: u8 = 29;
 pub(crate) const UK_PROBLEMS_STATE: u8 = 30;
 pub(crate) const UK_TELEGRAM_STATE: u8 = 31;
 pub(crate) const UK_LOG_SUBSCRIPTION: u8 = 32;
+pub(crate) const UK_WATCHDOG_STATE: u8 = 34;
 
 /// Send priority as protocol metadata, independent from the concrete client
 /// queue implementation. Conversion to `SendPriority` happens at the send edge.
@@ -814,6 +815,11 @@ pub(crate) const UI_COMMANDS: &[CommandDescriptor] = &[
         direction = Outbound
     ),
     cmd_desc!(Command::UI, 50, "TResetSessionCommand", base = Base, priority = High, direction = Outbound),
+    cmd_desc!(Command::UI, 58, "TWatchDogStateCommand", base = Base, priority = Sliced, retries = None,
+        unique = UK_WATCHDOG_STATE, ukey = UKeyRule::Singleton(1), direction = Inbound),
+    cmd_desc!(Command::UI, 59, "TWatchDogSettingsCommand", base = Base, priority = Sliced, direction = Outbound),
+    cmd_desc!(Command::UI, 60, "TTelegramSettingsCommand", base = Base, priority = Sliced, direction = Outbound),
+    cmd_desc!(Command::UI, 61, "TServiceSettingsResult", base = Base, priority = Sliced, direction = Inbound),
     // 51/52 are retired shutdown/export commands. Never reuse them for snapshots.
     cmd_desc!(Command::UI, 53, "TVpsArchiveRequest", base = Base, priority = High, direction = Outbound),
     cmd_desc!(Command::UI, 54, "TVpsArchiveReply", base = Base, priority = Sliced, direction = Inbound),
@@ -1153,7 +1159,7 @@ mod tests {
     #[test]
     fn descriptor_map_covers_known_typed_domains() {
         assert_eq!(ORDER_COMMANDS.len(), 26);
-        assert_eq!(UI_COMMANDS.len(), 54);
+        assert_eq!(UI_COMMANDS.len(), 58);
         assert_eq!(STRAT_COMMANDS.len(), 11);
         assert_eq!(BALANCE_COMMANDS.len(), 11);
         assert_eq!(API_COMMANDS.len(), 5);

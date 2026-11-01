@@ -520,6 +520,8 @@ pub(crate) fn send_post_init_resync(
         client.strat_schema_request();
     }
     client.ui_settings_request();
+    client.ui_telegram(&crate::commands::ui::TelegramAction::Refresh);
+    client.ui_service_settings(59, rand::random(), r#"{"action":"get"}"#);
     // A hard session may have been recreated after BaseCheck while Init was
     // still running, before reconnect replay was enabled.
     client.set_logs_subscription(cfg.subscribe_logs);

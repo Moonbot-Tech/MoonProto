@@ -233,6 +233,14 @@ impl Client {
         self.send_typed_domain_cmd(raw, Command::UI);
     }
 
+    pub(crate) fn ui_service_settings(&self, id: u8, uid: u64, json: &str) {
+        let mut raw = Vec::with_capacity(15 + json.len());
+        crate::commands::ui::write_header(&mut raw, id, uid);
+        raw.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        raw.extend_from_slice(json.as_bytes());
+        self.send_typed_domain_cmd(raw, Command::UI);
+    }
+
     pub(crate) fn ui_telegram(&self, action: &crate::commands::ui::TelegramAction) {
         self.send_typed_domain_cmd(action.build(rand::random()), Command::UI);
     }

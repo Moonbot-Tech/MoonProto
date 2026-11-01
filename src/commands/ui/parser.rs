@@ -40,7 +40,7 @@ impl UICommand {
         let mut pos = 11usize;
 
         match cmd_id {
-            CMD_TELEGRAM_STATE => {
+            CMD_TELEGRAM_STATE | 58 | 61 => {
                 let len = u32::from_le_bytes(payload.get(pos..pos + 4)?.try_into().ok()?) as usize;
                 pos += 4;
                 let json = payload.get(pos..pos.checked_add(len)?)?;
@@ -48,9 +48,11 @@ impl UICommand {
                 if json.iter().copied().find(|b| !b.is_ascii_whitespace()) != Some(b'{') {
                     return None;
                 }
-                serde_json::from_slice(json)
-                    .ok()
-                    .map(|state| UICommand::TelegramState(std::sync::Arc::new(state)))
+                match cmd_id {
+                    58 => serde_json::from_slice(json).ok().map(|s| UICommand::WatchDogState(std::sync::Arc::new(s))),
+                    61 => serde_json::from_slice(json).ok().map(|s| UICommand::ServiceSettingsResult(std::sync::Arc::new(s))),
+                    _ => serde_json::from_slice(json).ok().map(|s| UICommand::TelegramState(std::sync::Arc::new(s))),
+                }
             }
             CMD_CLIENT_SETTINGS => {
                 parse_client_settings(payload, &mut pos, uid, ver, client_settings_fallback)

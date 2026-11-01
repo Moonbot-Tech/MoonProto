@@ -893,7 +893,12 @@ impl MoonSettings<'_> {
         self.client.set_auto_detect_active(active)
     }
 
-    /// Send a full client-settings snapshot.
+    /// Queue the complete compact client-settings snapshot.
+    ///
+    /// The current core forces auto-start, detection and strategy startup flags
+    /// on, and remember-state off, on this path; it does not apply `sign_orders`.
+    /// Use SharedConfig for those saved preferences. See the
+    /// [settings API guide](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/10-settings-apis.md#compact-settings-and-leverage).
     pub fn send(
         &self,
         settings: crate::commands::ui::ClientSettingsCommand,
@@ -914,6 +919,12 @@ impl MoonSettings<'_> {
     /// After applying, the kernel re-broadcasts both the fresh shared config
     /// and the client-settings snapshot; retained state catches up through the
     /// normal event path — do not overlay local state manually.
+    /// Compare the returned fields with your edit: the update event can also
+    /// reflect another editor. `Ok(())` means queued, not applied or saved.
+    /// This is a complete snapshot without revision conflict checking; INI
+    /// sections are replaced and a late import failure does not roll back
+    /// earlier sections. See the
+    /// [editing contract](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/10-settings-apis.md#shared-configuration-read-edit-send-verify).
     pub fn send_shared_config(
         &self,
         cfg: &crate::shared_config::SharedConfig,
@@ -934,6 +945,8 @@ impl MoonSettings<'_> {
     /// snapshot instead of inventing defaults that could overwrite live core
     /// settings. Compact settings received after the full snapshot are overlaid
     /// before the value is returned.
+    /// Apply only the user's edits to this fresh base before sending. This
+    /// reduces overwrites but does not prevent concurrent-editor races.
     ///
     /// `manual_strategy` is not resolved from `manual_strategy_id` here (the
     /// share format stores the strategy name); the base value is kept.

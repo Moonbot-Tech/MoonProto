@@ -13,6 +13,13 @@
 //! [`crate::MoonSettings::build_shared_config`] and sends it through
 //! [`crate::MoonSettings::send_shared_config`]. The core then broadcasts fresh
 //! compact and full settings snapshots to every connected terminal.
+//! Compare the returned fields with the edit: the update event is not a
+//! request-specific acknowledgement, and send success means queued, not saved.
+//!
+//! This is a full snapshot without a compare-and-save revision. Transfer only
+//! the user's edits onto a fresh base before sending; concurrent edits can still
+//! overwrite each other. Each supplied INI section replaces its existing keys.
+//! Import is not transactional: a late failure does not undo earlier sections.
 //!
 //! Typical cycle after connection:
 //! 1. Wait for the retained core [`SharedConfig`] or its settings event.
@@ -31,6 +38,13 @@
 //! this library knows about are captured there. On re-serialization they are
 //! appended verbatim, so round-tripping a foreign config does not silently
 //! discard new settings.
+//!
+//! For field meanings, units, GUI ranges and dependencies, see the
+//! [MoonDoc settings reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/README.md).
+//! GUI limits are not a promise of wire validation. Trading-currency amounts
+//! use the account's trading/settlement currency (USDT for BTC/USDT), not
+//! necessarily the market's base asset. Preserve inactive fields and unknown
+//! values rather than exposing them as working controls.
 
 mod absorb;
 mod clipboard;

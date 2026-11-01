@@ -224,6 +224,7 @@ impl EventDispatcher {
             self.news.clear_for_hard_session();
             self.settings.problems = Default::default();
             self.settings.telegram = None;
+            self.settings.watchdogs = None;
             log::info!(target: "moonproto::events",
                 "ServerToken changed ({:#x} -> {:#x}) - trades/orderbook/news session state reset",
                 self.last_known_server_token, current_token);
@@ -236,6 +237,7 @@ impl EventDispatcher {
             self.news.clear_for_new_world();
             self.settings.problems = Default::default();
             self.settings.telegram = None;
+            self.settings.watchdogs = None;
             self.markets.clear_session_profits_for_new_world();
             self.markets.clear_market_stats();
         }

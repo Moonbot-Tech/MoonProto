@@ -185,6 +185,7 @@ Public API notes live in [`docs/`](docs). Start here:
 |---|---|
 | [terminal features](docs/features.md) | Common MoonBot feature names, their meaning, and the high-level API that implements them. |
 | [shared configuration](docs/shared_config.md) | Read, edit, apply, and share the core's full portable settings snapshot. |
+| [kernel settings reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/README.md) | Kernel settings: meanings, units and dependencies. |
 | [overview](docs/overview.md) | The big picture. |
 | [client](docs/client.md) | `MoonClient` and the owned runtime. |
 | [events](docs/events.md) · [lifecycle](docs/lifecycle.md) | Events, snapshots, and session lifecycle. |

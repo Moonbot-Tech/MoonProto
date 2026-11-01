@@ -68,6 +68,7 @@ pub struct SettingsState {
     pub problems: super::ProblemsState,
     /// Last full Telegram snapshot. Treat it as stale while the core is disconnected.
     pub telegram: Option<std::sync::Arc<super::TelegramState>>,
+    pub watchdogs: Option<std::sync::Arc<super::WatchDogState>>,
     /// Raw `TDateTime` days for diagnostics/parity tests.
     ///
     /// Normal terminal code should use [`Self::arb_valid_until_time`] and
@@ -83,6 +84,8 @@ pub struct SettingsState {
 pub enum SettingsEvent {
     /// Full Telegram snapshot replaced. This is not an acknowledgement of an action.
     TelegramUpdated,
+    WatchDogsUpdated,
+    ServiceSettingsApplied(std::sync::Arc<super::ServiceSettingsResult>),
     /// A fresh full settings snapshot was applied.
     ClientSettingsUpdated,
     /// Leverage-management snapshot changed.
@@ -328,7 +331,28 @@ impl SettingsState {
                 Some(SettingsEvent::HyperliquidRequestLimitUpdated)
             }
 
+            UICommand::WatchDogState(state) => {
+                if self.watchdogs.as_ref().is_some_and(|old| old.revision > state.revision) {
+                    return None;
+                }
+                self.watchdogs = Some(state);
+                Some(SettingsEvent::WatchDogsUpdated)
+            }
+            UICommand::ServiceSettingsResult(result) => {
+                match &result.state {
+                    super::ServiceSettingsState::Telegram(state) => {
+                        self.apply(UICommand::TelegramState(state.clone()));
+                    }
+                    super::ServiceSettingsState::Watchdog(state) => {
+                        self.apply(UICommand::WatchDogState(state.clone()));
+                    }
+                }
+                Some(SettingsEvent::ServiceSettingsApplied(result))
+            }
             UICommand::TelegramState(state) => {
+                if self.telegram.as_ref().is_some_and(|old| old.revision > state.revision) {
+                    return None;
+                }
                 self.telegram = Some(state);
                 Some(SettingsEvent::TelegramUpdated)
             }

@@ -55,7 +55,7 @@ state stale, disable account actions and hide QR. Retained snapshots can still
 contain old data. After `LifecycleEvent::Connected { fresh: false }`, request
 state again and use the next `TelegramUpdated`. Never automatically repeat phone,
 QR, code, reset or logout actions on reconnect. If an expected change does not
-arrive, refresh first and let the user retry. There are no per-action result tickets.
+arrive, refresh first and let the user retry. Authentication actions have no per-action result tickets. Sender settings use the acknowledged operations below.
 
 ## Panel Availability
 
@@ -145,3 +145,24 @@ Use `set_enabled(false)` to stop only this core's reader without logging everyon
 a second connection through the public API. It does not enable the service,
 change proxy, log in or log out. It reports unavailable remote login explicitly.
 Interactive phone/QR/2FA validation requires a consenting user and a test account.
+
+## Outgoing Bot And Channel
+
+The outgoing bot token is separate from TDLib login. Enable these controls only
+when `state.settings_supported` is true and the core is connected. Mark the panel
+with the connected core name/address; do not present cached data as local settings.
+
+`set_outgoing_bot(own_bot, token)` saves the sender on the core. `None` preserves
+its token, `Some("")` clears it. State returns only `token_set`, never the token.
+`generate_channel_pin()` generates a PIN on the core. Show `channel_pin` and ask
+the user to send it to the intended Telegram channel; `channel_id` and
+`channel_name` then show the actual binding. `reset_channel()` clears that binding.
+
+These methods return a request ID. Match its string representation against
+`SettingsEvent::ServiceSettingsApplied(result).request_id`; `error` is empty on
+success. The result also updates the retained state. `applied` with a nonempty
+`error` means the new value is active in memory but saving failed; show the error
+and actual state instead of claiming that nothing changed. PINs and replacement tokens must not be logged.
+
+See [core watchdogs](watchdogs.md) for observer configuration and feedback.
+Field meanings and relationships: [MoonDoc Telegram settings](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/10-settings-apis.md#telegram-on-the-kernel).
