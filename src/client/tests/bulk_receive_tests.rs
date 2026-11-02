@@ -375,3 +375,29 @@ fn startup_snapshot_survives_sliced_reordering_and_duplicate_blocks() {
         &mut client.recv.data_read_state, Command::Crypted.to_byte(), wire,
     ).is_none(), "replayed encrypted snapshot must not be delivered again");
 }
+
+#[test]
+fn manual_strategy_snapshot_survives_sliced_reordering_duplicates_and_pending_delivery() {
+    let mut client = Client::new(dummy_cfg());
+    let key = install_server_decode_session(&mut client, 42);
+    let rx = client.pending_api.api_pending.register(456);
+    let paths: Vec<_> = (0..200).map(|i| format!("Folder/{i:04}")).collect();
+    let batch = crate::commands::strategy_serializer::StrategyBatchBuilder::folder_payload(paths);
+    let body = crate::commands::strat::build_snapshot(1, 7, 0, true, &batch, 8, 0);
+    let response = build_engine_response_payload(456, EngineMethod::GetStrategiesSnapshot, &body);
+    let wire = build_server_crypted_payload(&key, 1, Command::API, &response);
+    let assembled = reassemble(&wire, true);
+    let (_, decoded) = Client::decode_command_payload_owned(
+        &mut client.recv.data_read_state, Command::Crypted.to_byte(), assembled.into_vec(),
+    ).unwrap();
+    assert!(Client::dispatch_api_pending(&client.pending_api.api_pending, Command::API.to_byte(), &decoded));
+    let response = rx.try_recv().unwrap();
+    let mut dispatcher = crate::events::EventDispatcher::new();
+    dispatcher.queue_engine_action_response(crate::events::EngineActionKind::RequestStrategiesSnapshot, response);
+    assert_eq!(dispatcher.strats().folder_paths().count(), 201);
+    assert_eq!(dispatcher.strats().last_modified(), 7);
+    assert_eq!(dispatcher.strats().folders_last_modified(), 8);
+    assert!(Client::decode_command_payload_owned(
+        &mut client.recv.data_read_state, Command::Crypted.to_byte(), wire,
+    ).is_none(), "replayed encrypted response must not be applied again");
+}

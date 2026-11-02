@@ -118,6 +118,8 @@ impl EngineMethod {
     pub const GetMarketsStats: Self = Self(35);
     /// Recover the initial core states before publishing Ready.
     pub const GetStartupState: Self = Self(36);
+    /// Fetch the complete strategy list for explicit replacement on the client.
+    pub const GetStrategiesSnapshot: Self = Self(37);
 
     /// Preserve the raw wire ordinal so future methods remain parseable.
     #[doc(hidden)]
@@ -131,7 +133,7 @@ impl EngineMethod {
     }
 
     pub const fn is_known(self) -> bool {
-        self.0 <= Self::GetStartupState.0
+        self.0 <= Self::GetStrategiesSnapshot.0
     }
 
     pub const fn name(self) -> &'static str {
@@ -173,6 +175,7 @@ impl EngineMethod {
             Self::RequestMarketHistory => "RequestMarketHistory",
             Self::GetMarketsStats => "GetMarketsStats",
             Self::GetStartupState => "GetStartupState",
+            Self::GetStrategiesSnapshot => "GetStrategiesSnapshot",
             _ => "Unknown",
         }
     }
@@ -210,6 +213,7 @@ mod tests {
         );
         assert_eq!(EngineMethod::from_byte(35), EngineMethod::GetMarketsStats);
         assert_eq!(EngineMethod::from_byte(36), EngineMethod::GetStartupState);
+        assert_eq!(EngineMethod::from_byte(37), EngineMethod::GetStrategiesSnapshot);
         assert_eq!(EngineMethod::from_byte(0), EngineMethod::None);
     }
 

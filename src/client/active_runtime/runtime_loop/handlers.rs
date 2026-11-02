@@ -196,6 +196,15 @@ pub(super) fn handle_command(
             ticket,
             payload,
         } => {
+            if kind == crate::events::EngineActionKind::RequestStrategiesSnapshot {
+                if let Some(i) = pending.engine_actions.iter().position(|p| p.kind == kind) {
+                    let old = pending.engine_actions.swap_remove(i);
+                    remove_api_pending(&client.pending_api.api_pending, old.ticket.request_uid);
+                    dispatcher.queue_engine_action_disconnected(
+                        old.kind, old.ticket.request_uid, old.ticket.method, "Superseded by a new snapshot request",
+                    );
+                }
+            }
             schedule_engine_action(client, &mut pending.engine_actions, kind, ticket, payload);
             false
         }
@@ -539,6 +548,7 @@ fn schedule_engine_action(
     pending.push(PendingEngineAction {
         kind,
         ticket,
+        peer_app_token: client.peer_app_token,
         deadline: engine_pending_deadline(),
         rx,
     });

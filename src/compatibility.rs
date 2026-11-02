@@ -20,8 +20,10 @@ pub struct CoreCompatibility {
 /// ```
 pub const fn core_compatibility() -> CoreCompatibility {
     CoreCompatibility {
-        minimum_core_version: "7.72 L6",
-        comment: "7.72 L6 with service-settings support adds outgoing Telegram settings and watchdog control, \
+        minimum_core_version: "7.72 L7",
+        comment: "7.72 L7 adds manual core-authoritative strategy snapshots without reconnecting. \
+                  Update older cores before using that request; older Linux builds may crash on unknown Engine requests. \
+                  7.72 L6 with service-settings support adds outgoing Telegram settings and watchdog control, \
                   as well as the prepared release version in core runtime state. \
                   Earlier builds omit settings_supported and watchdog state; hide mutation controls there. \
                   L5 supports startup-state recovery but does not report prepared releases. \

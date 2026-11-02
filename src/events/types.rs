@@ -272,6 +272,8 @@ pub enum EngineActionKind {
         to: ExchangeKind,
     },
     ReloadOrderBook,
+    /// Replace this client's strategy state with the core's complete list.
+    RequestStrategiesSnapshot,
 }
 
 /// Completion of an asynchronous user-facing Engine API action.

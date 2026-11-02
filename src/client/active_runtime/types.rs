@@ -278,6 +278,11 @@ pub struct EngineActionTicket {
 }
 
 impl EngineActionTicket {
+    /// Whether this completion belongs to the queued request.
+    pub fn matches(&self, event: &crate::events::EngineActionEvent) -> bool {
+        self.request_uid.is_some() && self.request_uid == event.request_uid
+    }
+
     #[cfg(any(test, feature = "diagnostics"))]
     #[doc(hidden)]
     pub fn request_uid(&self) -> Option<u64> {

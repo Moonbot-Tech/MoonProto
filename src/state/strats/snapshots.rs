@@ -23,6 +23,23 @@ enum EditResolution {
 }
 
 impl StratsState {
+    /// Manual core-authoritative replacement; ordinary Full packets still merge.
+    pub(crate) fn replace_from_core(&mut self, snap: &crate::commands::strat::StratSnapshot) -> Option<()> {
+        // Decode completely before touching retained state or pending edits.
+        let batch = parse_strategy_batch_with_schema_field_types(&snap.data, self.schema_field_types.as_deref())?;
+        self.clear_entries();
+        for strategy in batch.strategies {
+            self.insert_snapshot_unchecked(strategy);
+        }
+        for path in batch.paths {
+            self.create_folders_for_path(&path);
+        }
+        self.last_modified = snap.server_epoch;
+        self.last_server_epoch = snap.server_epoch;
+        self.folders_last_modified = snap.folders_last_modified;
+        Some(())
+    }
+
     pub(crate) fn local_order_matches(&self, strategies: &[StrategySnapshot]) -> bool {
         let incoming = strategies.iter().map(|s| s.strategy_id);
         match &self.local_snapshots {

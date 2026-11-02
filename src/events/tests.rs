@@ -3,6 +3,7 @@ mod balance_digest;
 mod problems;
 mod telegram;
 mod services;
+mod strategy_refresh;
 use crate::commands::arb::build_arb_prices;
 use crate::commands::balance::build_request_balance_refresh;
 use crate::commands::engine_api::EngineMethod;

@@ -219,7 +219,7 @@ pub(super) fn runtime_loop(
                 );
             #[cfg(any(test, feature = "diagnostics"))]
             let engine_actions_start = crate::client::thread_cpu::ProfileTimer::start();
-            poll_engine_actions(&mut pending.engine_actions, &mut dispatcher, &api_pending);
+            poll_engine_actions(&mut pending.engine_actions, &mut dispatcher, &api_pending, client.peer_app_token);
             #[cfg(any(test, feature = "diagnostics"))]
             client
                 .metrics
@@ -778,6 +778,8 @@ fn publish_snapshot_profiled(
 
 #[cfg(test)]
 mod optimization_bench;
+#[cfg(test)]
+mod strategy_refresh_tests;
 
 #[cfg(test)]
 mod tests {

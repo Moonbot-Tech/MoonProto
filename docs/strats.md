@@ -100,6 +100,51 @@ local strategy list. Terminal code does not need to handle that packet or build
 a snapshot reply; the normal `MoonClient` event sink suppresses the hidden
 request event after latching/sending the reply.
 
+## Requesting the Core's Current List
+
+MoonBot **7.72 L7 or later** supports an explicit refresh without reconnecting:
+
+```rust
+let ticket = client.strategies().request_snapshot()?;
+// In the normal event loop:
+for event in client.drain_events() {
+    if let moonproto::Event::EngineAction(result) = event {
+        if ticket.matches(&result) {
+            if result.success {
+                let state = client.snapshot().unwrap();
+                redraw_strategy_list(state.strats());
+            } else {
+                show_error(&result.error_msg);
+            }
+        }
+    }
+}
+```
+
+The request sends no local strategies and does not modify the core. On success,
+the library replaces this client's strategy list, order and folder tree with the
+complete core snapshot, including checked flags and all serialized fields.
+Missing strategies are removed; an empty core list clears the local list.
+Pending local edits and the previous outgoing snapshot cache are discarded.
+The schema and strategy-running state remain available.
+
+`SnapshotFull` and the matching successful `EngineAction` are delivered after the
+retained snapshot is published. Later edits and automatic synchronization use
+the adopted list. Ordinary unsolicited Full snapshots keep their existing merge
+behavior. This refresh does not freeze the core or cancel edits already sent to
+it; normal updates from the core continue.
+
+A new manual request supersedes the previous outstanding request, which completes
+with an error. Only the latest request may replace state. Malformed replies,
+timeouts, changed core sessions and errors leave the retained list untouched.
+There is no reconnect or upload fallback. Delivery uses the normal
+request/response transport retries.
+
+Do not use this request as a feature probe on older cores. Older Windows cores
+return an unsupported-method error, but some older Linux builds crash when an
+unknown Engine request arrives. Update those cores before calling this API.
+The SDK does not request this snapshot automatically during connection.
+
 ## Strategy Order
 
 Pass the complete editor list to `sync_local_strategies` in the desired order.

@@ -311,8 +311,11 @@ println!("Minimum core: {}", compatibility.minimum_core_version);
 println!("{}", compatibility.comment);
 ```
 
-The current requirement is **MoonBot 7.72 L6**, which reports prepared release
-updates. L5 supports startup-state recovery but does not report prepared releases.
+The current requirement is **MoonBot 7.72 L7**, which adds manual full strategy
+refresh. Update older cores before using that feature; some older Linux builds
+crash on unknown Engine requests. See [strategy refresh](strats.md#requesting-the-cores-current-list).
+L6 supports prepared release updates and service settings; L5 supports
+startup-state recovery but does not report prepared releases.
 Earlier compatible cores can reach `Ready` without some initial runtime, license,
 profit, Hyperliquid allowance or strategy-running states after packet loss.
 The returned `comment` explains these limitations for account/status UI.

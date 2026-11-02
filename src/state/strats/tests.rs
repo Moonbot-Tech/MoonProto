@@ -990,6 +990,77 @@ fn encode_named_snapshot(schema: &StrategySchema, snapshot: &StrategySnapshot) -
 }
 
 #[test]
+fn manual_snapshot_replaces_own_rows_pending_edits_folders_and_outgoing_cache() {
+    use crate::commands::strategy_serializer::{parse_strategy_batch, StrategyBatchBuilder};
+    let schema = schema_for_strategy_name(&[1]);
+    let own = named_snapshot(9, 900, "Local newer");
+    let mut core = named_snapshot(1, 100, "Core wins");
+    core.path = "Core/Child".into();
+    core.checked = false;
+    let mut other = core.clone();
+    other.strategy_id = 200;
+    let mut state = StratsState::new();
+    state.schema = Some(Arc::new(schema.clone()));
+    let mut absent = own.clone();
+    absent.strategy_id = 300;
+    state.replace_with_snapshots(&[own.clone(), absent]);
+    let mut draft = own;
+    draft.last_date += 1;
+    draft.fields.insert("StrategyName", FieldValue::String("Pending".into()));
+    state.stage_local_snapshot_batch(vec![draft], crate::MoonTime::from_unix_millis(1), Instant::now());
+    state.stage_local_folders(Some(&["Old/Empty".into()]), 1000);
+    assert!(state.snapshot_payload_cache().is_some());
+    assert!(!state.strategy_edits.is_empty());
+
+    let mut builder = StrategyBatchBuilder::new(&schema);
+    builder.write_strategy(&other);
+    builder.write_strategy(&core);
+    let snapshot = crate::commands::strat::StratSnapshot {
+        server_epoch: 2, client_max_last_date: 100, full: true,
+        data: builder.finalize(), folders_last_modified: 0, flags: 0,
+    };
+    state.replace_from_core(&snapshot).unwrap();
+    assert!(state.get(300).is_none());
+    assert_eq!(state.snapshots().map(|s| s.strategy_id).collect::<Vec<_>>(), [200, 100]);
+    assert_eq!(state.snapshot(100).unwrap(), &core);
+    assert_eq!(state.last_modified(), 2);
+    assert_eq!(state.folders_last_modified(), 0);
+    assert!(state.strategy_edits.is_empty());
+    assert!(state.local_snapshots.is_none() && state.local_folders.is_none());
+    assert!(!state.folder_paths().any(|p| p.starts_with("Old")));
+    let reply = state.snapshot_payload_cache().unwrap();
+    let decoded = parse_strategy_batch(&reply.data).unwrap();
+    assert_eq!(decoded.strategies, [other, core]);
+
+    let empty = crate::commands::strat::StratSnapshot {
+        data: StrategyBatchBuilder::folder_payload(vec!["Empty/Kept".into()]),
+        server_epoch: 0, ..snapshot
+    };
+    state.replace_from_core(&empty).unwrap();
+    assert_eq!(state.snapshots().count(), 0);
+    assert_eq!(state.last_modified(), 0);
+    assert!(state.folder_paths().any(|p| p == "Empty/Kept"));
+    let reply = state.snapshot_payload_cache().unwrap();
+    assert!(parse_strategy_batch(&reply.data).unwrap().strategies.is_empty());
+}
+
+#[test]
+fn malformed_manual_snapshot_preserves_all_retained_state() {
+    let mut state = StratsState::new();
+    let own = named_snapshot(9, 900, "Keep");
+    state.replace_with_snapshots(std::slice::from_ref(&own));
+    state.last_modified = 5;
+    let bad = crate::commands::strat::StratSnapshot {
+        server_epoch: 1, client_max_last_date: 0, full: true,
+        data: vec![255], folders_last_modified: 0, flags: 0,
+    };
+    assert!(state.replace_from_core(&bad).is_none());
+    assert_eq!(state.snapshots().count(), 1);
+    assert_eq!(state.snapshot(100).unwrap(), &own);
+    assert_eq!(state.last_modified(), 5);
+}
+
+#[test]
 fn full_order_survives_skipped_rows_old_full_and_preserves_own_strategies() {
     let schema = schema_for_strategy_name(&[1]);
     let a = named_snapshot(1, 100, "A");

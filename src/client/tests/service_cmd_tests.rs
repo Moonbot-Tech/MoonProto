@@ -6,7 +6,7 @@ use crate::transport::{
 
 static ERR_EMU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-struct ErrEmuTestGuard {
+pub(super) struct ErrEmuTestGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
@@ -16,7 +16,7 @@ impl Drop for ErrEmuTestGuard {
     }
 }
 
-fn err_emu_test_guard() -> ErrEmuTestGuard {
+pub(super) fn err_emu_test_guard() -> ErrEmuTestGuard {
     let guard = ERR_EMU_TEST_LOCK.lock().unwrap();
     set_err_emu(0);
     ErrEmuTestGuard { _lock: guard }

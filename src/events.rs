@@ -664,8 +664,15 @@ impl EventDispatcher {
     pub(crate) fn queue_engine_action_response(
         &mut self,
         kind: EngineActionKind,
-        resp: EngineResponse,
+        mut resp: EngineResponse,
     ) {
+        if kind == EngineActionKind::RequestStrategiesSnapshot && resp.success
+            && (resp.method != EngineMethod::GetStrategiesSnapshot || !self.replace_strategies_from_response(&resp.data))
+        {
+            resp.success = false;
+            resp.error_code = 0;
+            resp.error_msg = "Invalid full strategy snapshot".into();
+        }
         if resp.success {
             if let EngineActionKind::TransferAsset {
                 asset,

@@ -5888,6 +5888,81 @@ fn record_public_client_tick(
     }
 }
 
+fn run_manual_strategy_snapshot_check(cfg: &FireConfig, keys: ImportedKeys, supported: bool) {
+    let client = MoonClient::connect_blocking(
+        ClientConfig::new(&cfg.host, cfg.port, keys.master_key, keys.mac_key)
+            .with_transport_mode(cfg.transport_mode).with_client_id(rand::random()),
+        ConnectConfig::new(InitConfig { subscribe_logs: false, ..InitConfig::default() })
+            .with_connect_timeout(cfg.connect_timeout),
+        cfg.connect_timeout + cfg.wait,
+    ).expect("manual strategies: connect");
+    client.drain_events();
+    client.drain_lifecycle_events();
+    let mut baseline = client.snapshot().unwrap();
+    let subscriptions = client.active_subscriptions();
+    let ids = |snapshot: &moonproto::MoonStateSnapshot| {
+        snapshot.strats().snapshots().map(|s| s.strategy_id).collect::<Vec<_>>()
+    };
+    for request in 1..=2 {
+        let ticket = client.strategies().request_snapshot().expect("manual strategies: enqueue");
+        // Allow the SDK's 12-second request timeout to surface its completion.
+        let deadline = Instant::now() + cfg.wait.max(Duration::from_secs(15));
+        let mut saw_full = false;
+        'wait: loop {
+            for event in client.drain_events() {
+                match event {
+                    Event::Strat(StratEvent::SnapshotFull { .. }) => saw_full = true,
+                    Event::EngineAction(result) if ticket.matches(&result) => {
+                        assert_eq!(result.success, supported, "manual strategies: {}", result.error_msg);
+                        if supported {
+                            assert!(saw_full, "manual strategies: completion must follow SnapshotFull");
+                        } else {
+                            assert_eq!(result.error_code, 400, "old core must reject unknown method");
+                        }
+                        let current = client.snapshot().unwrap();
+                        // This client starts without a local list. The first successful
+                        // pull establishes it; the next read must preserve its dates/order.
+                        if !supported || request > 1 {
+                            assert_eq!(ids(&current), ids(&baseline), "read-only request changed core list/order");
+                            assert_eq!(current.strats().last_modified(), baseline.strats().last_modified());
+                            assert_eq!(current.strats().folders_last_modified(), baseline.strats().folders_last_modified());
+                        }
+                        baseline = current.clone();
+                        println!("OK: FIRETEST manual strategy snapshot #{request}: supported={supported}, rows={}, retained before completion", ids(&current).len());
+                        break 'wait;
+                    }
+                    _ => {}
+                }
+            }
+            assert!(Instant::now() < deadline, "manual strategies: response timed out");
+            std::thread::sleep(PUMP_SLICE);
+        }
+    }
+    assert_eq!(client.active_subscriptions(), subscriptions);
+    assert!(!client.drain_lifecycle_events().iter().any(|event| matches!(event, LifecycleEvent::Ready)),
+        "manual strategies must not reinitialize");
+    client.disconnect().unwrap();
+    client.wait_finished().unwrap();
+}
+
+#[test]
+#[ignore = "live MoonBot 7.72 L7 core required"]
+fn fire_test_strategy_snapshot() {
+    let _lock = firetest_live_test_lock();
+    let cfg = FireConfig::load_required();
+    let keys = parse_key_info(&cfg.key_b64).expect("invalid FireTest key").keys;
+    run_manual_strategy_snapshot_check(&cfg, keys, true);
+}
+
+#[test]
+#[ignore = "older Windows core required; do not probe unpatched Linux cores with unknown requests"]
+fn fire_test_strategy_snapshot_unsupported() {
+    let _lock = firetest_live_test_lock();
+    let cfg = FireConfig::load_required();
+    let keys = parse_key_info(&cfg.key_b64).expect("invalid FireTest key").keys;
+    run_manual_strategy_snapshot_check(&cfg, keys, false);
+}
+
 fn run_manual_market_stats_check(cfg: &FireConfig, keys: ImportedKeys) {
     use moonproto::state::MarketsEvent;
 
@@ -10259,6 +10334,7 @@ fn fire_test_active_library_health() {
 
     run_strategy_folder_sync_gate(&cfg, keys, &mut a, &mut b);
     run_moonshot_strategy_gate(&cfg, &mut a, &mut b);
+    run_manual_strategy_snapshot_check(&cfg, keys, true);
     run_runtime_restart_now_gate(&cfg, &mut a, &mut b);
 
     let a_initial = a.snapshot();

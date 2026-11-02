@@ -81,6 +81,7 @@ fn idle_wait_changes_only_for_compact_history_profiles() {
 
 #[test]
 fn udp_rearm_follows_consumed_notifications_across_bursts_timeouts_and_rebind() {
+    let _err_emu_guard = super::service_cmd_tests::err_emu_test_guard();
     let mut client = Client::new(dummy_cfg().with_market_history(crate::state::MarketHistorySizing::Compact));
     client.testing_set_domain_ready(true);
     client.authorized = true;
@@ -300,6 +301,7 @@ fn app_send_queue_is_not_blocked_by_data_read_delivery() {
 
 #[test]
 fn production_protocol_step_does_not_drain_udp_until_empty() {
+    let _err_emu_guard = super::service_cmd_tests::err_emu_test_guard();
     let mut client = Client::new(dummy_cfg());
     client.testing_set_domain_ready(true);
     client.authorized = true;

@@ -1563,6 +1563,26 @@ pub struct MoonStrategies<'a> {
 }
 
 impl MoonStrategies<'_> {
+    /// Request and adopt the core's complete strategy list without reconnecting.
+    ///
+    /// Requires MoonBot 7.72 L7. Success replaces strategies, order and folders,
+    /// including removal of absent rows and pending local edits. The request
+    /// sends no local strategies and changes nothing on the core. Later edits
+    /// and synchronization use the newly adopted list.
+    ///
+    /// Completion arrives as `Event::EngineAction`; use `ticket.matches(&event)`.
+    /// Success also emits `StratEvent::SnapshotFull`, after publishing retained
+    /// state. Failure leaves the list unchanged.
+    /// A new request supersedes an outstanding manual request.
+    /// Do not use this request to probe support: older Linux cores may crash
+    /// on unknown Engine requests. Update the core before using this API.
+    pub fn request_snapshot(&self) -> Result<EngineActionTicket, MoonClientError> {
+        self.client.queue_engine_action(
+            crate::events::EngineActionKind::RequestStrategiesSnapshot,
+            crate::commands::engine_request::get_strategies_snapshot(),
+        )
+    }
+
     /// Send a strategy sell-price update.
     pub fn sell_price_update(
         &self,

@@ -32,6 +32,13 @@ application examples: some are intentionally low-level protocol guards.
   must receive finite values, the response must contain nonzero core volumes
   and deltas, and refreshes must leave subscriptions unchanged. Startup must not
   fetch these statistics automatically.
+  The full profile also requires two manual strategy-list refreshes (MoonBot
+  7.72 L7+). It verifies matching request completions, retained state before the
+  success event, unchanged list/order dates, subscriptions and initialization.
+  `fire_test_strategy_snapshot` runs that gate separately;
+  `fire_test_strategy_snapshot_unsupported` targets an older Windows core and
+  requires error 400 with the retained list preserved. Do not run this probe
+  against unpatched older Linux cores: unknown Engine requests can crash them.
   An empty startup news history is valid: the health gate requires the history
   event and applied tags, not a positive number of news records.
   On a Windows core with settings-archive support, enable the additional full
@@ -60,6 +67,9 @@ wire-compatible timing/retry semantics. They may instantiate internal `Client` o
 `EventDispatcher` directly because their job is to lock down wire-compatible
 behavior and recovery, not to demonstrate the public API.
 Regression coverage includes encrypted startup profit delivery before Init,
+manual strategy replacement (including empty lists, folders, pending edits and
+outgoing caches), atomic rejection of invalid responses, superseded requests,
+session changes, timeouts and reordered/duplicate encrypted snapshot fragments,
 replays before/after Init, zero-valued live updates, candle refusal/retry timing
 with partial and duplicate chunks, cancellation, and missing versus zero RTT.
 Startup recovery additionally covers complete loss of the ordinary initial

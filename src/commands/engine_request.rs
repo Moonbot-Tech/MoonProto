@@ -160,6 +160,10 @@ pub(crate) fn get_startup_state() -> Vec<u8> {
     build_engine_request(EngineMethod::GetStartupState, "", &[])
 }
 
+pub(crate) fn get_strategies_snapshot() -> Vec<u8> {
+    build_engine_request(EngineMethod::GetStrategiesSnapshot, "", &[])
+}
+
 /// `emk_GetMarketsList`: fetch the full market list.
 pub(crate) fn get_markets_list() -> Vec<u8> {
     build_engine_request(EngineMethod::GetMarketsList, "", &[])

@@ -139,7 +139,7 @@ pub(super) enum PendingAccountRefreshKind {
     ApiExpiration,
 }
 
-fn remove_api_pending(api_pending: &ApiPending, request_uid: Option<u64>) {
+pub(super) fn remove_api_pending(api_pending: &ApiPending, request_uid: Option<u64>) {
     if let Some(uid) = request_uid {
         api_pending.remove(uid);
     }
@@ -177,6 +177,7 @@ pub(super) fn clear_auto_candles_pending(client: &mut Client, pending: &mut Runt
 pub(super) struct PendingEngineAction {
     pub(super) kind: crate::events::EngineActionKind,
     pub(super) ticket: super::super::EngineActionTicket,
+    pub(super) peer_app_token: u64,
     pub(super) deadline: Instant,
     pub(super) rx: mpsc::Receiver<crate::commands::engine_api::EngineResponse>,
 }
@@ -647,10 +648,22 @@ pub(super) fn poll_engine_actions(
     pending: &mut Vec<PendingEngineAction>,
     dispatcher: &mut crate::events::EventDispatcher,
     api_pending: &ApiPending,
+    peer_app_token: u64,
 ) {
     let mut i = 0;
     let now = Instant::now();
     while i < pending.len() {
+        if pending[i].kind == crate::events::EngineActionKind::RequestStrategiesSnapshot
+            && (pending[i].peer_app_token != peer_app_token || pending[i].deadline <= now)
+        {
+            let action = pending.swap_remove(i);
+            remove_api_pending(api_pending, action.ticket.request_uid);
+            dispatcher.queue_engine_action_disconnected(
+                action.kind, action.ticket.request_uid, action.ticket.method,
+                "Strategy snapshot request expired or core session changed",
+            );
+            continue;
+        }
         match pending[i].rx.try_recv() {
             Ok(resp) => {
                 let kind = pending[i].kind.clone();

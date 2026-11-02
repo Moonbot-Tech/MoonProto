@@ -9,6 +9,22 @@ use crate::protocol::Command;
 use crate::state::StratEvent;
 
 impl EventDispatcher {
+    pub(super) fn replace_strategies_from_response(&mut self, data: &[u8]) -> bool {
+        let Some(StratCommand::Snapshot(snap)) = StratCommand::parse(data) else { return false };
+        if !snap.full || self.strats.replace_from_core(&snap).is_none() {
+            return false;
+        }
+        self.local_strategy_epoch = snap.server_epoch;
+        self.queued_events.extend([Event::Strat(StratEvent::SnapshotFull {
+            server_epoch: snap.server_epoch,
+            #[cfg(any(test, feature = "diagnostics"))]
+            raw_len: snap.data.len(),
+            #[cfg(feature = "diagnostics")]
+            raw_data: snap.data,
+        })]);
+        true
+    }
+
     pub(super) fn client_new_data_strat(&mut self, payload: &[u8], out: &mut Vec<Event>) {
         match StratCommand::parse(payload) {
             Some(cmd_v) => self.process_strat_command(cmd_v, out),
