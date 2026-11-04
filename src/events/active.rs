@@ -13,7 +13,7 @@ use crate::protocol::Command;
 use crate::state::eps::EpsProfile;
 #[cfg(any(test, feature = "diagnostics"))]
 use crate::state::OrderBookEvent;
-use crate::state::{MarketsEvent, OrderBookControl, TradesEvent};
+use crate::state::{MarketsEvent, OrderBookControl};
 
 pub(crate) struct ActiveDispatchContext {
     pub(crate) peer_app_token: u64,
@@ -21,6 +21,7 @@ pub(crate) struct ActiveDispatchContext {
     pub(crate) server_token: u64,
     pub(crate) subscribed_book_server_token: u64,
     pub(crate) round_trip_delay_ms: i64,
+    pub(crate) delivery_ratio: f64,
     pub(crate) server_time_delta_source: Arc<AtomicU64>,
     pub(crate) now_time_days: f64,
     pub(crate) domain_ready: bool,
@@ -42,6 +43,7 @@ impl ActiveDispatchContext {
             server_token: client.server_token(),
             subscribed_book_server_token: client.subscribed_book_server_token(),
             round_trip_delay_ms: client.round_trip_delay_ms(),
+            delivery_ratio: client.delivery_ratio(),
             server_time_delta_source: client.server_time_delta_handle(),
             now_time_days: crate::client::delphi_now_raw(),
             domain_ready: client.is_domain_ready(),
@@ -339,15 +341,6 @@ impl EventDispatcher {
         if new_markets_need_price_refresh {
             self.markets.take_new_markets_pending_price_refresh();
         }
-        // now_ms is passed through dispatch_into for state.on_packet(now_ms).
-        // Delphi `ProcessTradesStream` calls `CheckMissingTradesPackets` at the end;
-        // so recovery resend is an after-effect of a successful trades packet, not an
-        // independent timer running in a silent channel.
-        let processed_trades_packet =
-            matches!(cmd, Command::TradesStream | Command::TradesResendResponse)
-                && out[start_len..]
-                    .iter()
-                    .any(|ev| matches!(ev, Event::Trade(TradesEvent::Applied { .. })));
         // Auto-action 1: OrderBookControl::RequestFullNeeded -> send_api_request (sync, no pending).
         // Dedup via a small Vec with no heap when the set is empty: a grouped payload can contain several
         // RequestFullNeeded for the same book (corruption detection +
@@ -449,15 +442,6 @@ impl EventDispatcher {
                 } else {
                     self.pending_strategy_snapshot_request_uid = Some(uid);
                 }
-            }
-        }
-        if processed_trades_packet {
-            let (payloads, tick_events) = self
-                .trades
-                .tick_with_events(ctx.round_trip_delay_ms, now_ms);
-            out.extend(tick_events.into_iter().map(Event::Trade));
-            for payload in payloads {
-                actions.push(ActiveAction::TradesResend { payload });
             }
         }
     }

@@ -829,6 +829,7 @@ mod tests {
                 check_tags_every: None,
             },
             market_history: crate::state::MarketHistorySizing::default(),
+            allow_trade_aggregation: 0,
         }
     }
 
@@ -1101,6 +1102,35 @@ mod tests {
                 })
             )
         }));
+    }
+
+    #[test]
+    fn cancel_all_buys_sends_core_action_and_legacy_entries_only() {
+        let mut client = ready_client();
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        for (uid, status) in [(101, OrderWorkerStatus::BuySet), (102, OrderWorkerStatus::None),
+            (103, OrderWorkerStatus::SellSet), (104, OrderWorkerStatus::BuyDone)] {
+            seed_runtime_order(&mut dispatcher, uid, status, 1);
+        }
+        assert!(handle_trade_action(&mut client, &mut dispatcher, RuntimeTradeCommandKind::CancelAllBuys).unwrap());
+        let (_, high, _) = client.take_send_queues_for_test();
+        let commands: Vec<_> = high.iter().map(|p| match TradeCommand::parse(&p.data).unwrap() {
+            TradeCommand::OrderCommand(cmd) => cmd.payload,
+            other => panic!("unexpected: {other:?}"),
+        }).collect();
+        assert_eq!(commands.len(), 3);
+        assert!(matches!(commands[0], OrderCommandPayload::CancelAllBuys));
+        assert!(commands.iter().any(|p| matches!(p, OrderCommandPayload::CancelBuy { order_id: 101 })));
+        assert!(commands.iter().any(|p| matches!(p, OrderCommandPayload::PendingCancel { order_id: 102 })));
+        assert!(dispatcher.orders().get(102).unwrap().pending_cancel);
+        assert!(!dispatcher.orders().get(103).unwrap().pending_cancel);
+        // Even an empty/stale retained order list must reach the core.
+        let mut empty = crate::events::EventDispatcher::new();
+        assert!(!handle_trade_action(&mut client, &mut empty, RuntimeTradeCommandKind::CancelAllBuys).unwrap());
+        assert_eq!(client.take_send_queues_for_test().1.len(), 1);
+        client.testing_set_domain_ready(false);
+        assert!(!handle_trade_action(&mut client, &mut empty, RuntimeTradeCommandKind::CancelAllBuys).unwrap());
+        assert!(client.take_send_queues_for_test().1.is_empty());
     }
 
     #[test]

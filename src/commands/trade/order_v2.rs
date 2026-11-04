@@ -571,6 +571,7 @@ pub(crate) enum OrderCommandPayload {
         size: f64,
     },
     PanicSellAll,
+    CancelAllBuys,
     Unknown(u8),
 }
 
@@ -594,6 +595,7 @@ impl OrderCommandPayload {
             Self::ManualSell { .. } => 15,
             Self::PanicSellAll => 17,
             Self::StartPending { .. } => 18,
+            Self::CancelAllBuys => 19,
             Self::Unknown(opcode) => *opcode,
         }
     }
@@ -780,7 +782,7 @@ impl OrderCommandPayload {
                 out.extend_from_slice(&price.to_le_bytes());
                 out.extend_from_slice(&size.to_le_bytes());
             }
-            Self::PanicSellAll | Self::Unknown(_) => {}
+            Self::PanicSellAll | Self::CancelAllBuys | Self::Unknown(_) => {}
         }
     }
 
@@ -905,6 +907,7 @@ impl OrderCommandPayload {
                         .then(|| StopSettings::read_from_delphi_stream(input)),
                 }
             }
+            19 => Self::CancelAllBuys,
             _ => Self::Unknown(opcode),
         }
     }
@@ -1265,6 +1268,7 @@ mod tests {
                 percent: 1.0,
             },
             OrderCommandPayload::PanicSellAll,
+            OrderCommandPayload::CancelAllBuys,
         ] {
             assert_eq!(payload.group(), None);
         }
@@ -1625,5 +1629,6 @@ mod tests {
             sell,
         );
         assert_body(OrderCommandPayload::PanicSellAll, vec![17]);
+        assert_body(OrderCommandPayload::CancelAllBuys, vec![19]);
     }
 }

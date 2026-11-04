@@ -2917,6 +2917,7 @@ fn active_dispatch_emits_typed_watcher_fills() {
         server_token: 0,
         subscribed_book_server_token: 0,
         round_trip_delay_ms: 50,
+        delivery_ratio: 1.0,
         server_time_delta_source: Arc::new(AtomicU64::new(0)),
         now_time_days: 45_000.5,
         domain_ready: true,
@@ -3027,6 +3028,7 @@ fn active_dispatch_queues_update_markets_last_price_into_history_worker() {
         server_token: 0,
         subscribed_book_server_token: 0,
         round_trip_delay_ms: 50,
+        delivery_ratio: 1.0,
         server_time_delta_source: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         now_time_days: 45_000.5,
         domain_ready: true,
@@ -3511,6 +3513,7 @@ fn dummy_client_cfg() -> crate::client::ClientConfig {
             check_tags_every: None,
         },
         market_history: crate::state::MarketHistorySizing::default(),
+        allow_trade_aggregation: 0,
     }
 }
 
@@ -5079,4 +5082,71 @@ fn manual_stats_survive_transport_reconnect_but_clear_on_new_core() {
     client.testing_set_peer_app_tokens(2, 2);
     dispatch_active_packet_for_test(&mut d, Command::API, &payload, 1300, &mut events, &client, &mut actions);
     assert!(btc.stats().is_some());
+}
+
+#[test]
+fn resend_must_not_duplicate_retained_trade() {
+    let worker = crate::state::MarketHistoryWorker::spawn(crate::state::MarketHistoryConfig {
+        futures_trades_capacity: 8,
+        spot_trades_capacity: 0,
+        liquidation_capacity: 0,
+        mm_orders_capacity: 0,
+        last_price_capacity: 0,
+        mini_candles_capacity: 0,
+        candles_5m_capacity: 0,
+    });
+    let mut d = EventDispatcher::new();
+    d.set_market_history_handle(worker.handle());
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    d.markets.apply_markets_indexes(vec!["BTCUSDT".to_string()]);
+    let mut client = crate::client::Client::new(dummy_client_cfg());
+    client.testing_set_domain_ready(true);
+    client.subscribe_all_trades(false);
+    let mut out = Vec::new();
+    let mut actions = Vec::new();
+    let mut payload = trades_payload_with_rows(801, 0, 0, &[(0, 100.0, 1.0)]);
+    payload.pop();
+    push_watcher_fills_section(&mut payload, 0, [7; 20], &[(0, 100.0, 1.0, 0.0, 0.0, 0, 0)]);
+    payload.push(0);
+    let resend = trades_resend_response_payload(&payload);
+    let mut batch = resend.clone();
+    batch[0] = 2;
+    batch.extend_from_slice(&resend[1..]);
+    for (index, (command, bytes)) in [
+        (Command::TradesStream, payload.as_slice()),
+        (Command::TradesResendResponse, resend.as_slice()),
+        (Command::TradesResendResponse, resend.as_slice()),
+        (Command::TradesResendResponse, batch.as_slice()),
+    ].into_iter().enumerate() {
+        dispatch_active_packet_for_test(&mut d, command, bytes, 7000 + index as i64,
+            &mut out, &client, &mut actions);
+        assert!(worker.flush(mt(45_000.0)));
+        let mut rows = Vec::new();
+        worker.readers("BTCUSDT").unwrap().futures_trades.unwrap().copy_last(8, &mut rows);
+        assert_eq!(rows.len(), 1, "repeated resend must not append another row at step {index}");
+        assert_eq!(rows.iter().map(|r| r.qty).sum::<f32>(), 1.0);
+    }
+    assert_eq!(out.iter().filter(|e| matches!(e, Event::WatcherFills(_))).count(), 1);
+}
+
+#[test]
+fn duplicate_resend_drives_recovery_without_an_applied_event() {
+    let mut d = EventDispatcher::new();
+    seed_event_markets(&mut d, &["BTCUSDT"]);
+    d.markets.apply_markets_indexes(vec!["BTCUSDT".to_string()]);
+    let mut client = crate::client::Client::new(dummy_client_cfg());
+    client.testing_set_domain_ready(true);
+    client.subscribe_all_trades(false);
+    let mut out = Vec::new();
+    let mut actions = Vec::new();
+    let first = trades_payload_with_rows(801, 0, 0, &[(0, 100.0, 1.0)]);
+    let third = trades_payload_with_rows(803, 0, 0, &[(0, 100.0, 1.0)]);
+    dispatch_active_packet_for_test(&mut d, Command::TradesStream, &first, 1000, &mut out, &client, &mut actions);
+    dispatch_active_packet_for_test(&mut d, Command::TradesStream, &third, 1010, &mut out, &client, &mut actions);
+    assert!(actions.is_empty());
+    out.clear();
+    let resend = trades_resend_response_payload(&first);
+    dispatch_active_packet_for_test(&mut d, Command::TradesResendResponse, &resend, 1101, &mut out, &client, &mut actions);
+    assert!(!out.iter().any(|e| matches!(e, Event::Trade(TradesEvent::Applied { .. }))));
+    assert!(actions.iter().any(|a| matches!(a, ActiveAction::TradesResend { .. })));
 }

@@ -20,8 +20,10 @@ pub struct CoreCompatibility {
 /// ```
 pub const fn core_compatibility() -> CoreCompatibility {
     CoreCompatibility {
-        minimum_core_version: "7.72 L7",
-        comment: "7.72 L7 adds manual core-authoritative strategy snapshots without reconnecting. \
+        minimum_core_version: "7.72 L8",
+        comment: "7.72 L8 adds reporting/privacy controls and core-wide cancellation of BUY/pending orders. \
+                  Older compatible cores ignore reporting edits; cancel_all_buys still cancels entries known to the client. \
+                  7.72 L7 adds manual core-authoritative strategy snapshots without reconnecting. \
                   Update older cores before using that request; older Linux builds may crash on unknown Engine requests. \
                   7.72 L6 with service-settings support adds outgoing Telegram settings and watchdog control, \
                   as well as the prepared release version in core runtime state. \

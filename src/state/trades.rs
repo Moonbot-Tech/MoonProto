@@ -60,6 +60,9 @@ pub(crate) struct TradesState {
     /// Delphi `LastLargeRecvdTime`: timestamp of the last time `recvd` grew
     /// above `DEFAULT_RECVD_SIZE`. Used for the lazy memory shrink every 30 min.
     last_large_recvd_ms: i64,
+    /// Recent payload identities, indexed by the low 13 bits of the packet number.
+    /// Gap resets preserve these; a new server session clears them.
+    seen_packets: Box<[u64]>,
 }
 
 impl Default for TradesState {
@@ -78,6 +81,7 @@ impl TradesState {
             trades_started: false,
             last_check_missing_ms: 0,
             last_large_recvd_ms: 0,
+            seen_packets: vec![0; 8192].into_boxed_slice(),
         }
     }
 
@@ -93,6 +97,15 @@ impl TradesState {
     pub(crate) fn full_reset_at(&mut self, now_ms: i64) {
         self.reset_gap_buckets(now_ms);
         self.last_packet_num = 0;
+        self.seen_packets.fill(0);
+    }
+
+    fn remember_packet(&mut self, packet_num: u16, base_time: f64) -> bool {
+        let key = base_time.to_bits() ^ (u64::from(packet_num) << 48);
+        let slot = &mut self.seen_packets[usize::from(packet_num) & 8191];
+        let duplicate = *slot == key;
+        *slot = key;
+        duplicate
     }
 
     /// Number of active gap buckets.

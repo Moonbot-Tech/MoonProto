@@ -1057,6 +1057,22 @@ pub struct ClientSettingsCommand {
     pub(crate) join_sell_kind: u8,
     /// Compact `ArbConfig` form, not a raw settings record.
     pub arb_config: ArbConfigCompact,
+    /// Use the main sell controls for manual orders even when a manual strategy is selected.
+    pub ignore_strat_sell_price: bool,
+    /// Use paid IOC execution for crossing orders on HyperLiquid.
+    pub use_hl_fast_ioc: bool,
+    /// Pause new grid placements on the core.
+    pub grids_paused: bool,
+    /// Allow sending debug data to MoonBot servers.
+    pub can_collect_user_data: bool,
+    /// Allow sending trade results to MoonBot statistics servers.
+    pub can_send_trades: bool,
+    /// Send trade results anonymously.
+    pub sent_trades_anon: bool,
+    /// Omit the strategy type from trade reports.
+    pub dont_send_strat_info: bool,
+    /// Monitor core online status via MBOnlineBot. Requires can_send_trades.
+    pub watch_online_status: bool,
 }
 
 impl ClientSettingsCommand {

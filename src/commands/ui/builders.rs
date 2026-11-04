@@ -86,6 +86,14 @@ pub(crate) fn build_client_settings(cmd: &ClientSettingsCommand) -> Vec<u8> {
     out.push(flags);
     out.push(0); // colorCount = 0 (legacy slot, unused)
     out.push(cmd.trailing_stop as u8);
+    out.push(cmd.ignore_strat_sell_price as u8);
+    out.push(cmd.use_hl_fast_ioc as u8);
+    out.push(cmd.grids_paused as u8);
+    out.push(cmd.can_collect_user_data as u8);
+    out.push(cmd.can_send_trades as u8);
+    out.push(cmd.sent_trades_anon as u8);
+    out.push(cmd.dont_send_strat_info as u8);
+    out.push(cmd.watch_online_status as u8);
 
     out
 }

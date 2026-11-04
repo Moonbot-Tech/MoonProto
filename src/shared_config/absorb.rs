@@ -58,6 +58,8 @@ impl SharedConfig {
     /// | `s_price` | `ui.hotkeys_config.s_price` |
     /// | `sb_num` | `ui.hotkeys_config.sb_num` |
     /// | `join_sell_kind` | `trading.multi_orders.join_sell_kind` |
+    /// | `ignore_strat_sell_price` | `trading.ignore_strat_sell_price` |
+    /// | `use_hl_fast_ioc` | `trading.use_hl_fast_ioc` |
     ///
     /// Not absorbed: `emu_mode`, `temp_bl_symbols`, `temp_bl_times`,
     /// `manual_strategy_id` (needs name resolution — see module doc).
@@ -86,6 +88,8 @@ impl SharedConfig {
         s_price: &[f32; 6],
         sb_num: u8,
         join_sell_kind: u8,
+        ignore_strat_sell_price: bool,
+        use_hl_fast_ioc: bool,
     ) {
         self.trading.x_sell = x_sell;
         self.trading.x_sell_scalp = x_sell_scalp;
@@ -110,6 +114,8 @@ impl SharedConfig {
         self.ui.hotkeys_config.s_price = *s_price;
         self.ui.hotkeys_config.sb_num = sb_num;
         self.trading.multi_orders.join_sell_kind = join_sell_kind;
+        self.trading.ignore_strat_sell_price = ignore_strat_sell_price;
+        self.trading.use_hl_fast_ioc = use_hl_fast_ioc;
     }
 
     /// Overlay leverage-management fields from a `LevManage` command.

@@ -4388,7 +4388,7 @@ fn run_session_profit_sync_gate(cfg: &FireConfig, keys: ImportedKeys) {
         ));
         // Create a non-zero baseline on one market, then change a second market.
         // Two non-zero rows versus one changed row forces the core to send an incremental update.
-        run_order_lifecycle_gate_body(cfg, &mut a, &mut b);
+        run_order_lifecycle_gate_body(cfg, &mut a, &mut b, false);
         assert!(pump_pair_until_sessions(
             &mut a,
             &mut b,
@@ -4398,7 +4398,7 @@ fn run_session_profit_sync_gate(cfg: &FireConfig, keys: ImportedKeys) {
         ));
         let before_a = a.snapshot().session_profit_update_events;
         let before_b = b.snapshot().session_profit_update_events;
-        run_order_lifecycle_gate_body(&other_cfg, &mut b, &mut a);
+        run_order_lifecycle_gate_body(&other_cfg, &mut b, &mut a, false);
         assert!(pump_pair_until_sessions(
             &mut a,
             &mut b,
@@ -7412,7 +7412,7 @@ fn run_report_database_gate(cfg: &FireConfig, keys: ImportedKeys, pump_peer: &mu
 
     let restore_emu_mode = ensure_server_emulator_mode(cfg, &mut report_a, pump_peer);
     let order_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_order_lifecycle_gate_body(cfg, &mut report_a, pump_peer)
+        run_order_lifecycle_gate_body(cfg, &mut report_a, pump_peer, false)
     }));
     report_a.end_order_state_capture();
     pump_peer.end_order_state_capture();
@@ -7948,7 +7948,7 @@ fn run_order_lifecycle_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) 
     let restore_emu_mode = ensure_server_emulator_mode(cfg, a, b);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_manual_pending_gate_body(cfg, a, b);
-        let _ = run_order_lifecycle_gate_body(cfg, a, b);
+        let _ = run_order_lifecycle_gate_body(cfg, a, b, true);
     }));
     a.end_order_state_capture();
     b.end_order_state_capture();
@@ -8715,6 +8715,8 @@ fn run_shared_config_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
         changed.visual.chart_time_scale = original.visual.chart_time_scale.saturating_sub(1);
     }
 
+    changed.trading.ignore_strat_sell_price = !original.trading.ignore_strat_sell_price;
+    changed.trading.use_hl_fast_ioc = !original.trading.use_hl_fast_ioc;
     let changed_x_sell = changed.trading.x_sell;
     let changed_time_scale = changed.visual.chart_time_scale;
     let mutation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -8737,10 +8739,14 @@ fn run_shared_config_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
                         settings.shared_config.as_ref().is_some_and(|shared| {
                             shared.trading.x_sell == changed_x_sell
                                 && shared.visual.chart_time_scale == changed_time_scale
+                                && shared.trading.ignore_strat_sell_price == changed.trading.ignore_strat_sell_price
+                                && shared.trading.use_hl_fast_ioc == changed.trading.use_hl_fast_ioc
                         }) && settings
                             .client_settings
                             .as_ref()
-                            .is_some_and(|compact| compact.x_sell == changed_x_sell)
+                            .is_some_and(|compact| compact.x_sell == changed_x_sell
+                                && compact.ignore_strat_sell_price == changed.trading.ignore_strat_sell_price
+                                && compact.use_hl_fast_ioc == changed.trading.use_hl_fast_ioc)
                     })
                 }
             ),
@@ -8755,6 +8761,8 @@ fn run_shared_config_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
                 .expect("mutated shared config must remain editable");
             assert_eq!(built.trading.x_sell, changed_x_sell);
             assert_eq!(built.visual.chart_time_scale, changed_time_scale);
+            assert_eq!(built.trading.ignore_strat_sell_price, changed.trading.ignore_strat_sell_price);
+            assert_eq!(built.trading.use_hl_fast_ioc, changed.trading.use_hl_fast_ioc);
         }
     }));
 
@@ -8777,10 +8785,14 @@ fn run_shared_config_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
                     settings.shared_config.as_ref().is_some_and(|shared| {
                         shared.trading.x_sell == original.trading.x_sell
                             && shared.visual.chart_time_scale == original.visual.chart_time_scale
+                            && shared.trading.ignore_strat_sell_price == original.trading.ignore_strat_sell_price
+                            && shared.trading.use_hl_fast_ioc == original.trading.use_hl_fast_ioc
                     }) && settings
                         .client_settings
                         .as_ref()
-                        .is_some_and(|compact| compact.x_sell == original.trading.x_sell)
+                        .is_some_and(|compact| compact.x_sell == original.trading.x_sell
+                            && compact.ignore_strat_sell_price == original.trading.ignore_strat_sell_price
+                            && compact.use_hl_fast_ioc == original.trading.use_hl_fast_ioc)
                 })
             }
         ),
@@ -9307,10 +9319,40 @@ fn describe_captured_order_states(session: &Session, uid: u64) -> String {
         .join(" | ")
 }
 
+fn run_cancel_all_buys_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session, sell_uid: u64) {
+    let ask = market_live_ask(a, &cfg.market).expect("bulk cancellation needs a live ask");
+    let before: Vec<_> = a.state_snapshot().orders().iter().map(|order| order.uid).collect();
+    let buy_price = ask * 0.90;
+    let trigger = ask * 1.50;
+    a.send_new_order(&cfg.market, false, buy_price, 0, FIRETEST_ORDER_SIZE_USD);
+    a.send_new_pending_order(&cfg.market, false, trigger, FIRETEST_ORDER_SIZE_USD);
+    assert!(pump_pair_until_sessions(a, b, cfg.connect_timeout, "bulk-cancel entry creation", |a, b| {
+        [a, b].into_iter().all(|session| {
+            !matching_new_order_uids(session, &before, &cfg.market, false, buy_price, FIRETEST_ORDER_SIZE_USD, true).is_empty()
+                && !matching_pending_order_uids(session, &before, &cfg.market, false, trigger, FIRETEST_ORDER_SIZE_USD).is_empty()
+        })
+    }), "BUY and pending must reach both clients before bulk cancellation");
+    let buys = matching_new_order_uids(a, &before, &cfg.market, false, buy_price, FIRETEST_ORDER_SIZE_USD, true);
+    let pendings = matching_pending_order_uids(a, &before, &cfg.market, false, trigger, FIRETEST_ORDER_SIZE_USD);
+    assert_eq!(buys.len(), 1, "bulk-cancel BUY correlation must be unique");
+    assert_eq!(pendings.len(), 1, "bulk-cancel pending correlation must be unique");
+    let entries = [buys[0], pendings[0]];
+    a.client.trade().cancel_all_buys().expect("bulk cancellation must queue");
+    assert!(pump_pair_until_sessions(a, b, cfg.connect_timeout, "bulk BUY/pending cancellation", |a, b| {
+        [a, b].into_iter().all(|session| entries.iter().all(|uid| !order_is_present(session, *uid)))
+    }), "bulk cancellation must remove both entries from both clients");
+    for session in [&*a, &*b] {
+        assert!(session.state_snapshot().orders().get(sell_uid).is_some_and(|o| o.status == OrderWorkerStatus::SellSet),
+            "bulk cancellation must preserve the filled position's SELL exit");
+    }
+    println!("OK: cancel_all_buys removed BUY and pending on both clients, preserved SELL uid={sell_uid}");
+}
+
 fn run_order_lifecycle_gate_body(
     cfg: &FireConfig,
     a: &mut Session,
     b: &mut Session,
+    check_bulk_cancel: bool,
 ) -> FireTestClosedOrderProbe {
     let started_at = MoonTime::now();
     a.begin_order_state_capture();
@@ -9565,6 +9607,10 @@ fn run_order_lifecycle_gate_body(
         describe_session_order(a, server_uid),
         describe_session_order(b, server_uid)
     );
+
+    if check_bulk_cancel {
+        run_cancel_all_buys_gate(cfg, a, b, server_uid);
+    }
 
     let a_terminal_event_from = a.order_state_event_count();
     let b_terminal_event_from = b.order_state_event_count();

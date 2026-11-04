@@ -16,6 +16,7 @@ fn dummy_cfg() -> ClientConfig {
             check_tags_every: None,
         },
         market_history: crate::state::MarketHistorySizing::default(),
+        allow_trade_aggregation: 0,
     }
 }
 
@@ -34,7 +35,7 @@ fn subscribe_all_trades_want_mm(payload: &[u8]) -> Option<bool> {
     if method_id(payload)? != EngineMethod::SubscribeAllTrades.to_byte() {
         return None;
     }
-    payload.last().map(|v| *v != 0)
+    payload.get(22).map(|v| *v != 0)
 }
 
 fn market_names_count(payload: &[u8]) -> Option<i32> {
@@ -397,4 +398,40 @@ fn restore_combined_sends_trades_plus_orderbook_batches() {
         .filter(|m| **m == Some(EngineMethod::SubscribeOrderBook.to_byte()))
         .count();
     assert_eq!(book_count, 1);
+}
+
+#[test]
+fn trade_aggregation_permission_survives_subscription_replay() {
+    use crate::state::MarketHistorySizing;
+    for (history, requested, expected) in [
+        (MarketHistorySizing::Auto, 0, 0i32),
+        (MarketHistorySizing::Auto, 100, 100),
+        (MarketHistorySizing::Auto, 255, 100),
+        (MarketHistorySizing::Compact, 100, 0),
+        (MarketHistorySizing::compact_with_budget_percent(150), 100, 0),
+    ] {
+        let mut cfg = dummy_cfg();
+        cfg.market_history = history;
+        cfg.allow_trade_aggregation = requested;
+        let mut client = Client::new(cfg);
+        mark_post_init(&mut client);
+        client.subscribe_all_trades(true);
+        for phase in 0..4 {
+            let sent = drain_api_requests(&client);
+            assert_eq!(sent.len(), 1, "phase {phase}, {history:?}");
+            assert_eq!(method_id(&sent[0]), Some(EngineMethod::SubscribeAllTrades.to_byte()));
+            assert_eq!(&sent[0][18..22], &5i32.to_le_bytes());
+            assert_eq!(sent[0][22], 1, "want_mm must remain first");
+            assert_eq!(&sent[0][23..], &expected.to_le_bytes());
+            match phase {
+                0 => client.send_registry_subscriptions_after_init(),
+                1 => client.restore_registry_subscriptions(),
+                2 => {
+                    client.reconnect.pending_trades_resubscribe_after_ms = Some(100000);
+                    client.tick_trades_reconnect_sequence(100000, 0);
+                }
+                _ => {}
+            }
+        }
+    }
 }

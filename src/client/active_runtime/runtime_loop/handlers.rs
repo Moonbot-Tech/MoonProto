@@ -362,7 +362,10 @@ pub(super) fn handle_command(
         #[cfg(any(test, feature = "diagnostics"))]
         RuntimeCommand::DebugSendTradesSubscription(subscribe) => {
             let payload = if subscribe {
-                crate::commands::engine_request::subscribe_all_trades(false)
+                crate::commands::engine_request::subscribe_all_trades(
+                    false,
+                    client.cfg.trade_aggregation_limit(),
+                )
             } else {
                 crate::commands::engine_request::unsubscribe_all_trades()
             };
@@ -1042,6 +1045,9 @@ pub(super) fn handle_trade_action(
                 return Ok(false);
             }
             Ok(dispatcher.orders_mut().mark_panic_sell_all())
+        }
+        RuntimeTradeCommandKind::CancelAllBuys => {
+            Ok(client.cancel_all_buys(dispatcher.orders_mut(), random_nonzero_u64()))
         }
     }
 }

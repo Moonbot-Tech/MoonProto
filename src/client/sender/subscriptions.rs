@@ -304,6 +304,7 @@ impl ClientSender {
         }
         self.try_send_api_request(crate::commands::engine_request::subscribe_all_trades(
             want_mm,
+            self.shared.allow_trade_aggregation,
         ))
     }
 

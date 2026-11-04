@@ -116,10 +116,9 @@ pub(crate) fn build_engine_request(
 /// application policy (active MM strategies, heatmap UI, etc.); the library does
 /// not infer it.
 ///
-/// Wire-format: params = 1 byte bool (Delphi `MoonProtoEngine.pas:274
-/// req.WriteBool(MMOrdersSubscribed)`).
-pub(crate) fn subscribe_all_trades(want_mm_orders: bool) -> Vec<u8> {
-    let params = [if want_mm_orders { 1u8 } else { 0u8 }];
+/// Params: want_mm_orders (bool), AllowTradeAggregation (little-endian i32).
+pub(crate) fn subscribe_all_trades(want_mm_orders: bool, allow_trade_aggregation: u8) -> Vec<u8> {
+    let params = [u8::from(want_mm_orders), allow_trade_aggregation, 0, 0, 0];
     build_engine_request_full(EngineMethod::SubscribeAllTrades, "", &[], &params)
 }
 

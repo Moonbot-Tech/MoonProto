@@ -762,6 +762,20 @@ based on current RTT. If a bucket is still incomplete after its retry budget, it
 is closed and the live stream continues. This is intentional: the protocol
 should not flood the channel forever for old trade packets.
 
+The first request uses a 32 ms reordering threshold when the core's reported
+delivery ratio is at least 97%. Between 97% and 85% this rises linearly to the
+normal RTT-based delay; at 85% or below the normal delay applies. Retries,
+including a refunded retry, keep the normal delay. Compact still waits 30 ms.
+The threshold is not a promise to send at exactly 32 ms: checks need incoming
+packets and retain the 100 ms throttle.
+
+Repeated resend payloads are suppressed before updating history, volumes,
+candles or watcher fills. Gap maintenance continues even for duplicates. The
+cache costs 64 KiB per client and resets on a new server session, not on a gap
+reset. It remembers 8192 slots, so eviction can permit a later repeated resend;
+primary packets always apply, including a primary arriving after its resend.
+This is bounded duplicate suppression, not exactly-once delivery.
+
 `MoonClient` runs the recovery tick after successfully parsed live/resend trade
 packets and throttles it to roughly 100 ms. Applications should not send resend
 requests manually.

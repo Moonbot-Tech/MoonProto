@@ -16,6 +16,7 @@ fn dummy_cfg() -> ClientConfig {
             check_tags_every: None,
         },
         market_history: crate::state::MarketHistorySizing::default(),
+        allow_trade_aggregation: 0,
     }
 }
 

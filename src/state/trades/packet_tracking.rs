@@ -131,7 +131,7 @@ impl TradesState {
     #[must_use = "TradesEvents must be processed for diagnostics and gap recovery"]
     #[cfg(test)]
     pub(crate) fn on_packet(&mut self, pkt: TradesPacket, now_ms: i64) -> Vec<TradesEvent> {
-        let effects = self.on_packet_header(pkt.packet_num, now_ms);
+        let effects = self.on_packet_header(pkt.packet_num, pkt.base_time, now_ms);
         materialize_packet_effects(effects, pkt)
     }
 
@@ -141,30 +141,12 @@ impl TradesState {
     /// bookkeeping before the row-reading loop, so the Rust dispatcher can do
     /// the same and apply decoded sections directly without building an owned
     /// packet for public callbacks.
-    pub(crate) fn on_packet_header(&mut self, packet_num: u16, now_ms: i64) -> TradesPacketEffects {
+    pub(crate) fn on_packet_header(&mut self, packet_num: u16, base_time: f64, now_ms: i64) -> TradesPacketEffects {
+        self.remember_packet(packet_num, base_time);
         let mut events = TradesPacketEffects::new();
 
-        // Packet-number tracking is best-effort loss recovery, not anti-replay.
-        // Delivery is unordered and unreliable: a delayed/missing packet is
-        // re-sent by the server (TradesResendResponse -> on_packet_resend) and
-        // applied on arrival; a duplicate is applied too — for a feed, "see it
-        // late" beats dropping it or waiting for strict order.
-        // Anti-replay is not warranted here:
-        //  - it would not shrink the attacker's worst case: the same on-path
-        //    attacker can drop packets, and a dropped channel (loss of position
-        //    control -> liquidation) is the dominant, unpreventable harm. A replay
-        //    is strictly weaker — nothing is executed off the feed (account/order
-        //    state is server-side under AES-GCM), the display self-corrects on the
-        //    next live packet, and sustaining a stale view needs dropping the live
-        //    feed anyway (the dominant-harm regime); the residual is bounded well
-        //    below a liquidation;
-        //  - and it would not even work cleanly: packet_num is a u16 that wraps
-        //    within seconds on a live stream with no wider authenticated counter,
-        //    so across the wrap a replayed number is indistinguishable from a
-        //    legitimately recurring one — a window would drop real packets or miss
-        //    the replay.
-        // Replay of account-state commands is handled separately by the crypted
-        // slider (its msg_num is a non-wrapping u64 inside AEAD).
+        // Primary packets always reach consumers. Only repeated resend payloads
+        // are suppressed, using both the packet number and the raw timestamp.
 
         // === First packet OR long pause → reset ===
         let pause_detected = self.trades_started
@@ -277,12 +259,12 @@ impl TradesState {
     /// `ProcessTradesStream(TrackPackets=False)`.
     #[cfg(test)]
     pub(crate) fn on_packet_resend(&mut self, pkt: TradesPacket) -> Vec<TradesEvent> {
-        let effects = self.on_packet_resend_header(pkt.packet_num);
+        let effects = self.on_packet_resend_header(pkt.packet_num, pkt.base_time);
         materialize_packet_effects(effects, pkt)
     }
 
     /// Packet-number branch of `ProcessTradesStream(TrackPackets=False)`.
-    pub(crate) fn on_packet_resend_header(&mut self, packet_num: u16) -> TradesPacketEffects {
+    pub(crate) fn on_packet_resend_header(&mut self, packet_num: u16, base_time: f64) -> TradesPacketEffects {
         let mut events = TradesPacketEffects::new();
         if let Some(idx) = self.find_bucket_for_packet(packet_num, false, 0, 0) {
             let b = &mut self.buckets[idx];
@@ -296,12 +278,14 @@ impl TradesState {
                 bucket_seq_range: bucket_range,
             });
         } else {
-            // Resend arrived for a long-closed bucket. Delphi TrackPackets=False does
-            // not mark a bucket, but still parses the sections below and applies the
-            // trades; therefore emit a diagnostic OutOfOrder + Apply.
+            // A resend outside open buckets can still contain unseen trades.
             events.push(TradesPacketEffect::OutOfOrder { packet_num });
         }
-        events.push(TradesPacketEffect::Apply);
+        // Suppress only repeated resend payloads; bucket maintenance above and
+        // the recovery tick must still run. Primary packets always apply.
+        if !self.remember_packet(packet_num, base_time) {
+            events.push(TradesPacketEffect::Apply);
+        }
         events
     }
 }

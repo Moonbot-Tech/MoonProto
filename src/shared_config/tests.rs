@@ -477,6 +477,8 @@ fn absorb_client_settings() {
         &[2.0, 4.0, 6.0, 8.0, 10.0, 50.0], // s_price
         3,                                 // sb_num
         1,                                 // join_sell_kind
+        true,                              // ignore_strat_sell_price
+        true,                              // use_hl_fast_ioc
     );
 
     assert_eq!(cfg.trading.x_sell, 10);

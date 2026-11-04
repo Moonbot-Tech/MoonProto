@@ -81,6 +81,7 @@ fn dummy_cfg() -> ClientConfig {
             check_tags_every: None,
         },
         market_history: crate::state::MarketHistorySizing::default(),
+        allow_trade_aggregation: 0,
     }
 }
 
@@ -117,7 +118,7 @@ fn subscribe_all_trades_want_mm(payload: &[u8]) -> Option<bool> {
     if engine_request_method(payload)? != EngineMethod::SubscribeAllTrades {
         return None;
     }
-    payload.last().map(|v| *v != 0)
+    payload.get(22).map(|v| *v != 0)
 }
 
 fn build_engine_response_payload(request_uid: u64, method: EngineMethod, data: &[u8]) -> Vec<u8> {

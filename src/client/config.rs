@@ -330,6 +330,11 @@ pub struct ClientConfig {
     /// active. Default `Auto` sizes rings from system memory after the market
     /// list and requested trade-storage scope are known.
     pub market_history: MarketHistorySizing,
+    /// Allow the core to aggregate trades below this USD amount (0..=100).
+    /// Default 0 keeps the original price-based aggregation. Compact stations
+    /// always send 0; any client with 0 disables the new volume-based mode for all.
+    /// Older cores ignore this option.
+    pub allow_trade_aggregation: u8,
 }
 
 impl ClientConfig {
@@ -358,6 +363,15 @@ impl ClientConfig {
             ntp_host: Some("pool.ntp.org".to_string()),
             refresh: RefreshConfig::default(),
             market_history: MarketHistorySizing::default(),
+            allow_trade_aggregation: 0,
+        }
+    }
+
+    pub(crate) fn trade_aggregation_limit(&self) -> u8 {
+        if self.market_history.is_compact() {
+            0
+        } else {
+            self.allow_trade_aggregation.min(100)
         }
     }
 
@@ -429,6 +443,7 @@ impl std::fmt::Debug for ClientConfig {
             .field("ntp_host", &self.ntp_host)
             .field("refresh", &self.refresh)
             .field("market_history", &self.market_history)
+            .field("allow_trade_aggregation", &self.allow_trade_aggregation)
             .finish()
     }
 }

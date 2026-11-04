@@ -16,6 +16,7 @@ fn dummy_cfg() -> ClientConfig {
             check_tags_every: None,
         },
         market_history: crate::state::MarketHistorySizing::default(),
+        allow_trade_aggregation: 0,
     }
 }
 
@@ -208,7 +209,7 @@ fn pre_init_raw_client_send_cmd_is_gated_but_init_api_is_allowed() {
     assert!(low.is_empty());
 
     client.send_api_request(&crate::commands::engine_request::subscribe_all_trades(
-        false,
+        false, 0,
     ));
     let (sliced, high, low) = client.take_send_queues_for_test();
     assert!(sliced.is_empty());
@@ -228,7 +229,7 @@ fn pre_init_raw_client_send_cmd_is_gated_but_init_api_is_allowed() {
 #[test]
 fn pre_init_async_api_does_not_register_pending_for_gated_methods() {
     let client = Client::new(dummy_cfg());
-    let subscribe = crate::commands::engine_request::subscribe_all_trades(false);
+    let subscribe = crate::commands::engine_request::subscribe_all_trades(false, 0);
 
     let rx = client.send_api_request_async(&subscribe);
 

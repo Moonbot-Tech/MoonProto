@@ -23,6 +23,12 @@ application examples: some are intentionally low-level protocol guards.
   both clients and after reconnect. Zero means no prepared package and is valid.
   Unit tests cover older cores without the field, incomplete/future tails,
   startup recovery and live replacement of the retained value.
+  Full order-flow checks also cancel a BUY and a pending order through
+  `trade().cancel_all_buys()` while preserving a SELL exit on both clients.
+  Shared-config mutation/restore checks include both compact/shared trading
+  flags; unit tests force compact-before-full and full-before-compact ordering.
+  Recovery regressions cover repeated resend payloads, raw timestamp changes,
+  sequence wrap, cache eviction, session resets, and recovery on a duplicate.
   Order-flow checks require the filled buy and subsequent sell on both clients.
   They do not require every intermediate phase event: a newer sell state can
   supersede the buy-completed snapshot. A deterministic regression checks delayed

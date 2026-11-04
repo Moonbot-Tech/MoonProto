@@ -867,15 +867,23 @@ impl EventDispatcher {
         match cmd {
             Command::Order => self.client_new_data_order(payload, now_ms, out),
             Command::OrderBook => self.client_new_data_order_book(payload, now_ms, out),
-            Command::TradesStream => {
-                self.client_new_data_trades_stream(payload, now_ms, history_now_time_days, out)
+            Command::TradesStream | Command::TradesResendResponse => {
+                let processed = if cmd == Command::TradesStream {
+                    self.client_new_data_trades_stream(payload, now_ms, history_now_time_days, out)
+                } else {
+                    self.client_new_data_trades_resend_response(payload, now_ms, history_now_time_days, out)
+                };
+                // Valid duplicate resends still drive recovery, even though no
+                // payload was applied and no public Applied signal was emitted.
+                if processed {
+                    if let Some(ctx) = active_ctx {
+                        let (payloads, events) = self.trades.tick_with_events(
+                            ctx.round_trip_delay_ms, ctx.delivery_ratio, now_ms);
+                        out.extend(events.into_iter().map(Event::Trade));
+                        actions.extend(payloads.into_iter().map(|payload| ActiveAction::TradesResend { payload }));
+                    }
+                }
             }
-            Command::TradesResendResponse => self.client_new_data_trades_resend_response(
-                payload,
-                now_ms,
-                history_now_time_days,
-                out,
-            ),
             Command::Balance => {
                 self.client_new_data_balance(payload, now_ms, history_now_time_days, out, actions)
             }

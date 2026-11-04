@@ -216,6 +216,25 @@ impl Client {
         )
     }
 
+    pub(crate) fn cancel_all_buys(&self, orders: &mut crate::state::OrderState, request_uid: u64) -> bool {
+        use crate::commands::trade::{OrderCommandPayload, OrderWorkerStatus};
+
+        if !self.domain_ready_for_typed_send() {
+            return false;
+        }
+        self.send_order_command_at(request_uid, OrderCommandPayload::CancelAllBuys);
+        // Keep addressed cancellations for older cores, just like the core UI.
+        let uids: Vec<_> = orders.read_model().iter()
+            .filter(|order| matches!(order.status, OrderWorkerStatus::None | OrderWorkerStatus::BuySet))
+            .map(|order| order.uid)
+            .collect();
+        let mut changed = false;
+        for uid in uids {
+            changed |= self.cancel_order(orders, uid);
+        }
+        changed
+    }
+
     pub(crate) fn request_order_status(&self, order_id: u64, exact_rev: u64) -> bool {
         let raw = crate::commands::trade::build_order_status_request(order_id, exact_rev);
         self.send_trade(raw)

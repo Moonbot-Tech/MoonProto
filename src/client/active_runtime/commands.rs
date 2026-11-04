@@ -215,6 +215,7 @@ pub(super) enum RuntimeTradeCommandKind {
         market_name: String,
     },
     PanicSellAll,
+    CancelAllBuys,
 }
 
 #[cfg(any(test, feature = "diagnostics"))]
@@ -352,6 +353,7 @@ impl RuntimeTradeCommandKind {
             Self::MarketSplitPosition { .. } => (89, 1),
             Self::Penalty { .. } => (90, 1),
             Self::PanicSellAll => (91, 0),
+            Self::CancelAllBuys => (95, 0),
         }
     }
 }

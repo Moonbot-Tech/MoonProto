@@ -217,6 +217,8 @@ impl SettingsState {
                     &settings.s_price,
                     settings.sb_num,
                     settings.join_sell_kind,
+                    settings.ignore_strat_sell_price,
+                    settings.use_hl_fast_ioc,
                 );
             }
         }
@@ -450,10 +452,15 @@ mod tests {
             sb_num: 0,
             join_sell_kind: 0,
             arb_config: ArbConfigCompact::default(),
+            can_send_trades: true,
+            dont_send_strat_info: true,
+            ..ClientSettingsCommand::default()
         };
         let ev = st.apply(UICommand::ClientSettings(Box::new(cmd)));
         assert!(matches!(ev, Some(SettingsEvent::ClientSettingsUpdated)));
         assert_eq!(st.client_settings.as_ref().unwrap().x_sell, 50);
+        assert!(st.client_settings.as_ref().unwrap().can_send_trades);
+        assert!(st.client_settings.as_ref().unwrap().dont_send_strat_info);
     }
 
     #[test]
@@ -558,6 +565,31 @@ mod tests {
         st.apply(UICommand::ClientSettings(Box::new(compact)));
 
         assert_eq!(st.build_shared_config().unwrap().trading.x_sell, 25);
+    }
+
+    #[test]
+    fn compact_shared_flags_overlay_both_directions_and_yield_to_newer_full_config() {
+        for value in [true, false] {
+            let mut st = SettingsState::new();
+            let mut full = crate::shared_config::SharedConfig::default();
+            full.trading.ignore_strat_sell_price = !value;
+            full.trading.use_hl_fast_ioc = !value;
+            apply_shared_config(&mut st, &full);
+            let compact = ClientSettingsCommand {
+                ignore_strat_sell_price: value,
+                use_hl_fast_ioc: value,
+                ..Default::default()
+            };
+            let bytes = build_client_settings(&compact);
+            st.apply(UICommand::parse(&bytes).unwrap());
+            let edit = st.build_shared_config().unwrap();
+            let bytes = crate::shared_config::serialize_payload(&edit).unwrap();
+            let sent = crate::shared_config::parse_payload(&bytes).unwrap();
+            assert_eq!((sent.trading.ignore_strat_sell_price, sent.trading.use_hl_fast_ioc), (value, value));
+            apply_shared_config(&mut st, &full);
+            let edit = st.build_shared_config().unwrap();
+            assert_eq!((edit.trading.ignore_strat_sell_price, edit.trading.use_hl_fast_ioc), (!value, !value));
+        }
     }
 
     #[test]

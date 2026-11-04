@@ -311,8 +311,11 @@ println!("Minimum core: {}", compatibility.minimum_core_version);
 println!("{}", compatibility.comment);
 ```
 
-The current requirement is **MoonBot 7.72 L7**, which adds manual full strategy
-refresh. Update older cores before using that feature; some older Linux builds
+The current requirement is **MoonBot 7.72 L8**, which adds reporting/privacy
+controls and core-wide BUY/pending cancellation. Older compatible cores ignore
+reporting edits; `trade().cancel_all_buys()` still cancels entries known to the
+client. L7 adds manual full strategy refresh. Update older cores before using
+that feature; some older Linux builds
 crash on unknown Engine requests. See [strategy refresh](strats.md#requesting-the-cores-current-list).
 L6 supports prepared release updates and service settings; L5 supports
 startup-state recovery but does not report prepared releases.

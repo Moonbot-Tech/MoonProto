@@ -563,6 +563,16 @@ impl MoonTrade {
         self.send_intent(RuntimeTradeCommandKind::PanicSellAll)
     }
 
+    /// Cancel all entry BUYs and pending orders, preserving SELL exits.
+    ///
+    /// MoonBot 7.72 L8+ also cancels entries not yet visible to this client.
+    /// Addressed cancellation of known entries remains as a fallback for older
+    /// compatible cores. Success means the intent was queued; observe order
+    /// updates for the outcome. This acts across all markets on the core.
+    pub fn cancel_all_buys(&self) -> Result<(), MoonClientError> {
+        self.send_intent(RuntimeTradeCommandKind::CancelAllBuys)
+    }
+
     fn send_intent(&self, kind: RuntimeTradeCommandKind) -> Result<(), MoonClientError> {
         self.tx
             .send(RuntimeCommand::TradeAction(kind))

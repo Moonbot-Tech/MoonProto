@@ -27,6 +27,7 @@ impl Client {
     pub(crate) fn sender_internal(&self) -> ClientSender {
         ClientSender {
             shared: Arc::new(ClientSenderShared {
+                allow_trade_aggregation: self.cfg.trade_aggregation_limit(),
                 app_queue_alive: Arc::clone(&self.lifecycle.app_queue_alive),
                 domain_ready: Arc::clone(&self.subscriptions.domain_ready_flag),
                 send_lock: Arc::clone(&self.send_lock),
@@ -305,6 +306,7 @@ impl Client {
                 let want_mm = sub.want_mm;
                 self.send_api_request(&crate::commands::engine_request::subscribe_all_trades(
                     want_mm,
+                    self.cfg.trade_aggregation_limit(),
                 ));
                 if let Some(mm_orders) = mm_orders_sub {
                     if mm_orders != want_mm {
@@ -432,7 +434,10 @@ impl Client {
                 self.reconnect.pending_trades_resubscribe_after_ms = None;
                 if let Some(want_mm) = self.registry_trades_want_mm() {
                     self.send_api_request_at(
-                        &crate::commands::engine_request::subscribe_all_trades(want_mm),
+                        &crate::commands::engine_request::subscribe_all_trades(
+                            want_mm,
+                            self.cfg.trade_aggregation_limit(),
+                        ),
                         now_ms,
                     );
                     if let Some(mm_orders) = self.registry_trades_mm_orders_intent() {
@@ -640,6 +645,7 @@ impl Client {
                 let want_mm = sub.want_mm;
                 self.send_api_request(&crate::commands::engine_request::subscribe_all_trades(
                     want_mm,
+                    self.cfg.trade_aggregation_limit(),
                 ));
                 let mut registry = self.subscriptions.subscription_registry.lock();
                 registry.mm_orders_sub = Some(want_mm);

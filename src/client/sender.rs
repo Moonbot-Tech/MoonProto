@@ -59,6 +59,7 @@ pub(crate) struct ClientSender {
 }
 
 pub(crate) struct ClientSenderShared {
+    pub(crate) allow_trade_aggregation: u8,
     pub(crate) app_queue_alive: Arc<AtomicBool>,
     pub(crate) domain_ready: Arc<AtomicBool>,
     pub(crate) send_lock: Arc<Mutex<SendLockState>>,

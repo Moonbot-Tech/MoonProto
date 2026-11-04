@@ -11,6 +11,7 @@ fn dummy_cfg(refresh: RefreshConfig) -> ClientConfig {
         ntp_host: None,
         refresh,
         market_history: crate::state::MarketHistorySizing::default(),
+        allow_trade_aggregation: 0,
     }
 }
 

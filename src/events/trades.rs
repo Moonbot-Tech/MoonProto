@@ -23,14 +23,14 @@ impl EventDispatcher {
         now_ms: i64,
         history_now_time_days: Option<f64>,
         out: &mut Vec<Event>,
-    ) {
+    ) -> bool {
         // Active library: block TradesStream processing until the market indexes are synced.
         if !self.markets.indexes_synchronized {
-            return;
+            return false;
         }
         match decode_trades_packet(payload) {
             Some(decoded) => {
-                let effects = self.trades.on_packet_header(decoded.packet_num, now_ms);
+                let effects = self.trades.on_packet_header(decoded.packet_num, decoded.base_time, now_ms);
                 self.collect_known_trades_events(
                     &decoded,
                     effects,
@@ -38,8 +38,12 @@ impl EventDispatcher {
                     history_now_time_days,
                     out,
                 );
+                true
             }
-            None => Self::push_parse_failed(out, Command::TradesStream, payload),
+            None => {
+                Self::push_parse_failed(out, Command::TradesStream, payload);
+                false
+            }
         }
     }
 
@@ -49,16 +53,18 @@ impl EventDispatcher {
         now_ms: i64,
         history_now_time_days: Option<f64>,
         out: &mut Vec<Event>,
-    ) {
+    ) -> bool {
         // Delphi `ProcessTradesResendBatch` feeds every inner packet back into
         // `ProcessTradesStream(..., False)`, so the same fresh-index gate applies.
         if !self.markets.indexes_synchronized {
-            return;
+            return false;
         }
+        let mut processed = false;
         for inner in iter_trades_resend_response(payload) {
             match decode_trades_packet(inner) {
                 Some(decoded) => {
-                    let effects = self.trades.on_packet_resend_header(decoded.packet_num);
+                    processed = true;
+                    let effects = self.trades.on_packet_resend_header(decoded.packet_num, decoded.base_time);
                     self.collect_known_trades_events(
                         &decoded,
                         effects,
@@ -70,6 +76,7 @@ impl EventDispatcher {
                 None => Self::push_parse_failed(out, Command::TradesResendResponse, inner),
             }
         }
+        processed
     }
 
     // parity: MoonBot MoonProtoEngine.pas:ProcessTradesStream (TimeShift fix on first row)

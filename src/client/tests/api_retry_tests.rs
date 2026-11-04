@@ -14,6 +14,7 @@ fn dummy_cfg() -> ClientConfig {
             check_tags_every: None,
         },
         market_history: crate::state::MarketHistorySizing::default(),
+        allow_trade_aggregation: 0,
     }
 }
 
@@ -36,7 +37,7 @@ fn engine_api_sliced_requests_use_registry_retry_count() {
 #[test]
 fn rejected_pre_init_subscription_does_not_update_reconnect_clocks() {
     let client = Client::new(dummy_cfg());
-    let raw = crate::commands::engine_request::subscribe_all_trades(false);
+    let raw = crate::commands::engine_request::subscribe_all_trades(false, 0);
 
     client.send_api_request_at(&raw, 1234);
 

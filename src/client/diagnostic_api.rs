@@ -79,6 +79,10 @@ impl Client {
         self.round_trip_delay
     }
 
+    pub(crate) fn delivery_ratio(&self) -> f64 {
+        self.rs
+    }
+
     pub(crate) fn kernel_health(&self) -> crate::state::KernelHealth {
         self.kernel_health
     }

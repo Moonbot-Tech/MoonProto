@@ -644,6 +644,47 @@ fn parse_client_settings(
         fallback.map(|f| f.trailing_stop).unwrap_or(false)
     };
 
+    let ignore_strat_sell_price = if can_read_trailing_stop && *pos < data.len() {
+        read_bool_zero_tail(data, pos)
+    } else {
+        fallback.map(|f| f.ignore_strat_sell_price).unwrap_or(false)
+    };
+    let use_hl_fast_ioc = if can_read_trailing_stop && *pos < data.len() {
+        read_bool_zero_tail(data, pos)
+    } else {
+        fallback.map(|f| f.use_hl_fast_ioc).unwrap_or(false)
+    };
+    let grids_paused = if can_read_trailing_stop && *pos < data.len() {
+        read_bool_zero_tail(data, pos)
+    } else {
+        false // An older core does not pause grid placements.
+    };
+    let can_collect_user_data = if can_read_trailing_stop && *pos < data.len() {
+        read_bool_zero_tail(data, pos)
+    } else {
+        fallback.map(|f| f.can_collect_user_data).unwrap_or(false)
+    };
+    let can_send_trades = if can_read_trailing_stop && *pos < data.len() {
+        read_bool_zero_tail(data, pos)
+    } else {
+        fallback.map(|f| f.can_send_trades).unwrap_or(true)
+    };
+    let sent_trades_anon = if can_read_trailing_stop && *pos < data.len() {
+        read_bool_zero_tail(data, pos)
+    } else {
+        fallback.map(|f| f.sent_trades_anon).unwrap_or(false)
+    };
+    let dont_send_strat_info = if can_read_trailing_stop && *pos < data.len() {
+        read_bool_zero_tail(data, pos)
+    } else {
+        fallback.map(|f| f.dont_send_strat_info).unwrap_or(false)
+    };
+    let watch_online_status = if can_read_trailing_stop && *pos < data.len() {
+        read_bool_zero_tail(data, pos)
+    } else {
+        fallback.map(|f| f.watch_online_status).unwrap_or(false)
+    };
+
     Some(ClientSettingsCommand {
         uid,
         x_sell,
@@ -677,6 +718,14 @@ fn parse_client_settings(
         sb_num,
         join_sell_kind,
         arb_config,
+        ignore_strat_sell_price,
+        use_hl_fast_ioc,
+        grids_paused,
+        can_collect_user_data,
+        can_send_trades,
+        sent_trades_anon,
+        dont_send_strat_info,
+        watch_online_status,
     })
 }
 

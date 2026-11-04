@@ -29,6 +29,7 @@ fn make_sender() -> SenderFixture {
     (
         ClientSender {
             shared: Arc::new(ClientSenderShared {
+                allow_trade_aggregation: 0,
                 app_queue_alive: Arc::clone(&app_queue_alive),
                 domain_ready: Arc::clone(&domain_ready),
                 send_lock: Arc::clone(&send_lock),
@@ -459,7 +460,7 @@ fn pre_init_raw_sender_api_allows_only_init_methods() {
     let (sender, _, send_q, _, _, domain_ready) = make_sender();
     domain_ready.store(false, Ordering::Relaxed);
 
-    let subscribe = crate::commands::engine_request::subscribe_all_trades(false);
+    let subscribe = crate::commands::engine_request::subscribe_all_trades(false, 0);
     let err = sender.try_send_api_request(subscribe).unwrap_err();
     assert_eq!(err, SubscribeError::DomainNotReady);
     assert!(take_send_items(&send_q).is_empty());

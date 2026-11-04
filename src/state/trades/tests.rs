@@ -10,6 +10,82 @@ fn make_pkt(packet_num: u16) -> TradesPacket {
 }
 
 #[test]
+fn resend_dedup_uses_raw_time_and_survives_gap_reset_but_not_session_reset() {
+    let mut s = TradesState::new();
+    let time = 45_000.0f64;
+    let applies = |effects: TradesPacketEffects| effects.iter().any(|e| e == TradesPacketEffect::Apply);
+    assert!(applies(s.on_packet_header(801, time, 1000)));
+    assert!(!applies(s.on_packet_resend_header(801, time)));
+    assert!(!applies(s.on_packet_resend_header(801, time)));
+    // A primary after a resend is intentionally still accepted.
+    assert!(applies(s.on_packet_header(801, time, 1001)));
+    let next_time = f64::from_bits(time.to_bits() + 1);
+    assert!(applies(s.on_packet_resend_header(801, next_time)));
+    s.reset_gap_buckets(1100);
+    assert!(!applies(s.on_packet_resend_header(801, next_time)));
+    // The cache is finite: another identity can replace a slot.
+    assert!(applies(s.on_packet_resend_header(801 + 8192, time)));
+    assert!(applies(s.on_packet_resend_header(801, next_time)));
+    s.full_reset_at(1200);
+    assert!(applies(s.on_packet_resend_header(801, next_time)));
+    assert!(applies(s.on_packet_header(u16::MAX, time, 1300)));
+    assert!(applies(s.on_packet_header(0, time, 1301)));
+    assert!(!applies(s.on_packet_resend_header(u16::MAX, time)));
+    assert!(!applies(s.on_packet_resend_header(0, time)));
+}
+
+#[test]
+fn duplicate_resend_still_fills_and_closes_a_new_gap() {
+    let mut s = TradesState::new();
+    s.on_packet_resend_header(101, 45_000.0);
+    s.on_packet_header(100, 45_000.0, 1000);
+    s.on_packet_header(102, 45_000.0, 1001);
+    let effects = s.on_packet_resend_header(101, 45_000.0);
+    assert!(effects.iter().any(|e| matches!(e, TradesPacketEffect::GapFilled { .. })));
+    assert!(!effects.iter().any(|e| e == TradesPacketEffect::Apply));
+    let (requests, events) = s.tick_with_events(50, 1.0, 1102);
+    assert!(requests.is_empty());
+    assert!(events.iter().any(|e| matches!(e, TradesEvent::BucketClosed { all_received: true, .. })));
+}
+
+#[test]
+fn first_resend_delay_interpolates_quality_and_rtt_without_accelerating_retries() {
+    for (rs, rtt, threshold) in [(1.0, 50, 32), (0.97, 500, 32), (0.91, 50, 166),
+        (0.85, 50, 300), (0.5, 1000, 1200)] {
+        for (delta, expected) in [(threshold - 1, false), (threshold + 1, true)] {
+            let mut s = TradesState::new();
+            s.on_packet_header(100, 45_000.0, 1000);
+            s.on_packet_header(102, 45_000.0, 1000);
+            let (requests, _) = s.tick_with_events(rtt, rs, 1000 + delta);
+            assert_eq!(!requests.is_empty(), expected, "RS={rs}, RTT={rtt}, delta={delta}");
+        }
+    }
+    let mut s = TradesState::new();
+    s.on_packet_header(100, 45_000.0, 1000);
+    s.on_packet_header(102, 45_000.0, 1000);
+    assert!(!s.tick_with_events(50, 1.0, 1033).0.is_empty());
+    assert!(s.tick_with_events(50, 1.0, 1200).0.is_empty());
+    assert!(!s.tick_with_events(50, 1.0, 1510).0.is_empty());
+    let b = s.buckets.iter_mut().find(|b| b.active).unwrap();
+    b.retry_count = 0;
+    b.refund_used = true;
+    b.last_retry_ms = 1510;
+    assert!(s.tick_with_events(50, 1.0, 1700).0.is_empty());
+    assert!(!s.tick_with_events(50, 1.0, 1811).0.is_empty());
+}
+
+#[test]
+fn accelerated_resend_keeps_the_100ms_check_throttle() {
+    let mut s = TradesState::new();
+    s.on_packet_header(100, 45_000.0, 1000);
+    s.on_packet_header(102, 45_000.0, 1000);
+    assert!(s.tick_with_events(50, 1.0, 1000).0.is_empty());
+    assert!(s.tick_with_events(50, 1.0, 1033).0.is_empty());
+    assert!(s.tick_with_events(50, 1.0, 1100).0.is_empty());
+    assert!(!s.tick_with_events(50, 1.0, 1101).0.is_empty());
+}
+
+#[test]
 fn first_packet_starts_state() {
     let mut s = TradesState::new();
     let evs = s.on_packet(make_pkt(100), 1000);

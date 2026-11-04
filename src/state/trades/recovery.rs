@@ -7,15 +7,16 @@ impl TradesState {
     /// Like `tick`, but also returns `BucketClosed` events for recovered/lost
     /// gap buckets.
     ///
-    /// The standard `tick` stays compatibility-oriented and returns only resend
-    /// payloads.
+    /// `delivery_ratio` is the core's latest Ping delivery ratio (0..=1).
+    /// The test-only `tick` helper exercises the normal schedule at 85% delivery.
     pub(crate) fn tick_with_events(
         &mut self,
         rtt_ms: i64,
+        delivery_ratio: f64,
         now_ms: i64,
     ) -> (Vec<Vec<u8>>, Vec<TradesEvent>) {
         let mut events: Vec<TradesEvent> = Vec::new();
-        let payloads = self.tick_impl(rtt_ms, now_ms, &mut events);
+        let payloads = self.tick_impl(rtt_ms, delivery_ratio, now_ms, &mut events);
         (payloads, events)
     }
 
@@ -33,12 +34,13 @@ impl TradesState {
     #[cfg(test)]
     pub(crate) fn tick(&mut self, rtt_ms: i64, now_ms: i64) -> Vec<Vec<u8>> {
         let mut events: Vec<TradesEvent> = Vec::new();
-        self.tick_impl(rtt_ms, now_ms, &mut events)
+        self.tick_impl(rtt_ms, 0.85, now_ms, &mut events)
     }
 
     fn tick_impl(
         &mut self,
         rtt_ms: i64,
+        delivery_ratio: f64,
         now_ms: i64,
         events: &mut Vec<TradesEvent>,
     ) -> Vec<Vec<u8>> {
@@ -60,6 +62,7 @@ impl TradesState {
 
         let retry_delay_ms: f64 = rtt_ms.max(250) as f64;
         let min_delay_ms: f64 = 300.0;
+        let first_retry_factor = ((0.97 - delivery_ratio) / 0.12).clamp(0.0, 1.0);
         let mut packet_nums: Vec<u16> = Vec::new();
 
         for b in self.buckets.iter_mut() {
@@ -69,9 +72,12 @@ impl TradesState {
             let gap_size = b.gap_size();
             let all_recvd = b.recvd.iter().take(gap_size).all(|&r| r);
             // PathDelay = min(1800, max(MinDelay, RetryDelay * (1.2 + retry*0.7)))
-            let path_delay_ms: f64 = (retry_delay_ms * (1.2 + b.retry_count as f64 * 0.7))
+            let mut path_delay_ms: f64 = (retry_delay_ms * (1.2 + b.retry_count as f64 * 0.7))
                 .max(min_delay_ms)
                 .min(1800.0);
+            if b.retry_count == 0 && !b.refund_used {
+                path_delay_ms = 32.0 + (path_delay_ms - 32.0) * first_retry_factor;
+            }
 
             if all_recvd {
                 #[cfg(any(test, feature = "diagnostics"))]
