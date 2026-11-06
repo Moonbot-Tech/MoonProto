@@ -8,6 +8,11 @@ use serde_json::json;
 fn patch_preserves_unmentioned_fields_and_metadata() {
     let mut original = SharedConfig::default();
     original.trading.fixed_trade_balance = 123.45678912345678;
+    original.trading.price_drop_level = f32::from_bits(0x7fc01234);
+    original.trading.trailing_drop = f32::from_bits(0xffc05678);
+    original.trading.g_take_profit = f64::from_bits(0x7ff8000000001234);
+    original.ui.hotkeys_config.s_price = [f32::INFINITY, f32::NEG_INFINITY, -0.0, 0.0, 0.1, f32::from_bits(1)];
+    original.ui.hotkeys_config.o_size = [f64::INFINITY, f64::NEG_INFINITY, -0.0, 0.0, 0.1, f64::from_bits(1)];
     original.signals.unknown_tail = vec![21, 1, 255];
     original.ui.unknown_tail = vec![43, 0, 19];
     let mut expected = original.clone();
@@ -29,6 +34,8 @@ fn rejects_invalid_patch_without_changing_source() {
         ("ui.hotkeys_config.ver", json!(2)), ("trading.log_level", json!("3")),
         ("trading.log_level", json!(1u64 << 40)), ("trading.log_level", json!(1.5)),
         ("trading.fixed_trade_balance", Value::Null),
+        ("trading.price_drop_level", json!(1e100)),
+        ("ui.hotkeys_config.s_price", json!([0, 0, 0, 0, 0, -1e100])),
     ] {
         assert!(original.patch_json(&BTreeMap::from([("signals.signal_sound".into(), json!(42)), (path.into(), value)])).is_err(), "{path}");
         assert_eq!(super::super::serialize_payload(&original).unwrap(), before);

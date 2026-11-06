@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use serde_value::Value as TypedValue;
 
 use super::{SharedConfig, SharedConfigError};
 
@@ -31,27 +32,54 @@ impl SharedConfig {
     /// wrong types and fixed-array length changes fail without modifying the source. Unchanged
     /// fields, service versions and opaque future bytes survive. This is not a server-side CAS.
     pub fn patch_json(&self, changes: &BTreeMap<String, Value>) -> Result<Self, SharedConfigError> {
-        let mut value = serde_json::to_value(self).map_err(json_error)?;
+        // JSON maps nonfinite floats to null. Keep the untouched wire snapshot lossless.
+        let mut value = serde_value::to_value(self).map_err(json_error)?;
         for (path, replacement) in changes {
-            let mut current = &mut value;
-            for part in path.split('.') {
-                if matches!(part, "unknown_tail" | "config_version" | "ver" | "filled") {
-                    return Err(SharedConfigError::new(format!("read-only setting: {path}")));
-                }
-                current = current.as_object_mut().and_then(|object| object.get_mut(part))
-                    .ok_or_else(|| SharedConfigError::new(format!("unknown setting: {path}")))?;
-            }
-            if current.is_object() {
+            let current = setting_value(&mut value, path)?;
+            if matches!(current, TypedValue::Map(_)) {
                 return Err(SharedConfigError::new(format!("select individual fields inside {path}")));
             }
-            *current = replacement.clone();
+            *current = serde_value::to_value(replacement).map_err(json_error)?;
         }
-        serde_json::from_value(value).map_err(json_error)
+        let changed: Self = value.deserialize_into().map_err(json_error)?;
+        let mut typed = serde_value::to_value(&changed).map_err(json_error)?;
+        for path in changes.keys() {
+            // Check after typing: a finite JSON f64 can overflow a destination f32.
+            if !finite_value(setting_value(&mut typed, path)?) {
+                return Err(SharedConfigError::new(format!("nonfinite or overflowing setting: {path}")));
+            }
+        }
+        Ok(changed)
+    }
+}
+
+/// Resolve an editable leaf without admitting service metadata or array-index paths.
+fn setting_value<'a>(mut value: &'a mut TypedValue, path: &str) -> Result<&'a mut TypedValue, SharedConfigError> {
+    for part in path.split('.') {
+        if matches!(part, "unknown_tail" | "config_version" | "ver" | "filled") {
+            return Err(SharedConfigError::new(format!("read-only setting: {path}")));
+        }
+        value = match value {
+            TypedValue::Map(object) => object.get_mut(&TypedValue::String(part.into())),
+            _ => None,
+        }.ok_or_else(|| SharedConfigError::new(format!("unknown setting: {path}")))?;
+    }
+    Ok(value)
+}
+
+/// Reject newly introduced nonfinite floats while preserving them in untouched fields.
+fn finite_value(value: &TypedValue) -> bool {
+    match value {
+        TypedValue::F32(value) => value.is_finite(),
+        TypedValue::F64(value) => value.is_finite(),
+        TypedValue::Seq(values) => values.iter().all(finite_value),
+        TypedValue::Map(values) => values.values().all(finite_value),
+        _ => true,
     }
 }
 
 /// Preserve the crate's existing error contract without exposing a new error hierarchy.
-fn json_error(error: serde_json::Error) -> SharedConfigError {
+fn json_error(error: impl std::fmt::Display) -> SharedConfigError {
     SharedConfigError::new(format!("invalid settings JSON: {error}"))
 }
 
