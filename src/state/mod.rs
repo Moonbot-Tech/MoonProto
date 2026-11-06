@@ -81,7 +81,7 @@ pub use order_books::{
 #[doc(hidden)]
 pub use orders::ApplyResult;
 pub use orders::{
-    MarketPositionProtection, Order, OrderEvent, OrderTraceChartPoint, OrderTraceLine, Orders,
+    MarketPositionProtection, Order, OrderEvent, OrderGuard, OrderTraceChartPoint, OrderTraceLine, Orders,
     PositionProtectionSide, SellReason,
 };
 pub(crate) use orders::{OrderRepair, OrderState};
@@ -110,7 +110,7 @@ pub use seq_ring::{
     SeqRingQtyRow, SeqRingReadMeta, SeqRingReadView, SeqRingReader, SeqRingRow, SeqRingTimedRow,
 };
 pub use settings::{SettingsEvent, SettingsState};
-pub use strats::{StratEvent, StrategyEdit, StrategyEditStatus, StrategyInfo, StratsState};
+pub use strats::{StratEvent, StrategyEdit, StrategyEditStatus, StrategyInfo, StrategyResolution, StrategyResolutionKind, StratsState};
 pub use trades::TradesEvent;
 pub(crate) use trades::{
     iter_trades_resend_response, TradesPacketEffect, TradesPacketEffects, TradesState,

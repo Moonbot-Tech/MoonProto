@@ -1,9 +1,9 @@
 //! High-level Active Lib intent handles.
 
 use super::{
-    commands::{RuntimeCommand, RuntimeCommandKind, RuntimeTradeCommandKind, UiRuntimeCommand},
+    commands::{GuardedOrderAction, RuntimeCommand, RuntimeCommandKind, RuntimeTradeCommandKind, UiRuntimeCommand},
     CoinCardCandlesTicket, EngineActionTicket, MoonClient, MoonClientError, NewOrderParams,
-    NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams, SellOrderParams, SplitOrderParams,
+    NewOrderTicket, OrderActionTicket, OrderSide, OrderTarget, PendingOrderParams, SellOrderParams, SplitOrderParams,
     TradesStreamMode, VStopParams,
 };
 use std::sync::mpsc;
@@ -240,6 +240,28 @@ impl MoonOrders {
     pub fn cancel(&self, order: impl Into<OrderTarget>) -> Result<(), MoonClientError> {
         let uid = order.into().uid();
         self.send_intent(RuntimeCommandKind::CancelOrder { uid })
+    }
+
+    /// Cancel only the order incarnation and phase captured by the caller; report runtime admission.
+    pub fn cancel_guarded(&self, guard: crate::state::OrderGuard) -> Result<OrderActionTicket, MoonClientError> {
+        self.guarded_action(guard, GuardedOrderAction::Cancel)
+    }
+
+    /// Move only the observed order target; an intervening phase/target change rejects the action.
+    pub fn move_guarded(&self, guard: crate::state::OrderGuard, price: f64) -> Result<OrderActionTicket, MoonClientError> {
+        self.guarded_action(guard, GuardedOrderAction::Move(price))
+    }
+
+    /// Set Panic Sell for the observed order; unlike the market button, this never toggles its value.
+    pub fn panic_guarded(&self, guard: crate::state::OrderGuard, enabled: bool) -> Result<OrderActionTicket, MoonClientError> {
+        self.guarded_action(guard, GuardedOrderAction::Panic(enabled))
+    }
+
+    /// Carry the guard through the runtime queue instead of validating a snapshot before queueing.
+    fn guarded_action(&self, guard: crate::state::OrderGuard, action: GuardedOrderAction) -> Result<OrderActionTicket, MoonClientError> {
+        let (reply, receiver) = mpsc::channel();
+        self.tx.send(RuntimeCommand::GuardedOrder { guard, action, reply }).map_err(|_| MoonClientError::RuntimeStopped)?;
+        Ok(OrderActionTicket { reply: receiver })
     }
 
     /// Update Stops for one tracked order.

@@ -573,6 +573,24 @@ pub enum OrderSide {
     Short,
 }
 
+/// A nonblocking receipt for guarded order dispatch, not an execution confirmation.
+#[derive(Debug)]
+pub struct OrderActionTicket {
+    pub(super) reply: mpsc::Receiver<bool>,
+}
+
+impl OrderActionTicket {
+    /// `Some(true)` means dispatched, `Some(false)` rejected, and `None` still queued.
+    /// A stopped runtime leaves the outcome unknown; do not automatically repeat a trade.
+    pub fn try_result(&self) -> Result<Option<bool>, MoonClientError> {
+        match self.reply.try_recv() {
+            Ok(result) => Ok(Some(result)),
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => Err(MoonClientError::RuntimeStopped),
+        }
+    }
+}
+
 /// Existing order selected by application code for an order-scoped action.
 ///
 /// Callers can pass either the server order UID or a borrowed immutable

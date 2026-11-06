@@ -2,7 +2,20 @@
 
 use super::*;
 
+/// Actions whose observed order guard must survive the runtime queue.
+pub(super) enum GuardedOrderAction {
+    Cancel,
+    Move(f64),
+    Panic(bool),
+}
+
 pub(super) enum RuntimeCommand {
+    /// Admission is replied by the runtime owner; it does not claim an exchange acknowledgement.
+    GuardedOrder {
+        guard: crate::state::OrderGuard,
+        action: GuardedOrderAction,
+        reply: mpsc::Sender<bool>,
+    },
     Stop,
     SubscribeOrderBook(String),
     SubscribeOrderBooks(Vec<String>),
@@ -268,6 +281,7 @@ impl RuntimeCommand {
             #[cfg(any(test, feature = "diagnostics"))]
             Self::DiagFillMarketHistoryToCapacity { .. } => (58, 1),
             Self::OrderAction(kind) => kind.profile_source(),
+            Self::GuardedOrder { .. } => (95, 1),
             Self::TradeAction(kind) => kind.profile_source(),
         }
     }

@@ -7,7 +7,7 @@
 //!     helpers that drain it.
 
 use super::commands::{
-    RuntimeCommand, RuntimeCommandKind, RuntimeTradeCommandKind, StratRuntimeCommand,
+    GuardedOrderAction, RuntimeCommand, RuntimeCommandKind, RuntimeTradeCommandKind, StratRuntimeCommand,
     UiRuntimeCommand,
 };
 use super::*;
@@ -783,6 +783,7 @@ mod strategy_refresh_tests;
 
 #[cfg(test)]
 mod tests {
+    mod guarded_orders;
     use super::*;
     use crate::commands::engine_api::ServerInfo;
     use crate::commands::market::{BaseCurrency, ExchangeCode};

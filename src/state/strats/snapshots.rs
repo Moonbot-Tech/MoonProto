@@ -3,6 +3,7 @@
 use super::{
     StrategyEdit, StrategyEditStageOutcome, StrategyEditStatus, StrategySnapshotApplyOutcome,
     StrategySnapshotPayloadCache, StratsState,
+    StrategyResolution, StrategyResolutionKind,
 };
 use crate::commands::strat::StratCheckedItem;
 use crate::commands::strategy_serializer::{
@@ -15,12 +16,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-#[derive(Clone, Copy)]
-enum EditResolution {
-    Confirmed,
-    Adjusted,
-    Superseded,
-}
+#[cfg(test)]
+mod tests;
 
 impl StratsState {
     /// Manual core-authoritative replacement; ordinary Full packets still merge.
@@ -191,6 +188,7 @@ impl StratsState {
                 continue;
             }
             if revision_strictly_dominates(confirmed.as_ref(), strategy.as_ref()) {
+                outcome.resolved.push(StrategyResolution { desired:Arc::clone(strategy), actual:Arc::clone(confirmed), outcome:StrategyResolutionKind::Superseded });
                 *strategy = Arc::clone(confirmed);
                 outcome.superseded.push(strategy.strategy_id);
                 continue;
@@ -371,32 +369,39 @@ impl StratsState {
             if same_revision(snapshot.as_ref(), desired) {
                 Some(
                     if self.strategy_effectively_equal(snapshot.as_ref(), desired) {
-                        EditResolution::Confirmed
+                        StrategyResolutionKind::Confirmed
                     } else {
-                        EditResolution::Adjusted
+                        StrategyResolutionKind::Adjusted
                     },
                 )
             } else if revision_strictly_dominates(snapshot.as_ref(), desired) {
-                Some(EditResolution::Superseded)
+                Some(StrategyResolutionKind::Superseded)
             } else {
                 None
             }
         });
 
+        if let Some(outcome_kind) = edit_result {
+            if let Some(edit) = self.strategy_edits.get(&strategy_id) {
+                outcome.resolved.push(StrategyResolution {
+                    desired: Arc::clone(&edit.desired), actual: Arc::clone(&snapshot), outcome: outcome_kind,
+                });
+            }
+        }
         let canonical_changed =
             self.upsert_snapshot_arc_without_cache_invalidation(Arc::clone(&snapshot));
         match edit_result {
-            Some(EditResolution::Confirmed) => {
+            Some(StrategyResolutionKind::Confirmed) => {
                 self.strategy_edits.remove(&strategy_id);
                 self.set_local_snapshot_from_server(snapshot, true);
                 outcome.confirmed.push(strategy_id);
             }
-            Some(EditResolution::Adjusted) => {
+            Some(StrategyResolutionKind::Adjusted) => {
                 self.strategy_edits.remove(&strategy_id);
                 self.set_local_snapshot_from_server(snapshot, true);
                 outcome.adjusted.push(strategy_id);
             }
-            Some(EditResolution::Superseded) => {
+            Some(StrategyResolutionKind::Superseded) => {
                 self.strategy_edits.remove(&strategy_id);
                 self.set_local_snapshot_from_server(snapshot, true);
                 outcome.superseded.push(strategy_id);

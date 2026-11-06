@@ -104,6 +104,9 @@ impl EventDispatcher {
                     }
                 };
                 out.push(Event::Strat(ev));
+                if !apply_outcome.resolved.is_empty() {
+                    out.push(Event::Strat(StratEvent::EditResolved { resolutions: apply_outcome.resolved }));
+                }
                 if !apply_outcome.confirmed.is_empty() {
                     out.push(Event::Strat(StratEvent::EditConfirmed {
                         strategy_ids: apply_outcome.confirmed,
