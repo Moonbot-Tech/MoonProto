@@ -29,7 +29,7 @@ use runtime_loop::runtime_loop;
 pub use types::{
     ClosePositionParams, CoinCardCandlesTicket, EngineActionTicket, MoonClientError,
     MoonClientEvent, MoonClientSnapshot, MoonEventQueue, MoonEventSink, NewOrderParams,
-    NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams, SellOrderParams, SplitOrderParams,
+    NewOrderTicket, OrderActionTicket, OrderSide, OrderTarget, PendingOrderParams, SellOrderParams, SplitOrderParams,
     TradesStreamMode, VStopParams,
 };
 

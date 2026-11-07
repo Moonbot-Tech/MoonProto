@@ -86,7 +86,7 @@ pub use active_runtime::{
     MoonCandles, MoonChartAlerts, MoonChartText, MoonClient, MoonClientError, MoonClientEvent,
     MoonClientSnapshot, MoonEmulator, MoonEventQueue, MoonEventSink, MoonHistory, MoonMarkets, MoonOrders,
     MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTelegram, MoonWatchDogs, MoonTrade, NewOrderParams,
-    NewOrderTicket, OrderSide, OrderTarget, PendingOrderParams, SellOrderParams, SplitOrderParams,
+    NewOrderTicket, OrderActionTicket, OrderSide, OrderTarget, PendingOrderParams, SellOrderParams, SplitOrderParams,
     TradesStreamMode, VStopParams,
 };
 pub(crate) use candles::MergedCandles;

@@ -16,6 +16,7 @@ pub(crate) struct StrategySnapshotPayloadCache {
 pub(crate) struct StrategyEditStageOutcome {
     pub submitted: Vec<u64>,
     pub superseded: Vec<u64>,
+    pub resolved: Vec<StrategyResolution>,
 }
 
 #[derive(Debug, Default)]
@@ -26,6 +27,23 @@ pub(crate) struct StrategySnapshotApplyOutcome {
     pub confirmed: Vec<u64>,
     pub adjusted: Vec<u64>,
     pub superseded: Vec<u64>,
+    pub resolved: Vec<StrategyResolution>,
+}
+
+/// The result for one exact submitted revision, captured before retained state can change again.
+#[derive(Debug, Clone)]
+pub struct StrategyResolution {
+    pub desired: Arc<StrategySnapshot>,
+    pub actual: Arc<StrategySnapshot>,
+    pub outcome: StrategyResolutionKind,
+}
+
+/// Whether the core retained the requested fields, adjusted them, or kept a newer revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrategyResolutionKind {
+    Confirmed,
+    Adjusted,
+    Superseded,
 }
 
 /// State of a strategy field edit submitted to the core.
@@ -43,7 +61,7 @@ pub enum StrategyEditStatus {
 /// One locally submitted strategy edit waiting for core confirmation.
 #[derive(Debug, Clone)]
 pub struct StrategyEdit {
-    desired: Arc<StrategySnapshot>,
+    pub(super) desired: Arc<StrategySnapshot>,
     submitted_at: MoonTime,
     status: StrategyEditStatus,
     pub(crate) deadline: Instant,
@@ -127,6 +145,8 @@ impl StrategyInfo {
 
 #[derive(Debug, Clone)]
 pub enum StratEvent {
+    /// Exact desired and canonical snapshots; prefer this to rereading state after an ID-only event.
+    EditResolved { resolutions: Vec<StrategyResolution> },
     /// Full snapshot (`Full=true`) was decoded and applied.
     SnapshotFull {
         server_epoch: u64,

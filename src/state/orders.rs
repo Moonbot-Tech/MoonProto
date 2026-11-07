@@ -10,10 +10,12 @@ mod accessors;
 mod actions;
 mod apply_helpers;
 mod maintenance;
+mod guard;
 mod model;
 mod types;
 
 pub use self::model::Order;
+pub use self::guard::OrderGuard;
 #[cfg(any(test, feature = "diagnostics"))]
 #[doc(hidden)]
 pub use self::types::ApplyResult;

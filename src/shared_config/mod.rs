@@ -48,6 +48,7 @@
 
 mod absorb;
 mod clipboard;
+mod json;
 mod sections;
 #[cfg(test)]
 mod tests;

@@ -23,7 +23,7 @@ mod types;
 #[cfg(test)]
 mod profile_tests;
 
-pub use self::types::{StratEvent, StrategyEdit, StrategyEditStatus, StrategyInfo};
+pub use self::types::{StratEvent, StrategyEdit, StrategyEditStatus, StrategyInfo, StrategyResolution, StrategyResolutionKind};
 pub(crate) use self::types::{
     StrategyEditStageOutcome, StrategySnapshotApplyOutcome, StrategySnapshotPayloadCache,
 };

@@ -40,6 +40,9 @@ pub(super) fn drain_commands_during_startup(
             Ok(RuntimeCommand::Stop) | Err(mpsc::TryRecvError::Disconnected) => {
                 return (true, false);
             }
+            Ok(RuntimeCommand::GuardedOrder { reply, .. }) => {
+                let _ = reply.send(false);
+            }
             Ok(cmd) => deferred.push_back(cmd),
             Err(mpsc::TryRecvError::Empty) => return (false, false),
         }
@@ -394,6 +397,16 @@ pub(super) fn handle_command(
             if !result {
                 queue_order_action_rejected(dispatcher, &kind);
             }
+            result
+        }
+        RuntimeCommand::GuardedOrder { guard, action, reply } => {
+            let current = dispatcher.orders().get(guard.uid()).is_some_and(|order| guard.matches(order));
+            let result = current && match action {
+                GuardedOrderAction::Move(price) => client.replace_tracked_order(dispatcher.orders_mut(), guard.uid(), price),
+                GuardedOrderAction::Cancel => client.cancel_tracked_order(dispatcher.orders_mut(), guard.uid()),
+                GuardedOrderAction::Panic(enabled) => client.turn_tracked_order_panic_sell(dispatcher.orders_mut(), guard.uid(), enabled),
+            };
+            let _ = reply.send(result);
             result
         }
         RuntimeCommand::TradeAction(kind) => match handle_trade_action(client, dispatcher, kind) {
@@ -820,6 +833,9 @@ fn handle_strategy_snapshot_batch(
                 strategy_ids: edit_outcome.superseded,
             },
         )]);
+    }
+    if !edit_outcome.resolved.is_empty() {
+        dispatcher.queue_events([crate::events::Event::Strat(crate::state::StratEvent::EditResolved { resolutions: edit_outcome.resolved })]);
     }
     let Some(reply) = reply else {
         return true;

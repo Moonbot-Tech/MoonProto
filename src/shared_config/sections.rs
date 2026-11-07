@@ -11,12 +11,14 @@
 /// version that was written into the wire header.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/09-config-structure.md#sharedconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SharedConfig {
     /// Core configuration catalog version carried by the source snapshot.
     ///
     /// This is not the safe-share format version. It is retained for exact
     /// roundtrips and is intentionally not editable by application code.
+    #[schemars(extend("readOnly" = true))]
     pub(crate) config_version: u16,
     /// Signal parsing, sounds, filters and several saved preferences; see the signals chapter.
     ///
@@ -60,7 +62,8 @@ impl SharedConfig {
 /// and autodetection-driven autobuy.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/02-signals-and-alerts.md#signalssection).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SignalsSection {
     // --- Pump channels ---
     /// Selected Telegram signal-channel name, or comma-separated selected names in multi-channel mode. Channel
@@ -292,17 +295,20 @@ pub struct SignalsSection {
     /// expose as an editable setting.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/02-signals-and-alerts.md#signalssection-unknown-tail).
+    #[schemars(skip)]
     pub unknown_tail: Vec<u8>,
 }
 
 /// Telegram/clipboard message parser sub-config.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/02-signals-and-alerts.md#signalconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SignalConfig {
     /// Record version. Preserve the received value; not a user setting.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/02-signals-and-alerts.md#signalconfig-ver).
+    #[schemars(extend("readOnly" = true))]
     pub ver: i32,
     /// Require a configured long/short keyword in the advanced parser. A recognized exchange-market link can also
     /// satisfy this check. Short keywords are considered on futures.
@@ -395,7 +401,8 @@ pub struct SignalConfig {
 /// Order execution, risk management, and position control settings.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TradingSection {
     /// Retention for ordinary logs, binary chart records and screenshots, in days. GUI 0..=15; 15 disables routine
     /// age cleanup, while low-disk-space cleanup remains independent. 0 does not mean keep forever.
@@ -1066,13 +1073,15 @@ pub struct TradingSection {
     /// configuration; never expose as a setting.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#tradingsection-unknown-tail).
+    #[schemars(skip)]
     pub unknown_tail: Vec<u8>,
 }
 
 /// Automatic startup, trading stops, recovery and panic-close rules.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AutoStartConfig {
     /// Start market monitoring automatically after startup analysis completes. Startup preference; changing it does
     /// not start the running kernel immediately.
@@ -1247,7 +1256,8 @@ pub struct AutoStartConfig {
 /// Trading recovery after delta panic and per-market session-profit limits.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AutoStartConfig2 {
     /// Resume after the global delta panic when the one-hour BTC delta is between `btc_higher_then` and
     /// `btc_lower_then` and the one-hour market delta exceeds `market_higher_then`. Working-hour restrictions still
@@ -1296,7 +1306,8 @@ pub struct AutoStartConfig2 {
 /// MoonBot service sub-config (silent mode, margin auto-management).
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#moonbotconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MoonBotConfig {
     /// Suppress ordinary trade/signal Telegram messages and image sending while allowing service-message paths.
     /// Does not mute Moonbot's local sounds or stop trading.
@@ -1326,17 +1337,22 @@ pub struct MoonBotConfig {
 /// Report / trade history display configuration.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#reportconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReportConfig {
     /// 51 saved report-column visibility slots. Current GUI consumes 43 columns, listed in MoonDoc; preserve unused
     /// slots. Not a projection for report API requests. Column 11 is synchronized with `trading.use_lev_for_take`.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#reportconfig-fields-vis).
+    #[serde(with = "super::json::array")]
+    #[schemars(with = "Vec<bool>", length(equal = 51))]
     pub fields_vis: [bool; 51],
     /// Saved widths of the same 51 report-column slots in GUI pixels. Moonbot enforces a minimum of 10 when using
     /// them; stretch can redistribute displayed widths.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#reportconfig-fields-width).
+    #[serde(with = "super::json::array")]
+    #[schemars(with = "Vec<u16>", length(equal = 51))]
     pub fields_width: [u16; 51],
     /// Legacy field without a current report-filter consumer. Use `active_type` for the Moonbot report UI; API
     /// request filters are separate.
@@ -1418,11 +1434,13 @@ pub struct ReportConfig {
 /// Multi-order mode settings (visual order grid placement and movement).
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#multiordersconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MultiOrdersConfig {
     /// Serialized sub-record version; preserve the received value. Not a user-selectable feature level.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#multiordersconfig-ver).
+    #[schemars(extend("readOnly" = true))]
     pub ver: u8,
     /// Obsolete enable byte retained for compatibility: current kernel export writes true and import ignores it.
     /// Multi-orders remain available; this is not the current grid-pause control.
@@ -1542,7 +1560,8 @@ pub struct MultiOrdersConfig {
 /// Chart price-alert configuration.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#alertconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AlertConfig {
     /// Legacy byte without a current global price-alert consumer. Alert enablement belongs to the individual chart
     /// object/strategy; do not expose this as a working master switch.
@@ -1570,7 +1589,8 @@ pub struct AlertConfig {
 /// Spot chart panel display settings.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#spotconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SpotConfig {
     /// Draw the corresponding spot/reference market's trade dots when that stream is available. Separate from the
     /// current market's trade-dot switch.
@@ -1642,7 +1662,8 @@ pub struct SpotConfig {
 /// The first four fields are legacy observer mirrors; use `client.watchdogs()` for active observers.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#orderscontrol).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct OrdersControl {
     /// Legacy mirror of a WatchDog row's order-control switch. Current workers read the separate observer list;
     /// changing this field does not enable an observer. Use `client.watchdogs()` to edit that list.
@@ -1704,7 +1725,8 @@ pub struct OrdersControl {
 /// Cashback history and display preferences; not the exchange fee-discount policy.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#cashbacksettings).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CashBackSettings {
     /// Display spot and futures cashback estimates separately instead of their sum.
     ///
@@ -1736,7 +1758,8 @@ pub struct CashBackSettings {
 /// Asset transfer panel display settings.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#assettransferconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AssetTransferConfig {
     /// Show free quantity, total quantity and estimated USD value in each asset row. False shows free quantity
     /// only; does not transfer or reserve funds.
@@ -1758,7 +1781,8 @@ pub struct AssetTransferConfig {
 /// Automatic leverage management.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/03-trading-and-leverage.md#automanagelevconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AutoManageLevConfig {
     /// Choose leverage from exchange risk brackets so their maximum position size accommodates the amount
     /// configured in `trading.auto_lev_control`. Needs loaded leverage/bracket data and a positive effective target
@@ -1804,7 +1828,8 @@ pub struct AutoManageLevConfig {
 /// Telegram screenshot sharing settings.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#sendshotsconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SendShotsConfig {
     /// Send qualifying automatic screenshots to the configured personal Telegram destination. Requires an own
     /// Telegram bot and non-silent image sending. Public screenshot sending has a separate switch; false does not
@@ -1860,7 +1885,8 @@ pub struct SendShotsConfig {
 /// Manual strategy buttons and hotkeys.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/04-orders-reports-and-notifications.md#manualstratsconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ManualStratsConfig {
     /// Show enabled Manual-strategy quick buttons while `trading.use_manual_strategy` is active. Does not execute a
     /// strategy merely by showing it.
@@ -1883,11 +1909,13 @@ pub struct ManualStratsConfig {
 /// Arbitrage panel display settings.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#arbviewconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ArbViewConfig {
     /// Serialized display-record version. Preserve received value.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#arbviewconfig-ver).
+    #[schemars(extend("readOnly" = true))]
     pub ver: u8,
     /// Show absolute arbitrage price differences in the numeric block; requires `show_numbers`. May be combined
     /// with `show_percent`.
@@ -1922,7 +1950,8 @@ pub struct ArbViewConfig {
 /// Chart appearance, draw tools, visual indicators, candle style.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#visualsection).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct VisualSection {
     /// Legacy order-color record plus the active `price_line_width` setting. The seven color slots have no current
     /// rendering consumers; active theme colors are stored separately.
@@ -2320,13 +2349,15 @@ pub struct VisualSection {
     /// Preserve opaque bytes from newer kernels unchanged when round-tripping the visual section.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#visualsection-unknown-tail).
+    #[schemars(skip)]
     pub unknown_tail: Vec<u8>,
 }
 
 /// Candle colors for one theme (light or dark).
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#candlecolorset).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CandleColorSet {
     /// ARGB color (0xAARRGGBB) for rising candles, including equal open/close.
     ///
@@ -2345,7 +2376,8 @@ pub struct CandleColorSet {
 /// Legacy color slots and the active price-line width; theme colors are configured separately.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#intcolors).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct IntColors {
     /// Legacy stored color without an active renderer consumer. Preserve it; do not offer it as an effective color
     /// control.
@@ -2392,11 +2424,13 @@ pub struct IntColors {
 /// Chart drawing-tool appearance and interaction preferences; per-object alerts are separate.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/06-drawing-and-news.md#customdrawconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CustomDrawConfig {
     /// Stored drawing-config version. Preserve the value received from the kernel.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/06-drawing-and-news.md#customdrawconfig-ver).
+    #[schemars(extend("readOnly" = true))]
     pub ver: i32,
     /// Global drawing-stroke opacity, 0..=1. Order-line opacity has its own tool field.
     ///
@@ -2416,7 +2450,8 @@ pub struct CustomDrawConfig {
 /// Settings for a single chart draw tool.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/06-drawing-and-news.md#customdrawtool).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CustomDrawTool {
     /// Light-theme stroke color, ARGB (0xAARRGGBB).
     ///
@@ -2491,7 +2526,8 @@ pub struct CustomDrawTool {
 /// Visual and audible notifications for the one-hour BTC delta.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#blinkconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BlinkConfig {
     /// Blink when the one-hour BTC delta leaves the lower/upper bounds. Blinking clears after the delta returns
     /// inside 99% of each threshold: for -5%/+5%, inside approximately -4.95%/+4.95%. This notification does not
@@ -2520,7 +2556,8 @@ pub struct BlinkConfig {
 /// Chart filter/session/detection annotation and cursor-tool preferences.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#showfilters).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ShowFilters {
     /// Show the strategy-filter/session annotation area and eligible MoonShot bounds on charts. Does not enable the
     /// underlying strategy conditions.
@@ -2563,7 +2600,8 @@ pub struct ShowFilters {
 /// Chart windows manager settings.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#chartssettings).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ChartsSettings {
     /// Automatically arrange charts in monitoring windows.
     ///
@@ -2604,7 +2642,8 @@ pub struct ChartsSettings {
 /// Trade-size heatmap and optional CPU, feed-latency and rendering overlays.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/05-charts-and-display.md#heatmapconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HeatMapConfig {
     /// Show the heatmap area. Trade-size heatmap requires fast charts and market-maker detection; selecting any
     /// CPU/trade/app/draw diagnostic overlay replaces it with system data. Not a new market subscription.
@@ -2641,7 +2680,8 @@ pub struct HeatMapConfig {
 /// News feed form display settings.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/06-drawing-and-news.md#newsformconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NewsFormConfig {
     /// Keep the news window above other windows.
     ///
@@ -2698,7 +2738,8 @@ pub struct NewsFormConfig {
 /// Active color theme and per-theme INI color overrides.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/08-theme-and-ini.md#themesection).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ThemeSection {
     /// Main GUI style: 0=Native, 1=Light, 2=Diamond, 3=Dark, 4=Dark OldSchool. Styles 3/4 use the dark color set;
     /// 0/1/2 use the light one.
@@ -2713,6 +2754,7 @@ pub struct ThemeSection {
     /// Preserve opaque bytes from newer kernels unchanged.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/08-theme-and-ini.md#themesection-unknown-tail).
+    #[schemars(skip)]
     pub unknown_tail: Vec<u8>,
 }
 
@@ -2723,7 +2765,8 @@ pub struct ThemeSection {
 /// Chart indicator and arbitrage color INI settings.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/08-theme-and-ini.md#inisection).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct IniSection {
     /// Charts and ArbColors sections. Import replaces every supplied section completely; unknown section names are
     /// rejected. See the INI key reference in MoonDoc.
@@ -2733,6 +2776,7 @@ pub struct IniSection {
     /// Preserve opaque bytes from newer kernels unchanged.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/08-theme-and-ini.md#inisection-unknown-tail).
+    #[schemars(skip)]
     pub unknown_tail: Vec<u8>,
 }
 
@@ -2740,7 +2784,8 @@ pub struct IniSection {
 /// Order is preserved for byte-exact roundtrip (NOT a HashMap).
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/08-theme-and-ini.md#inisectiondata).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct IniSectionData {
     /// Section name from the corresponding allowlist: ColorsLight/ColorsDark in theme, Charts/ArbColors in ini.
     ///
@@ -2760,7 +2805,8 @@ pub struct IniSectionData {
 /// Hotkeys, markets table layout, toolbar, strategy editor state.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/07-interface-and-hotkeys.md#uisection).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct UiSection {
     /// Hide the demo-mode GUI button; does not switch emulation on/off.
     ///
@@ -2812,21 +2858,25 @@ pub struct UiSection {
     /// Preserve opaque bytes from newer kernels unchanged.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/07-interface-and-hotkeys.md#uisection-unknown-tail).
+    #[schemars(skip)]
     pub unknown_tail: Vec<u8>,
 }
 
 /// Keyboard shortcuts for order and chart operations.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/07-interface-and-hotkeys.md#hotkeysconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct HotkeysConfig {
     /// Legacy initialized marker without an active consumer; preserve.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/07-interface-and-hotkeys.md#hotkeysconfig-filled).
+    #[schemars(extend("readOnly" = true))]
     pub filled: bool,
     /// Stored shortcut-record version; preserve the received value.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/07-interface-and-hotkeys.md#hotkeysconfig-ver).
+    #[schemars(extend("readOnly" = true))]
     pub ver: u8,
     /// Six manual order-amount presets in the trading currency. Used by `use_manual_balance`; amounts are not
     /// percentages. Array index 0 corresponds to button 1.
@@ -2983,7 +3033,8 @@ pub struct HotkeysConfig {
 /// Saved market-table column visibility and sort-column selection.
 ///
 /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/07-interface-and-hotkeys.md#marketstableconfig).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct MarketsTableConfig {
     /// Zero-based displayed column index; -1 restores market-index order. The current GUI has 28 displayed columns,
     /// listed in MoonDoc; not the internal metric ID.
@@ -2994,11 +3045,15 @@ pub struct MarketsTableConfig {
     /// the remaining slots.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/07-interface-and-hotkeys.md#marketstableconfig-col-vis).
+    #[serde(with = "super::json::array")]
+    #[schemars(with = "Vec<bool>", length(equal = 41))]
     pub col_vis: [bool; 41],
     /// Legacy stored positions without a current layout consumer. Preserve them; editing does not reorder current
     /// columns.
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/07-interface-and-hotkeys.md#marketstableconfig-col-pos).
+    #[serde(with = "super::json::array")]
+    #[schemars(with = "Vec<u8>", length(equal = 41))]
     pub col_pos: [u8; 41],
 }
 
