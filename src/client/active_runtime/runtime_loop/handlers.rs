@@ -748,6 +748,10 @@ fn handle_ui_command(
             client.ui_auto_detect(active);
             false
         }
+        UiRuntimeCommand::MoonStream(enabled) => {
+            client.ui_moon_stream(enabled);
+            false
+        }
     }
 }
 

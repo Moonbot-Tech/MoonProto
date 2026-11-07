@@ -925,6 +925,16 @@ impl MoonSettings<'_> {
         self.client.set_auto_detect_active(active)
     }
 
+    /// Set and save the core's Moon Streamer switch without restarting it (MoonBot 7.73 N1+).
+    ///
+    /// Returns when queued. Observe `SettingsEvent::RuntimeStateUpdated` and
+    /// `snapshot().settings().runtime_state.moon_stream_enabled` for the applied
+    /// setting. This is not connection status; older cores report `None` and
+    /// ignore this command.
+    pub fn set_moon_stream_enabled(&self, enabled: bool) -> Result<(), MoonClientError> {
+        self.client.send_no_reply(RuntimeCommand::Ui(UiRuntimeCommand::MoonStream(enabled)))
+    }
+
     /// Queue the complete compact client-settings snapshot.
     ///
     /// The current core forces auto-start, detection and strategy startup flags

@@ -432,6 +432,7 @@ struct RuntimeStateProbe {
     is_started: bool,
     auto_detect_active: bool,
     prepared_release_version: Option<u32>,
+    moon_stream_enabled: Option<bool>,
 }
 
 impl From<moonproto::RuntimeStateCommand> for RuntimeStateProbe {
@@ -440,6 +441,7 @@ impl From<moonproto::RuntimeStateCommand> for RuntimeStateProbe {
             is_started: value.is_started,
             auto_detect_active: value.auto_detect_active,
             prepared_release_version: value.prepared_release_version,
+            moon_stream_enabled: value.moon_stream_enabled,
         }
     }
 }
@@ -975,6 +977,8 @@ impl Session {
         println!("OK: FIRETEST {label}: repeatable core startup snapshot completed before Ready");
         assert!(initial.settings().runtime_state.unwrap().prepared_release_version.is_some(),
             "FIRETEST {label}: core must report prepared release availability (MoonBot 7.72 L6+)");
+        assert!(initial.settings().runtime_state.unwrap().moon_stream_enabled.is_some(),
+            "FIRETEST {label}: core must report the Moon Streamer switch (MoonBot 7.73 N1+)");
         session
     }
 
@@ -8661,8 +8665,8 @@ fn wait_ui_runtime_state(cfg: &FireConfig, a: &mut Session, b: &mut Session) -> 
         "clients disagree on UI runtime state: A={a_state:?} B={b_state:?}"
     );
     println!(
-        "FIRETEST UI RuntimeState: is_started={} auto_detect_active={} prepared_release_version={:?}",
-        a_state.is_started, a_state.auto_detect_active, a_state.prepared_release_version
+        "FIRETEST UI RuntimeState: is_started={} auto_detect_active={} prepared_release_version={:?} moon_stream_enabled={:?}",
+        a_state.is_started, a_state.auto_detect_active, a_state.prepared_release_version, a_state.moon_stream_enabled
     );
     a_state
 }
@@ -8832,6 +8836,35 @@ fn run_auto_detect_echo_gate(cfg: &FireConfig, a: &mut Session, initial: Runtime
         "OK: TAutoDetectCommand no-op echoed RuntimeState active={}",
         initial.auto_detect_active
     );
+}
+
+fn run_moon_stream_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
+    let original = wait_ui_runtime_state(cfg, a, b).moon_stream_enabled
+        .expect("FIRETEST Moon Streamer requires MoonBot 7.73 N1+");
+    let retained = a.state_snapshot();
+    let mutation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for broadcast in [true, false] {
+            let before_a = a.snapshot().runtime_state_events;
+            let before_b = b.snapshot().runtime_state_events;
+            a.client.settings().set_moon_stream_enabled(!original).expect("queue Moon Streamer switch");
+            assert!(pump_pair_until_sessions(a, b, cfg.wait, "Moon Streamer change/echo", |a, b| {
+                a.snapshot().runtime_state_events > before_a
+                    && (!broadcast || b.snapshot().runtime_state_events > before_b)
+                    && ui_runtime_state(a).and_then(|s| s.moon_stream_enabled) == Some(!original)
+                    && ui_runtime_state(b).and_then(|s| s.moon_stream_enabled) == Some(!original)
+            }), "FIRETEST Moon Streamer change/echo failed (broadcast={broadcast})");
+        }
+        assert_eq!(retained.settings().runtime_state.unwrap().moon_stream_enabled, Some(original),
+            "a retained snapshot must not change after a Moon Streamer update");
+    }));
+    // Restore even when the mutation assertion failed.
+    a.client.settings().set_moon_stream_enabled(original).expect("restore Moon Streamer switch");
+    assert!(pump_pair_until_sessions(a, b, cfg.wait, "restore Moon Streamer", |a, b| {
+        ui_runtime_state(a).and_then(|s| s.moon_stream_enabled) == Some(original)
+            && ui_runtime_state(b).and_then(|s| s.moon_stream_enabled) == Some(original)
+    }), "FIRETEST Moon Streamer restore failed");
+    if let Err(payload) = mutation { std::panic::resume_unwind(payload); }
+    println!("OK: Moon Streamer switch, two-client broadcast, no-op echo and restore (original={original})");
 }
 
 fn wait_kernel_license_state(
@@ -10361,6 +10394,7 @@ fn fire_test_active_library_health() {
     run_high_loss_simple_ops_gate(&mut a, &mut b, &mut err_emu, cfg.high_loss_timeout);
     log_protocol_cpu_pair("after high-loss simple ops gate", &a, &b);
     err_emu.reset("high-loss simple ops gate");
+    run_moon_stream_gate(&cfg, &mut a, &mut b);
     run_telegram_state_gate(&cfg, keys);
     run_problems_gate(&cfg, keys, &mut a, &mut b);
     a.client
@@ -10515,6 +10549,8 @@ fn fire_test_active_library_health() {
     let after_reconnect = a.snapshot();
     let runtime_after_reconnect = wait_ui_runtime_state(&cfg, &mut a, &mut b);
     run_auto_detect_echo_gate(&cfg, &mut a, runtime_after_reconnect);
+    assert_eq!(runtime_after_reconnect.moon_stream_enabled, initial_runtime_state.moon_stream_enabled,
+        "Moon Streamer state must survive client reconnect");
     let trades_before = after_reconnect.trades_apply;
     let books_before = after_reconnect.orderbook_apply;
     assert!(

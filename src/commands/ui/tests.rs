@@ -20,6 +20,7 @@ fn runtime_state_accepts_old_core_and_optional_prepared_release() {
             assert!(state.is_started);
             assert!(!state.auto_detect_active);
             assert_eq!(state.prepared_release_version, (len == 4).then_some(version));
+            assert_eq!(state.moon_stream_enabled, None);
         }
         let mut future = old.clone();
         future.extend_from_slice(&bytes);
@@ -111,6 +112,37 @@ fn auto_detect_roundtrip() {
             assert!(cmd.active);
         }
         _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
+fn moon_stream_switch_matches_delphi_wire_layout() {
+    for enabled in [false, true] {
+        let raw = build_moon_stream(62, enabled);
+        assert_eq!(raw, [62, 4, 0, 62, 0, 0, 0, 0, 0, 0, 0, u8::from(enabled)]);
+        assert!(matches!(UICommand::parse(&raw),
+            Some(UICommand::MoonStream { uid: 62, enabled: value }) if value == enabled));
+        assert!(UICommand::parse(&raw[..11]).is_none(), "missing flag must not turn the streamer off");
+    }
+}
+
+#[test]
+fn moon_stream_runtime_pushes_preserve_old_snapshots() {
+    let mut settings = crate::state::SettingsState::new();
+    for enabled in [Some(false), Some(true), Some(false), None] {
+        let before = settings.clone();
+        let previous = before.runtime_state;
+        let mut payload = header_bytes(CMD_RUNTIME_STATE, 93);
+        payload.extend_from_slice(&[1, 0]);
+        payload.extend_from_slice(&774u32.to_le_bytes());
+        if let Some(enabled) = enabled { payload.push(u8::from(enabled)); }
+        assert!(matches!(settings.apply(UICommand::parse(&payload).unwrap()),
+            Some(crate::state::SettingsEvent::RuntimeStateUpdated)));
+        let state = settings.runtime_state.unwrap();
+        assert_eq!(state.moon_stream_enabled, enabled);
+        assert_eq!(state.prepared_release_version, Some(774));
+        assert!(state.is_started && !state.auto_detect_active);
+        assert_eq!(before.runtime_state, previous);
     }
 }
 

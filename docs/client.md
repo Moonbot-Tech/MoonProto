@@ -311,8 +311,10 @@ println!("Minimum core: {}", compatibility.minimum_core_version);
 println!("{}", compatibility.comment);
 ```
 
-The current requirement is **MoonBot 7.72 L8**, which adds reporting/privacy
-controls and core-wide BUY/pending cancellation. Older compatible cores ignore
+The current requirement is **MoonBot 7.73 N1**, which adds Moon Streamer control
+and its configured state. Older compatible cores ignore the switch command and
+report `moon_stream_enabled` as `None`. See [Moon Streamer](ui.md#moon-streamer).
+L8 adds reporting/privacy controls and core-wide BUY/pending cancellation. Older compatible cores ignore
 reporting edits; `trade().cancel_all_buys()` still cancels entries known to the
 client. L7 adds manual full strategy refresh. Update older cores before using
 that feature; some older Linux builds

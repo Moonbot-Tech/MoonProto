@@ -297,11 +297,14 @@ impl UICommand {
                 let auto_detect_active = read_bool_zero_tail(payload, &mut pos);
                 let prepared_release_version = payload.get(pos..pos + 4)
                     .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()));
+                pos += 4;
+                let moon_stream_enabled = read_bool(payload, &mut pos);
                 Some(UICommand::RuntimeState(RuntimeStateCommand {
                     uid,
                     is_started,
                     auto_detect_active,
                     prepared_release_version,
+                    moon_stream_enabled,
                 }))
             }
 
@@ -352,6 +355,11 @@ impl UICommand {
                 uid,
                 active: read_bool_zero_tail(payload, &mut pos),
             })),
+
+            CMD_MOON_STREAM => Some(UICommand::MoonStream {
+                uid,
+                enabled: read_bool(payload, &mut pos)?,
+            }),
 
             CMD_NEWS_RELAY => {
                 let kind = read_u8_zero_tail(payload, &mut pos);

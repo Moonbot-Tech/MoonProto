@@ -39,6 +39,7 @@
 //! - 36 - `TTelegramStateCommand`  (Sliced, complete Telegram service/auth state)
 //! - 37..48 - Telegram state request and explicit account/service actions (High)
 //! - 49 - `TLogSubscribeCommand` (High, per-client log subscription)
+//! - 62 - `TMoonStreamCommand` (High, set Moon Streamer enabled)
 //!
 //! ## ASCfg / ASCfg2 blobs
 //! `TAutoStartConfig` (104 bytes) and `TAutoStartConfig2` (168 bytes) are
@@ -73,7 +74,7 @@ pub use builders::build_chart_text_snapshot_for_test;
 #[cfg(test)]
 pub(crate) use builders::build_new_market_notify;
 pub(crate) use builders::{
-    build_core_update, build_settings_snapshot_request,
+    build_core_update, build_settings_snapshot_request, build_moon_stream,
     build_alert_object, build_alert_snapshot_request, build_arb_activate_notify, build_auto_detect,
     build_chart_text_state, build_client_settings, build_emu_trades,
     build_kernel_license_state_request, build_lev_manage, build_logs_subscribe, build_mm_orders_subscribe,
@@ -120,6 +121,7 @@ const CMD_PROBLEM_NOTIFY: u8 = 33;
 const CMD_PROBLEMS_CLEAR: u8 = 34;
 const CMD_PROBLEMS_TEST: u8 = 35;
 const CMD_TELEGRAM_STATE: u8 = 36;
+const CMD_MOON_STREAM: u8 = 62;
 
 pub(crate) const NEWS_RELAY_KIND_NEWS: u8 = 0;
 pub(crate) const NEWS_RELAY_KIND_TAGS: u8 = 1;
@@ -1959,6 +1961,9 @@ pub struct RuntimeStateCommand {
     /// `Some(0)` means no prepared package; `None` means an older core did not
     /// report this field. This does not check the release server or install updates.
     pub prepared_release_version: Option<u32>,
+    /// Configured Moon Streamer switch, independent of connection status and license.
+    /// `None` means the core predates the switch command; `Some(false)` means OFF.
+    pub moon_stream_enabled: Option<bool>,
 }
 
 /// `TKernelLicenseStateCommand` (UI CmdId=22).
@@ -2038,6 +2043,7 @@ pub enum UICommand {
     },
     ProfitState(ProfitStateCommand),
     AutoDetect(AutoDetectCommand),
+    MoonStream { uid: u64, enabled: bool },
     NewsRelay(NewsRelayCommand),
     NewsHistory(NewsHistoryCommand),
     SharedConfig(SharedConfigCommand),

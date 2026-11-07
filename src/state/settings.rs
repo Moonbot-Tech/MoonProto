@@ -287,6 +287,7 @@ impl SettingsState {
             | UICommand::RestartNow { .. }
             | UICommand::KernelLicenseStateRequest { .. }
             | UICommand::AutoDetect(_)
+            | UICommand::MoonStream { .. }
             | UICommand::NewsRelay(_)
             | UICommand::NewsHistory(_)
             | UICommand::ProblemsClear
@@ -649,12 +650,14 @@ mod tests {
             is_started: true,
             auto_detect_active: false,
             prepared_release_version: Some(773),
+            moon_stream_enabled: Some(true),
         }));
         assert!(matches!(ev, Some(SettingsEvent::RuntimeStateUpdated)));
         let runtime = st.runtime_state.unwrap();
         assert!(runtime.is_started);
         assert!(!runtime.auto_detect_active);
         assert_eq!(runtime.prepared_release_version, Some(773));
+        assert_eq!(runtime.moon_stream_enabled, Some(true));
     }
 
     #[test]

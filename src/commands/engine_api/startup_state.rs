@@ -89,6 +89,7 @@ mod tests {
         let state = parse_startup_state(&data).unwrap();
         assert!(state.runtime.is_started && state.runtime.auto_detect_active);
         assert_eq!(state.runtime.prepared_release_version, None, "L5 snapshot remains valid");
+        assert_eq!(state.runtime.moon_stream_enabled, None);
         assert_eq!(state.profit.rep_total_profit, 123.5);
         assert_eq!(state.profit.rep_total_trades, 7);
         assert_eq!(state.hyperliquid.requests_left, Some(321));
@@ -119,6 +120,21 @@ mod tests {
                 "accepted {len} of {} bytes",
                 data.len()
             );
+        }
+    }
+
+    #[test]
+    fn moon_stream_is_recovered_with_the_initial_runtime_state() {
+        for enabled in [false, true] {
+            let mut data = startup_state_fixture();
+            data[1..5].copy_from_slice(&18u32.to_le_bytes());
+            data.splice(18..18, [6, 3, 0, 0, u8::from(enabled)]); // release 774 + switch
+            let state = parse_startup_state(&data).unwrap();
+            assert_eq!(state.runtime.prepared_release_version, Some(774));
+            assert_eq!(state.profit.rep_total_profit, 123.5);
+            let mut dispatcher = crate::events::EventDispatcher::new();
+            dispatcher.apply_startup_state(state);
+            assert_eq!(dispatcher.settings().runtime_state.unwrap().moon_stream_enabled, Some(enabled));
         }
     }
 

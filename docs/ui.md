@@ -290,8 +290,8 @@ cores ignore the request; the library never changes keys locally on that assumpt
 
 ### Runtime State
 
-The server sends runtime state after connect and whenever the market runtime or
-passive-mode state changes. Read it from
+The server sends runtime state after connect and whenever the market runtime,
+passive-mode state or Moon Streamer switch changes. Read it from
 `snapshot().settings().runtime_state` after
 `SettingsEvent::RuntimeStateUpdated`.
 
@@ -319,6 +319,30 @@ client.settings().set_auto_detect_active(true)?;
 The call does not optimistically mutate local state. The server either changes
 the mode or echoes the current runtime state, and the terminal updates after
 `SettingsEvent::RuntimeStateUpdated`.
+
+### Moon Streamer
+
+MoonBot 7.73 N1 and later let a client set and save the core's Moon Streamer
+reception switch without restarting the core:
+
+```rust
+client.settings().set_moon_stream_enabled(true)?;
+```
+
+The call returns when queued. Read the confirmed setting from
+`snapshot().settings().runtime_state.moon_stream_enabled` after
+`SettingsEvent::RuntimeStateUpdated`: `Some(true)` is enabled, `Some(false)` is
+disabled, and `None` means an older core does not report or support this switch.
+Older cores keep working and ignore the command. Setting the current value
+requests a fresh state echo; changing it broadcasts the new state to all clients.
+
+This is the configured reception switch. It does not indicate a connected
+streamer or grant a license. Actual reception still depends on the core's
+existing platform, chart and FullProxy settings. It does not start a stream server
+or change its address. Reconnecting a client reads the core's current setting;
+the library does not replay an old ON/OFF choice over changes from another client.
+
+### Starting and Stopping the Core
 
 `client.settings().restart_now()?` queues the normal MoonBot restart-now action:
 start the market runtime if needed, leave passive mode if needed, and start

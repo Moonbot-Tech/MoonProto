@@ -143,6 +143,7 @@ pub(super) enum UiRuntimeCommand {
     ServiceSettings { id: u8, uid: u64, json: String },
     KernelLicenseStateRequest,
     AutoDetect(bool),
+    MoonStream(bool),
 }
 
 pub(super) enum StratRuntimeCommand {
@@ -318,6 +319,7 @@ impl UiRuntimeCommand {
             Self::ServiceSettings { .. } => (46, 1),
             Self::KernelLicenseStateRequest => (36, 0),
             Self::AutoDetect(_) => (37, 0),
+            Self::MoonStream(_) => (98, 0),
             Self::SharedConfigRequest => (38, 0),
             Self::SendSharedConfig(data) => (39, data.len()),
         }

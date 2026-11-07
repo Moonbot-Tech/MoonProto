@@ -266,4 +266,9 @@ impl Client {
         let raw = crate::commands::ui::build_auto_detect(rand::random(), active);
         self.send_typed_domain_cmd(raw, Command::UI);
     }
+
+    pub(crate) fn ui_moon_stream(&self, enabled: bool) {
+        let raw = crate::commands::ui::build_moon_stream(rand::random(), enabled);
+        self.send_typed_domain_cmd(raw, Command::UI);
+    }
 }
