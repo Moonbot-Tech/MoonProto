@@ -271,4 +271,9 @@ impl Client {
         let raw = crate::commands::ui::build_moon_stream(rand::random(), enabled);
         self.send_typed_domain_cmd(raw, Command::UI);
     }
+
+    pub(crate) fn ui_cancel_all_exchange_buys(&self) {
+        let raw = crate::commands::ui::build_cancel_all_exchange_buys(rand::random());
+        self.send_typed_domain_cmd(raw, Command::UI);
+    }
 }

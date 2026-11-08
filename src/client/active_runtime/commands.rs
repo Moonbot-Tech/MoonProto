@@ -230,6 +230,7 @@ pub(super) enum RuntimeTradeCommandKind {
     },
     PanicSellAll,
     CancelAllBuys,
+    CancelAllExchangeBuys,
 }
 
 #[cfg(any(test, feature = "diagnostics"))]
@@ -370,6 +371,7 @@ impl RuntimeTradeCommandKind {
             Self::Penalty { .. } => (90, 1),
             Self::PanicSellAll => (91, 0),
             Self::CancelAllBuys => (95, 0),
+            Self::CancelAllExchangeBuys => (99, 0),
         }
     }
 }

@@ -1135,6 +1135,41 @@ mod tests {
     }
 
     #[test]
+    fn exchange_buy_cancellation_queues_one_ui_command_without_local_cancellations() {
+        for with_orders in [false, true] {
+            let mut client = ready_client();
+            let mut dispatcher = crate::events::EventDispatcher::new();
+            let orders = [(101, OrderWorkerStatus::BuySet), (102, OrderWorkerStatus::None),
+                (103, OrderWorkerStatus::SellSet)];
+            if with_orders {
+                for (uid, status) in orders { seed_runtime_order(&mut dispatcher, uid, status, 1); }
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            crate::client::MoonTrade { tx }.cancel_all_exchange_buys().unwrap();
+            let RuntimeCommand::TradeAction(kind) = rx.try_recv().unwrap() else { panic!("trade intent expected") };
+            assert!(!handle_trade_action(&mut client, &mut dispatcher, kind).unwrap());
+            let (sliced, high, low) = client.take_send_queues_for_test();
+            assert!(sliced.is_empty() && low.is_empty());
+            assert_eq!(high.len(), 1, "no addressed fallback or duplicate cancellation");
+            assert_eq!(high[0].cmd, Command::UI.to_byte());
+            assert!(high[0].encrypted);
+            assert!(matches!(crate::commands::ui::UICommand::parse(&high[0].data),
+                Some(crate::commands::ui::UICommand::CancelAllExchangeBuys { .. })));
+            if with_orders {
+                for (uid, status) in orders {
+                    let order = dispatcher.orders().get(uid).unwrap();
+                    assert_eq!(order.status, status);
+                    assert!(!order.pending_cancel);
+                }
+            }
+            client.testing_set_domain_ready(false);
+            assert!(!handle_trade_action(&mut client, &mut dispatcher,
+                RuntimeTradeCommandKind::CancelAllExchangeBuys).unwrap());
+            assert!(client.take_send_queues_for_test().1.is_empty());
+        }
+    }
+
+    #[test]
     fn moon_trade_new_order_builds_v4_start_command() {
         let mut client = ready_client();
         let mut dispatcher = crate::events::EventDispatcher::new();

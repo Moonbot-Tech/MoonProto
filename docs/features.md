@@ -41,6 +41,7 @@ See [markets](markets.md), [trades](trades.md), [order books](order_books.md),
 | Move or cancel | Apply the trader's intent to the current live order state; the runtime handles phase and in-flight gates. | `client.orders().move_order(...)` / `cancel(...)`. |
 | Stops and VStop | Change stop-loss, trailing stop, take-profit, or volume stop only when values actually changed. | `client.orders().update_stops(...)` / `update_vstop(...)`. |
 | Cancel all entries | Cancel BUYs and pending orders across the core while keeping SELL exits (full coverage on MoonBot 7.72 L8+). | `client.trade().cancel_all_buys()`; [compatibility](trade_actions.md). |
+| Cancel exchange entries | Run the Markets Table's exchange-wide cancellation, including orders outside the client's snapshot (MoonBot 7.73 N1+). | `client.trade().cancel_all_exchange_buys()`; [scope and confirmation](trade_actions.md). |
 | Panic sell | Toggle panic mode for one sell, apply the market panic-button behavior, or trigger the one-shot global action. | `turn_panic_sell(...)`, `switch_panic_sell_for_market(...)`, `client.trade().panic_sell_all()`. |
 | Click immunity | Exclude selected active orders from replace-kind and price-zone bulk moves. Percent-based move-all intentionally includes them. | `client.orders().set_immune_for_orders(...)`. |
 | Join, split, and close | Join orders, split an order/position, or close by normal limit or explicit market semantics. | `client.trade()` with `SplitOrderParams`, `ClosePositionParams`, and named `*_for_market` helpers. |

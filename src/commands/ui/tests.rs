@@ -127,6 +127,17 @@ fn moon_stream_switch_matches_delphi_wire_layout() {
 }
 
 #[test]
+fn exchange_buy_cancellation_has_only_the_base_ui_header() {
+    let raw = build_cancel_all_exchange_buys(0x0807_0605_0403_0201);
+    assert_eq!(raw, [63, 4, 0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    assert!(matches!(UICommand::parse(&raw),
+        Some(UICommand::CancelAllExchangeBuys { uid: 0x0807_0605_0403_0201 })));
+    for len in 0..raw.len() {
+        assert!(UICommand::parse(&raw[..len]).is_none());
+    }
+}
+
+#[test]
 fn moon_stream_runtime_pushes_preserve_old_snapshots() {
     let mut settings = crate::state::SettingsState::new();
     for enabled in [Some(false), Some(true), Some(false), None] {

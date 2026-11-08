@@ -360,6 +360,7 @@ impl UICommand {
                 uid,
                 enabled: read_bool(payload, &mut pos)?,
             }),
+            CMD_CANCEL_ALL_EXCHANGE_BUYS => Some(UICommand::CancelAllExchangeBuys { uid }),
 
             CMD_NEWS_RELAY => {
                 let kind = read_u8_zero_tail(payload, &mut pos);

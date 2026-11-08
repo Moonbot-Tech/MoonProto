@@ -595,6 +595,17 @@ impl MoonTrade {
         self.send_intent(RuntimeTradeCommandKind::CancelAllBuys)
     }
 
+    /// Run the core's exchange-wide entry-order cancellation (MoonBot 7.73 N1+).
+    ///
+    /// The core fetches open exchange orders and applies its exchange-specific
+    /// entry/exit filter, including orders outside MoonBot. This does not cancel
+    /// core-only pending orders. Success means queued, not exchange confirmation;
+    /// older compatible cores ignore the command. Any confirmation dialog belongs
+    /// to the caller; the core does not display another one.
+    pub fn cancel_all_exchange_buys(&self) -> Result<(), MoonClientError> {
+        self.send_intent(RuntimeTradeCommandKind::CancelAllExchangeBuys)
+    }
+
     fn send_intent(&self, kind: RuntimeTradeCommandKind) -> Result<(), MoonClientError> {
         self.tx
             .send(RuntimeCommand::TradeAction(kind))

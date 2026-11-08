@@ -821,6 +821,7 @@ pub(crate) const UI_COMMANDS: &[CommandDescriptor] = &[
     cmd_desc!(Command::UI, 60, "TTelegramSettingsCommand", base = Base, priority = Sliced, direction = Outbound),
     cmd_desc!(Command::UI, 61, "TServiceSettingsResult", base = Base, priority = Sliced, direction = Inbound),
     cmd_desc!(Command::UI, 62, "TMoonStreamCommand", base = Base, priority = High, direction = Outbound),
+    cmd_desc!(Command::UI, 63, "TCancelAllExchangeBuysCommand", base = Base, priority = High, direction = Outbound),
     // 51/52 are retired shutdown/export commands. Never reuse them for snapshots.
     cmd_desc!(Command::UI, 53, "TVpsArchiveRequest", base = Base, priority = High, direction = Outbound),
     cmd_desc!(Command::UI, 54, "TVpsArchiveReply", base = Base, priority = Sliced, direction = Inbound),
@@ -1160,7 +1161,7 @@ mod tests {
     #[test]
     fn descriptor_map_covers_known_typed_domains() {
         assert_eq!(ORDER_COMMANDS.len(), 26);
-        assert_eq!(UI_COMMANDS.len(), 59);
+        assert_eq!(UI_COMMANDS.len(), 60);
         assert_eq!(STRAT_COMMANDS.len(), 11);
         assert_eq!(BALANCE_COMMANDS.len(), 11);
         assert_eq!(API_COMMANDS.len(), 5);
@@ -1223,6 +1224,13 @@ mod tests {
         assert_eq!(moon_stream.direction, CommandDirection::Outbound);
         assert_eq!(moon_stream.ukey, UKeyRule::None);
         assert!(moon_stream.default_encrypted);
+
+        let exchange_buys = find_descriptor(Command::UI, 63).unwrap();
+        assert_eq!(exchange_buys.priority, CommandPriority::High);
+        assert_eq!(exchange_buys.max_retries, 3);
+        assert_eq!(exchange_buys.direction, CommandDirection::Outbound);
+        assert_eq!(exchange_buys.ukey, UKeyRule::None);
+        assert!(exchange_buys.default_encrypted);
 
         let digest = find_descriptor(Command::Balance, 8).unwrap();
         assert_eq!(digest.priority, CommandPriority::High);

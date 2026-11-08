@@ -1069,6 +1069,10 @@ pub(super) fn handle_trade_action(
         RuntimeTradeCommandKind::CancelAllBuys => {
             Ok(client.cancel_all_buys(dispatcher.orders_mut(), random_nonzero_u64()))
         }
+        RuntimeTradeCommandKind::CancelAllExchangeBuys => {
+            client.ui_cancel_all_exchange_buys();
+            Ok(false)
+        }
     }
 }
 

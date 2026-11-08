@@ -8077,7 +8077,8 @@ fn run_manual_pending_gate_body(cfg: &FireConfig, a: &mut Session, b: &mut Sessi
 fn run_real_order_cancel_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
     let restore_emu_mode = ensure_server_real_order_mode(cfg, a, b);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_real_order_cancel_gate_body(a, b);
+        run_real_order_cancel_gate_body(a, b, false);
+        run_real_order_cancel_gate_body(a, b, true);
     }));
     a.end_order_state_capture();
     b.end_order_state_capture();
@@ -8087,7 +8088,7 @@ fn run_real_order_cancel_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session
     }
 }
 
-fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session) {
+fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session, exchange_sweep: bool) {
     a.begin_order_state_capture();
     b.begin_order_state_capture();
     let market = FIRETEST_REAL_BALANCE_ORDER_MARKET;
@@ -8155,6 +8156,9 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session) {
         }
         if let Some(uid) = server_uid {
             let local_status = st.order_status_by_uid.get(&uid).copied();
+            if exchange_sweep && local_status == Some(OrderWorkerStatus::None) {
+                continue; // The exchange sweep needs an accepted exchange order, not a local pending.
+            }
             if local_status.is_none() {
                 if !logged_waiting_for_local_order {
                     println!(
@@ -8175,10 +8179,12 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session) {
                 ),
                 "real order uid={uid} reached non-cancelable local status {local_status:?} before FireTest cancel"
             );
-            assert!(
-                a.cancel_order(uid),
-                "cancel_order did not pass Delphi local gate for uid={uid} status={local_status:?}"
-            );
+            if exchange_sweep {
+                a.client.trade().cancel_all_exchange_buys().expect("queue exchange-wide entry cancellation");
+            } else {
+                assert!(a.cancel_order(uid),
+                    "cancel_order did not pass Delphi local gate for uid={uid} status={local_status:?}");
+            }
             cancel_event_from = Some((a.order_state_event_count(), b.order_state_event_count()));
             println!(
                 "FIRETEST real order cancel: server uid={} arrived after {:.2}s; cancel queued immediately",
@@ -8196,8 +8202,10 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session) {
             FIRETEST_REAL_BALANCE_ORDER_TIMEOUT
         );
     };
-    let (a_cancel_event_from, b_cancel_event_from) =
-        cancel_event_from.expect("cancel event baseline must be captured with server uid");
+    let Some((a_cancel_event_from, b_cancel_event_from)) = cancel_event_from else {
+        let _ = cancel_if_known(a, &before_uids, market, price, false);
+        panic!("FireTest order uid={server_uid} did not reach a cancellable exchange state");
+    };
 
     let cancel_start = Instant::now();
     let removed = loop {
@@ -8235,6 +8243,7 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session) {
             );
         }
     };
+    if !removed { let _ = cancel_if_known(a, &before_uids, market, price, false); }
     assert!(
         removed,
         "FireTest real order cancel: {market} order uid={server_uid} did not broadcast terminal BuyCancel and disappear from both clients within {:?}; A.events=[{}] B.events=[{}]",
@@ -8245,6 +8254,7 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session) {
     assert_balance_stream_seen(a);
     assert_balance_stream_seen(b);
     println!("OK: real non-emulator SOL order was created, canceled, and removed; balance stream was observed independently");
+    if exchange_sweep { println!("OK: exchange-wide entry cancellation reached the exchange and both clients"); }
 }
 
 #[test]

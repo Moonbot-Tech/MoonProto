@@ -110,6 +110,7 @@ Position and bulk actions have explicit meanings:
 | Move all matching buys or sells | `move_all_buys_for_market(...)` / `move_all_sells_for_market(...)` |
 | Trigger the one-shot global panic-sell action | `panic_sell_all()` |
 | Cancel all entry BUYs and pending orders across the core, keeping SELL exits | `cancel_all_buys()` |
+| Run the Markets Table's exchange-wide entry-order cancellation | `cancel_all_exchange_buys()` |
 
 `client.trade().cancel_all_buys()` is queued without blocking. On MoonBot
 7.72 L8+ the core also cancels entries that have not reached this client's
@@ -118,6 +119,18 @@ of known entries. Addressed cancellations remain as a fallback on older compatib
 cores, where only known entries can be covered. Observe order updates for the
 result. This action does not sell positions or cancel their SELL exits and is
 not equivalent to the exchange-level `account().cancel_all_orders()`.
+
+`client.trade().cancel_all_exchange_buys()` requires **MoonBot 7.73 N1+**.
+The core fetches open orders from the exchange and applies its existing
+exchange-specific entry/exit filter. It can cancel orders created outside
+MoonBot; it does not require them to be present in this client's snapshot.
+"BUY" here means the core's entry classification, not simply the exchange's
+BUY side: on futures, external orders may be included regardless of their side.
+Core-only pending orders are outside this action; use `cancel_all_buys()` for
+those. The SDK sends one request and leaves local order state unchanged until
+the core reports updates. Success means queued, not that every exchange order
+was cancelled. Any confirmation dialog belongs in the caller; the core does not
+show a second one. Older compatible cores ignore the request without a fallback.
 
 Bulk buy/sell moves use named constructors for the trader-visible mode. The
 runtime still serializes the matching core packet internally:

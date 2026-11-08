@@ -288,6 +288,7 @@ impl SettingsState {
             | UICommand::KernelLicenseStateRequest { .. }
             | UICommand::AutoDetect(_)
             | UICommand::MoonStream { .. }
+            | UICommand::CancelAllExchangeBuys { .. }
             | UICommand::NewsRelay(_)
             | UICommand::NewsHistory(_)
             | UICommand::ProblemsClear

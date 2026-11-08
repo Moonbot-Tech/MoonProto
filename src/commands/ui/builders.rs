@@ -417,6 +417,13 @@ pub(crate) fn build_moon_stream(uid: u64, enabled: bool) -> Vec<u8> {
     out
 }
 
+/// CmdId=63 `TCancelAllExchangeBuysCommand` (empty body).
+pub(crate) fn build_cancel_all_exchange_buys(uid: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(11);
+    write_header(&mut out, CMD_CANCEL_ALL_EXCHANGE_BUYS, uid);
+    out
+}
+
 /// CmdId=28 `TSharedConfigCommand` with a gzip safe-share payload.
 #[doc(hidden)]
 pub(crate) fn build_shared_config_blob(uid: u64, data: &[u8]) -> Vec<u8> {

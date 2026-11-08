@@ -40,6 +40,7 @@
 //! - 37..48 - Telegram state request and explicit account/service actions (High)
 //! - 49 - `TLogSubscribeCommand` (High, per-client log subscription)
 //! - 62 - `TMoonStreamCommand` (High, set Moon Streamer enabled)
+//! - 63 - `TCancelAllExchangeBuysCommand` (High, exchange-wide entry cancellation)
 //!
 //! ## ASCfg / ASCfg2 blobs
 //! `TAutoStartConfig` (104 bytes) and `TAutoStartConfig2` (168 bytes) are
@@ -74,7 +75,7 @@ pub use builders::build_chart_text_snapshot_for_test;
 #[cfg(test)]
 pub(crate) use builders::build_new_market_notify;
 pub(crate) use builders::{
-    build_core_update, build_settings_snapshot_request, build_moon_stream,
+    build_core_update, build_settings_snapshot_request, build_moon_stream, build_cancel_all_exchange_buys,
     build_alert_object, build_alert_snapshot_request, build_arb_activate_notify, build_auto_detect,
     build_chart_text_state, build_client_settings, build_emu_trades,
     build_kernel_license_state_request, build_lev_manage, build_logs_subscribe, build_mm_orders_subscribe,
@@ -122,6 +123,7 @@ const CMD_PROBLEMS_CLEAR: u8 = 34;
 const CMD_PROBLEMS_TEST: u8 = 35;
 const CMD_TELEGRAM_STATE: u8 = 36;
 const CMD_MOON_STREAM: u8 = 62;
+const CMD_CANCEL_ALL_EXCHANGE_BUYS: u8 = 63;
 
 pub(crate) const NEWS_RELAY_KIND_NEWS: u8 = 0;
 pub(crate) const NEWS_RELAY_KIND_TAGS: u8 = 1;
@@ -2044,6 +2046,7 @@ pub enum UICommand {
     ProfitState(ProfitStateCommand),
     AutoDetect(AutoDetectCommand),
     MoonStream { uid: u64, enabled: bool },
+    CancelAllExchangeBuys { uid: u64 },
     NewsRelay(NewsRelayCommand),
     NewsHistory(NewsHistoryCommand),
     SharedConfig(SharedConfigCommand),
