@@ -425,6 +425,63 @@ fn flagged_strategy_full_keeps_in_flight_sliced_delivery() {
 }
 
 #[test]
+fn strategy_start_stop_slices_checked_delta_within_pmtu() {
+    use crate::commands::{strat::StratCheckedItem, ui::UICommand};
+
+    for count in [264, 3, 0] {
+        let items: Vec<_> = (0..count).map(|i| StratCheckedItem {
+            strategy_id: (i as u64 + 1).wrapping_mul(0x9e3779b97f4a7c15),
+            checked: i % 2 == 0,
+        }).collect();
+        for pmtu in [508, 1200] {
+            for is_start in [true, false] {
+                let mut client = Client::new(dummy_cfg());
+                client.testing_set_domain_ready(true);
+                client.actual_pmtu = pmtu;
+                client.encode_cipher = Some(crypto::cipher_from_key(&[0; 16]));
+                client.recv.data_read_state.decode_cipher = Some(crypto::cipher_from_key(&[0; 16]));
+                client.ui_strat_start_stop_v2(is_start, &items);
+                let (sliced, high, low) = client.take_send_queues_for_test();
+                assert!(high.is_empty() && low.is_empty(), "start/stop must use fragmentation, count={count}");
+                assert_eq!(sliced.len(), 1, "the action is sent even without a checked delta");
+                assert_eq!(sliced[0].max_retries, 6);
+                assert!(sliced[0].encrypted && sliced[0].u_key.is_none());
+                writer(&mut client).create_sliced_and_send(&sliced[0]);
+                assert_eq!(client.sending.len(), 1);
+                if count == 264 { assert!(client.sending[0].blocks_count > 1); }
+
+                let mut receiver = slicing::SlicingReceiver::new();
+                let mut completed = None;
+                for slice in client.sending[0].slices.iter().rev() {
+                    crate::transport::pack_client_packet(
+                        &mut client.transport.send_buf, &client.transport.mac_ctx,
+                        Command::Sliced.to_byte(), client.cfg.client_id, slice,
+                        client.cfg.transport_mode.to_byte(), &mut client.transport.transport_mode_state,
+                    );
+                    assert!(client.transport.send_buf.len() <= usize::from(pmtu));
+                    let (cmd, payload) = unpack_client_packet(&client.cfg.mac_key, &client.transport.send_buf);
+                    assert_eq!(cmd, Command::Sliced.to_byte());
+                    if let (Some(message), _) = receiver.on_new_sliced(&payload) {
+                        assert!(completed.replace(message).is_none());
+                    }
+                    assert!(receiver.on_new_sliced(&payload).0.is_none(), "repeated slices must not replay the action");
+                }
+                let (_, cmd, payload, _, _) = completed.expect("all slices reconstruct the command");
+                let (cmd, payload) = Client::decode_command_payload_owned(
+                    &mut client.recv.data_read_state, cmd, payload,
+                ).expect("encrypted command must decode");
+                assert_eq!(cmd, Command::UI.to_byte());
+                let UICommand::StratStartStopV2(command) = UICommand::parse(&payload).unwrap() else {
+                    panic!("expected strategy start/stop");
+                };
+                assert_eq!(command.is_start, is_start);
+                assert_eq!(command.items, items);
+            }
+        }
+    }
+}
+
+#[test]
 // parity: MoonBot MoonProtoIntStruct.pas:TMoonProtoClient.ApplyRegularHLAck
 fn high_u_key_cleanup_runs_after_regular_ack() {
     let mut client = Client::new(dummy_cfg());

@@ -45,7 +45,7 @@ impl Client {
     }
 
     #[doc(hidden)]
-    /// Send `TStratStartStopCommandV2` (UI CmdId=4, High) with an explicit
+    /// Send `TStratStartStopCommandV2` (UI CmdId=4, Sliced) with an explicit
     /// checked delta.
     ///
     /// Regular active-library callers should prefer

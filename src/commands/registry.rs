@@ -508,7 +508,7 @@ pub(crate) const UI_COMMANDS: &[CommandDescriptor] = &[
         4,
         "TStratStartStopCommandV2",
         base = Base,
-        priority = High,
+        priority = Sliced,
         direction = Both
     ),
     cmd_desc!(

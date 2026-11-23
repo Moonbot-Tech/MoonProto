@@ -4817,12 +4817,15 @@ fn ui_strat_start_stop_v2_uses_owned_checked_delta() {
 
     let mut client = crate::client::Client::new(dummy_client_cfg());
     client.testing_set_domain_ready(true);
+    assert_eq!(d.send_strategy_checked_delta(&client), 2);
     assert_eq!(d.ui_strat_start_stop_v2(&client, true), 2);
 
-    let sent = drain_client_send_items(&client);
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].cmd, Command::UI.to_byte());
-    match crate::commands::ui::UICommand::parse(&sent[0].data).unwrap() {
+    let (sent, high, low) = client.take_send_queues_for_test();
+    assert!(high.is_empty() && low.is_empty());
+    assert_eq!(sent.len(), 2, "start keeps the checked delta until the server confirms it");
+    assert_eq!(sent[0].cmd, Command::Strat.to_byte());
+    assert_eq!(sent[1].cmd, Command::UI.to_byte());
+    match crate::commands::ui::UICommand::parse(&sent[1].data).unwrap() {
         crate::commands::ui::UICommand::StratStartStopV2(cmd) => {
             assert!(cmd.is_start);
             assert_eq!(

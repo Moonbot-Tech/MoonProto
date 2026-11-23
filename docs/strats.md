@@ -737,6 +737,13 @@ client's Init gate is open; the checked delta may be empty because the same
 command also carries the start/stop action. Both helpers keep `prev_checked`
 unchanged until the server confirms the checked-state change.
 
+Both `start()` and `stop()` include the pending checked-state delta and use
+the transport's fragmentation and retries, including for small or empty deltas.
+Large selections therefore do not depend on fitting in one UDP packet. The
+application does not need to wait for a separate checked-state echo before
+starting or stopping strategies. This delivery fix does not require a core
+upgrade on cores that already support strategy start/stop with checked state.
+
 Low-level compatibility tools may still use raw checked-sync/start-stop and
 snapshot helpers, but those helpers are hidden diagnostics. Regular
 applications should prefer `MoonClient` helpers so the library-owned strategy
