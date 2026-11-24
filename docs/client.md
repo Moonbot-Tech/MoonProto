@@ -311,10 +311,13 @@ println!("Minimum core: {}", compatibility.minimum_core_version);
 println!("{}", compatibility.comment);
 ```
 
-The current requirement is **MoonBot 7.73 N1**, which adds Moon Streamer control,
-its configured state, and `trade().cancel_all_exchange_buys()` for exchange-wide
-entry-order cancellation. Older compatible cores ignore these commands and
-report `moon_stream_enabled` as `None`. See [Moon Streamer](ui.md#moon-streamer)
+The current requirement is **MoonBot 7.73 N2**, which adds Moon Streamer source
+selection, independent reception/distribution, reconnect, diagnostics, subscriber
+details and save-result replies. Older cores omit `runtime_state.moon_streamer`;
+N1 retains the existing reception switch without a save receipt.
+N1 also adds `trade().cancel_all_exchange_buys()` for exchange-wide entry-order
+cancellation. Earlier compatible cores ignore these commands and report
+`moon_stream_enabled` as `None`. See [Moon Streamer](ui.md#moon-streamer)
 and [trade actions](trade_actions.md).
 L8 adds reporting/privacy controls and core-wide BUY/pending cancellation. Older compatible cores ignore
 reporting edits; `trade().cancel_all_buys()` still cancels entries known to the

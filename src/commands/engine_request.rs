@@ -163,6 +163,36 @@ pub(crate) fn get_strategies_snapshot() -> Vec<u8> {
     build_engine_request(EngineMethod::GetStrategiesSnapshot, "", &[])
 }
 
+pub(crate) fn moon_stream_state() -> Vec<u8> {
+    build_engine_request_full(EngineMethod::MoonStreamSettings, "", &[], &[0])
+}
+
+pub(crate) fn moon_stream_source(source: crate::state::MoonStreamerSource) -> Vec<u8> {
+    let ip = match source {
+        crate::state::MoonStreamerSource::Common => 0,
+        crate::state::MoonStreamerSource::Custom(ip) => u32::from(ip),
+    };
+    let mut params = [1, 0, 0, 0, 0];
+    params[1..].copy_from_slice(&ip.to_le_bytes());
+    build_engine_request_full(EngineMethod::MoonStreamSettings, "", &[], &params)
+}
+
+pub(crate) fn moon_stream_distribution(enabled: bool) -> Vec<u8> {
+    build_engine_request_full(EngineMethod::MoonStreamSettings, "", &[], &[2, u8::from(enabled)])
+}
+
+pub(crate) fn moon_stream_reconnect() -> Vec<u8> {
+    build_engine_request_full(EngineMethod::MoonStreamSettings, "", &[], &[3])
+}
+
+pub(crate) fn moon_stream_subscribers() -> Vec<u8> {
+    build_engine_request_full(EngineMethod::MoonStreamSettings, "", &[], &[4])
+}
+
+pub(crate) fn moon_stream_reception(enabled: bool) -> Vec<u8> {
+    build_engine_request_full(EngineMethod::MoonStreamSettings, "", &[], &[5, u8::from(enabled)])
+}
+
 /// `emk_GetMarketsList`: fetch the full market list.
 pub(crate) fn get_markets_list() -> Vec<u8> {
     build_engine_request(EngineMethod::GetMarketsList, "", &[])

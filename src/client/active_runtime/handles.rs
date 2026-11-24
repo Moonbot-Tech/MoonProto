@@ -904,6 +904,69 @@ impl MoonAccount<'_> {
     }
 }
 
+/// Core-owned Moon Streamer reception, distribution and diagnostics.
+/// Requires MoonBot 7.73 N2+ and an advertised `runtime_state.moon_streamer`.
+/// On N1, use [`MoonSettings::set_moon_stream_enabled`] for the existing switch.
+pub struct MoonStreamer<'a> {
+    pub(super) client: &'a MoonClient,
+}
+
+impl MoonStreamer<'_> {
+    /// Set reception independently of distribution (MoonBot 7.73 N2+).
+    /// Completion reports core/save errors. Older cores retain the settings handle's ON/OFF command.
+    pub fn set_receive_enabled(&self, enabled: bool) -> Result<EngineActionTicket, MoonClientError> {
+        self.client.queue_engine_action(crate::events::EngineActionKind::SetMoonStreamerReception { enabled },
+            crate::commands::engine_request::moon_stream_reception(enabled))
+    }
+
+    /// Request current configuration and diagnostic counters (MoonBot 7.73 N2+).
+    /// Retained state is published before the matching `Event::EngineAction`.
+    pub fn refresh(&self) -> Result<EngineActionTicket, MoonClientError> {
+        self.client.queue_engine_action(crate::events::EngineActionKind::RefreshMoonStreamer,
+            crate::commands::engine_request::moon_stream_state())
+    }
+
+    /// Change only the selected source, without enabling reception or distribution.
+    /// A repeated selection does not reconnect. Completion reports core/save errors.
+    pub fn set_source(&self, source: crate::state::MoonStreamerSource) -> Result<EngineActionTicket, MoonClientError> {
+        if matches!(source, crate::state::MoonStreamerSource::Custom(ip) if ip.is_unspecified()) {
+            return Err(MoonClientError::InvalidServiceSettings("Use Common instead of an unspecified custom IP"));
+        }
+        self.client.queue_engine_action(crate::events::EngineActionKind::SetMoonStreamerSource { source },
+            crate::commands::engine_request::moon_stream_source(source))
+    }
+
+    /// Select the last custom address reported by the core, without enabling reception.
+    pub fn use_last_custom_server(&self) -> Result<EngineActionTicket, MoonClientError> {
+        let ip = self.client.snapshot()
+            .and_then(|s| s.settings().runtime_state.and_then(|s| s.moon_streamer))
+            .and_then(|s| s.last_custom_server)
+            .ok_or(MoonClientError::StateUnavailable("Moon Streamer has no reported custom address"))?;
+        self.set_source(crate::state::MoonStreamerSource::Custom(ip))
+    }
+
+    /// Change distribution from this core independently of its reception settings.
+    /// Completion reports core/save errors; inspect `distribution.listener_status` for socket status.
+    pub fn set_distribution_enabled(&self, enabled: bool) -> Result<EngineActionTicket, MoonClientError> {
+        self.client.queue_engine_action(crate::events::EngineActionKind::SetMoonStreamerDistribution { enabled },
+            crate::commands::engine_request::moon_stream_distribution(enabled))
+    }
+
+    /// Explicitly reconnect reception to the currently selected source.
+    /// Success acknowledges the request; `receiver.online` reports incoming traffic.
+    pub fn reconnect(&self) -> Result<EngineActionTicket, MoonClientError> {
+        self.client.queue_engine_action(crate::events::EngineActionKind::ReconnectMoonStreamer,
+            crate::commands::engine_request::moon_stream_reconnect())
+    }
+
+    /// Request the core's display-ready subscriber report, including addresses and resend counts.
+    /// Read `snapshot().settings().moon_streamer_subscribers` after the matching completion.
+    pub fn request_subscribers(&self) -> Result<EngineActionTicket, MoonClientError> {
+        self.client.queue_engine_action(crate::events::EngineActionKind::RequestMoonStreamerSubscribers,
+            crate::commands::engine_request::moon_stream_subscribers())
+    }
+}
+
 /// UI/settings command handle.
 pub struct MoonSettings<'a> {
     pub(super) client: &'a MoonClient,

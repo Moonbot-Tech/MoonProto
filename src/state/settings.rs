@@ -55,6 +55,9 @@ pub struct SettingsState {
     shared_config_revision: u64,
     /// Current market-runtime/passive-mode state, if received.
     pub runtime_state: Option<RuntimeStateCommand>,
+    /// Last explicitly requested subscriber report, ready for display. `None` means not fetched.
+    /// This is a diagnostic sample, not a continuously updated subscriber list.
+    pub moon_streamer_subscribers: Option<std::sync::Arc<str>>,
     /// Current license/module/MoonCredits state, if received.
     pub kernel_license_state: Option<KernelLicenseStateCommand>,
     /// Current report/profit counters, if received.
@@ -95,6 +98,8 @@ pub enum SettingsEvent {
     SharedConfigUpdated,
     /// MoonBot core runtime/passive-mode state changed.
     RuntimeStateUpdated,
+    /// A requested Moon Streamer subscriber report replaced the retained sample.
+    MoonStreamerSubscribersUpdated,
     /// License/module/MoonCredits state changed.
     KernelLicenseStateUpdated,
     /// Report/profit counters changed.
@@ -652,6 +657,7 @@ mod tests {
             auto_detect_active: false,
             prepared_release_version: Some(773),
             moon_stream_enabled: Some(true),
+            moon_streamer: None,
         }));
         assert!(matches!(ev, Some(SettingsEvent::RuntimeStateUpdated)));
         let runtime = st.runtime_state.unwrap();

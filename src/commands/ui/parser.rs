@@ -299,12 +299,15 @@ impl UICommand {
                     .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()));
                 pos += 4;
                 let moon_stream_enabled = read_bool(payload, &mut pos);
+                let moon_streamer = moon_stream_enabled.and_then(|enabled|
+                    super::moon_streamer::parse(&payload[pos..], enabled));
                 Some(UICommand::RuntimeState(RuntimeStateCommand {
                     uid,
                     is_started,
                     auto_detect_active,
                     prepared_release_version,
                     moon_stream_enabled,
+                    moon_streamer,
                 }))
             }
 

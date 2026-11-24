@@ -666,6 +666,31 @@ impl EventDispatcher {
         kind: EngineActionKind,
         mut resp: EngineResponse,
     ) {
+        if kind.is_moon_streamer() && resp.success {
+            let valid = if resp.method != EngineMethod::MoonStreamSettings {
+                false
+            } else if kind == EngineActionKind::RequestMoonStreamerSubscribers {
+                if let Some(text) = crate::commands::registry::read_string(&resp.data, &mut 0) {
+                    self.settings.moon_streamer_subscribers = Some(std::sync::Arc::from(text));
+                    self.queued_events.extend([Event::Settings(crate::state::SettingsEvent::MoonStreamerSubscribersUpdated)]);
+                    true
+                } else { false }
+            } else {
+                match crate::commands::ui::UICommand::parse(&resp.data) {
+                    Some(crate::commands::ui::UICommand::RuntimeState(state)) if state.moon_streamer.is_some() => {
+                        self.queued_events.extend(self.settings.apply(crate::commands::ui::UICommand::RuntimeState(state))
+                            .map(Event::Settings));
+                        true
+                    }
+                    _ => false,
+                }
+            };
+            if !valid {
+                resp.success = false;
+                resp.error_code = 0;
+                resp.error_msg = "Invalid Moon Streamer response".into();
+            }
+        }
         if kind == EngineActionKind::RequestStrategiesSnapshot && resp.success
             && (resp.method != EngineMethod::GetStrategiesSnapshot || !self.replace_strategies_from_response(&resp.data))
         {

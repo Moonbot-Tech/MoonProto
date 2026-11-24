@@ -274,6 +274,20 @@ pub enum EngineActionKind {
     ReloadOrderBook,
     /// Replace this client's strategy state with the core's complete list.
     RequestStrategiesSnapshot,
+    RefreshMoonStreamer,
+    SetMoonStreamerSource { source: crate::state::MoonStreamerSource },
+    SetMoonStreamerDistribution { enabled: bool },
+    SetMoonStreamerReception { enabled: bool },
+    ReconnectMoonStreamer,
+    RequestMoonStreamerSubscribers,
+}
+
+impl EngineActionKind {
+    pub(crate) fn is_moon_streamer(&self) -> bool {
+        matches!(self, Self::RefreshMoonStreamer | Self::SetMoonStreamerSource { .. }
+            | Self::SetMoonStreamerDistribution { .. } | Self::SetMoonStreamerReception { .. }
+            | Self::ReconnectMoonStreamer | Self::RequestMoonStreamerSubscribers)
+    }
 }
 
 /// Completion of an asynchronous user-facing Engine API action.

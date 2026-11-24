@@ -66,6 +66,9 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
 mod builders;
 mod parser;
+mod moon_streamer;
+#[cfg(test)]
+pub(crate) use moon_streamer::runtime_fixture as moon_streamer_runtime_fixture;
 mod telegram;
 pub(crate) use telegram::TelegramAction;
 
@@ -1948,7 +1951,7 @@ pub struct OrdersHistoryRequest {
 /// runtime is started and whether automatic detection is active. It is broader
 /// than `TStratRuntimeState`: strategies may be running/stopped independently
 /// from the core market/passive-mode state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RuntimeStateCommand {
     #[cfg(any(test, feature = "diagnostics"))]
     #[doc(hidden)]
@@ -1966,6 +1969,8 @@ pub struct RuntimeStateCommand {
     /// Configured Moon Streamer switch, independent of connection status and license.
     /// `None` means the core predates the switch command; `Some(false)` means OFF.
     pub moon_stream_enabled: Option<bool>,
+    /// Extended configuration and diagnostics. `None` means an older core.
+    pub moon_streamer: Option<crate::state::MoonStreamerState>,
 }
 
 /// `TKernelLicenseStateCommand` (UI CmdId=22).

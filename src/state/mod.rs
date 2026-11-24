@@ -26,6 +26,9 @@ pub(crate) mod history_worker;
 pub(crate) mod kernel_health;
 pub(crate) mod markets;
 mod memory_warmup;
+mod moon_streamer;
+pub use moon_streamer::{MoonStreamerDistribution, MoonStreamerListenerStatus, MoonStreamerPacketStatus, MoonStreamerReceiver,
+    MoonStreamerSource, MoonStreamerState};
 pub(crate) mod news;
 pub(crate) mod order_books;
 pub(crate) mod orders;

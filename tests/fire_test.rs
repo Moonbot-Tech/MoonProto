@@ -433,6 +433,7 @@ struct RuntimeStateProbe {
     auto_detect_active: bool,
     prepared_release_version: Option<u32>,
     moon_stream_enabled: Option<bool>,
+    moon_streamer_supported: bool,
 }
 
 impl From<moonproto::RuntimeStateCommand> for RuntimeStateProbe {
@@ -442,6 +443,7 @@ impl From<moonproto::RuntimeStateCommand> for RuntimeStateProbe {
             auto_detect_active: value.auto_detect_active,
             prepared_release_version: value.prepared_release_version,
             moon_stream_enabled: value.moon_stream_enabled,
+            moon_streamer_supported: value.moon_streamer.is_some(),
         }
     }
 }
@@ -818,6 +820,7 @@ struct Session {
     market_history_archives: Vec<(moonproto::state::MarketHistoryTicket, Vec<moonproto::state::TradeHistoryRow>)>,
     order_state_events: Option<Vec<FireTestOrderStateEvent>>,
     candle_tf_state_events: Vec<moonproto::CandleTimeframeStateEvent>,
+    engine_action_events: Vec<moonproto::EngineActionEvent>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -957,6 +960,7 @@ impl Session {
             market_history_archives: Vec::new(),
             order_state_events: None,
             candle_tf_state_events: Vec::new(),
+            engine_action_events: Vec::new(),
         };
         assert!(
             pump_session_until(&mut session, cfg.connect_timeout, "connect ready", |s| {
@@ -1023,6 +1027,9 @@ impl Session {
             }
             if let Event::CandleTimeframeState(state) = &event {
                 self.candle_tf_state_events.push(state.clone());
+            }
+            if let Event::EngineAction(result) = &event {
+                self.engine_action_events.push(result.clone());
             }
             record_event(&self.stats, &event, snapshot.as_deref(), None);
             if let Event::MarketHistoryArchive { ticket, trades } = event {
@@ -8877,6 +8884,104 @@ fn run_moon_stream_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
     println!("OK: Moon Streamer switch, two-client broadcast, no-op echo and restore (original={original})");
 }
 
+fn moon_streamer_state(session: &Session) -> Option<moonproto::state::MoonStreamerState> {
+    session.state_snapshot().settings().runtime_state.and_then(|state| state.moon_streamer)
+}
+
+fn wait_streamer_action(cfg: &FireConfig, a: &mut Session, b: &mut Session, ticket: moonproto::EngineActionTicket) {
+    let mut index = None;
+    assert!(pump_pair_until_sessions(a, b, cfg.wait, "Moon Streamer action result", |a, _| {
+        index = a.engine_action_events.iter().position(|event| ticket.matches(event));
+        index.is_some()
+    }), "Moon Streamer action timed out: {:?}", ticket.kind);
+    let result = a.engine_action_events.swap_remove(index.unwrap());
+    assert!(result.success, "Moon Streamer {:?}: {}", result.kind, result.error_msg);
+}
+
+fn run_moon_streamer_settings_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
+    let original = moon_streamer_state(a).expect("full FireTest requires Moon Streamer state (MoonBot 7.73 N2+)");
+    assert!(moon_streamer_state(b).is_some(), "both clients must recover Moon Streamer state at startup");
+    let ticket = a.client.moon_streamer().refresh().expect("refresh Moon Streamer");
+    wait_streamer_action(cfg, a, b, ticket);
+    assert_eq!(moon_streamer_state(a).unwrap().source, original.source);
+    if !original.can_configure {
+        println!("OK: Moon Streamer diagnostic refresh; core reports configuration unavailable");
+        return;
+    }
+    let retained = a.state_snapshot();
+    let retained_streamer = retained.settings().runtime_state.unwrap().moon_streamer;
+    let mutation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        use moonproto::state::MoonStreamerSource;
+        let alternate = match original.source {
+            MoonStreamerSource::Common => original.last_custom_server.map(MoonStreamerSource::Custom),
+            MoonStreamerSource::Custom(_) => Some(MoonStreamerSource::Common),
+        };
+        if let Some(alternate) = alternate {
+            let ticket = if matches!(alternate, MoonStreamerSource::Custom(_)) {
+                a.client.moon_streamer().use_last_custom_server()
+            } else {
+                a.client.moon_streamer().set_source(alternate)
+            }.expect("select alternate Moon Streamer source");
+            wait_streamer_action(cfg, a, b, ticket);
+            assert!(pump_pair_until_sessions(a, b, cfg.wait, "Moon Streamer source broadcast", |a, b| {
+                [a, b].iter().all(|s| moon_streamer_state(s).is_some_and(|v|
+                    v.source == alternate && v.last_custom_server == original.last_custom_server
+                        && v.receive_enabled == original.receive_enabled && v.distribution_enabled == original.distribution_enabled))
+            }), "source selection must preserve switches and the saved custom address");
+            let ticket = a.client.moon_streamer().set_source(original.source).expect("restore selected source");
+            wait_streamer_action(cfg, a, b, ticket);
+        } else {
+            println!("FIRETEST source change skipped: no saved custom address to switch to without changing address history");
+        }
+        let ticket = a.client.moon_streamer().set_source(original.source).expect("keep Moon Streamer source");
+        wait_streamer_action(cfg, a, b, ticket);
+        let ticket = a.client.moon_streamer().set_receive_enabled(!original.receive_enabled).expect("set reception");
+        wait_streamer_action(cfg, a, b, ticket);
+        assert!(pump_pair_until_sessions(a, b, cfg.wait, "Moon Streamer reception broadcast", |a, b| {
+            [a, b].iter().all(|s| moon_streamer_state(s).is_some_and(|v|
+                v.receive_enabled != original.receive_enabled && v.distribution_enabled == original.distribution_enabled
+                    && v.source == original.source))
+        }), "reception must not change source or distribution");
+        let ticket = a.client.moon_streamer().set_distribution_enabled(!original.distribution_enabled).expect("set distribution");
+        wait_streamer_action(cfg, a, b, ticket);
+        assert!(pump_pair_until_sessions(a, b, cfg.wait, "Moon Streamer distribution broadcast", |a, b| {
+            [a, b].iter().all(|s| moon_streamer_state(s).is_some_and(|v|
+                v.distribution_enabled != original.distribution_enabled && v.receive_enabled != original.receive_enabled
+                    && v.source == original.source))
+        }), "distribution must not change reception or source");
+        let ticket = a.client.moon_streamer().reconnect().expect("reconnect Moon Streamer");
+        wait_streamer_action(cfg, a, b, ticket);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let ticket = a.client.moon_streamer().refresh().expect("sample Moon Streamer diagnostics");
+            wait_streamer_action(cfg, a, b, ticket);
+            let state = moon_streamer_state(a).unwrap();
+            if state.receiver.online || Instant::now() >= deadline {
+                println!("FIRETEST Moon Streamer active sample: {state:?}");
+                break;
+            }
+        }
+        let ticket = a.client.moon_streamer().request_subscribers().expect("request subscriber details");
+        wait_streamer_action(cfg, a, b, ticket);
+        assert!(a.state_snapshot().settings().moon_streamer_subscribers.is_some(),
+            "subscriber report must be retained before its completion event");
+        assert_eq!(retained.settings().runtime_state.unwrap().moon_streamer, retained_streamer);
+    }));
+    let ticket = a.client.moon_streamer().set_source(original.source).expect("restore Moon Streamer source");
+    wait_streamer_action(cfg, a, b, ticket);
+    let ticket = a.client.moon_streamer().set_receive_enabled(original.receive_enabled).expect("restore reception");
+    wait_streamer_action(cfg, a, b, ticket);
+    let ticket = a.client.moon_streamer().set_distribution_enabled(original.distribution_enabled).expect("restore distribution");
+    wait_streamer_action(cfg, a, b, ticket);
+    assert!(pump_pair_until_sessions(a, b, cfg.wait, "restore Moon Streamer settings", |a, b| {
+        [a, b].iter().all(|s| moon_streamer_state(s).is_some_and(|v|
+            v.receive_enabled == original.receive_enabled && v.distribution_enabled == original.distribution_enabled
+                && v.source == original.source && v.last_custom_server == original.last_custom_server))
+    }), "Moon Streamer settings restore failed");
+    if let Err(payload) = mutation { std::panic::resume_unwind(payload); }
+    println!("OK: Moon Streamer settings, correlated replies, independent switches, subscriber report and restore");
+}
+
 fn wait_kernel_license_state(
     cfg: &FireConfig,
     a: &mut Session,
@@ -10113,6 +10218,36 @@ fn run_problems_gate(cfg: &FireConfig, keys: ImportedKeys, a: &mut Session, b: &
 }
 
 #[test]
+#[ignore = "live MoonBot 7.73 N2 required; changes and restores only Moon Streamer settings"]
+fn fire_test_moon_streamer_controls() {
+    let _live_test_lock = firetest_live_test_lock();
+    let cfg = FireConfig::load_required();
+    assert!(cfg.allow_mutation, "streamer test temporarily changes streamer settings");
+    let keys = parse_key_info(&cfg.key_b64).expect("invalid FireTest key").keys;
+    let _err_emu = ErrEmuGuard::set(0);
+    let mut a = Session::connect("Streamer-A", &cfg, keys, None);
+    let mut b = Session::connect("Streamer-B", &cfg, keys, None);
+    let before = wait_ui_runtime_state(&cfg, &mut a, &mut b);
+    let strategies_running = wait_strategy_runtime_state(&cfg, &mut a, &mut b);
+    let emu_mode = request_settings_until(&mut a, cfg.wait).emu_mode;
+    let original = moon_streamer_state(&a).expect("N2 streamer state");
+    println!("FIRETEST Moon Streamer initial: {original:?}");
+    run_moon_streamer_settings_gate(&cfg, &mut a, &mut b);
+    let after = wait_ui_runtime_state(&cfg, &mut a, &mut b);
+    assert_eq!((after.is_started, after.auto_detect_active), (before.is_started, before.auto_detect_active));
+    assert_eq!(wait_strategy_runtime_state(&cfg, &mut a, &mut b), strategies_running);
+    assert_eq!(request_settings_until(&mut a, cfg.wait).emu_mode, emu_mode);
+    drop(b);
+    let mut reconnected = Session::connect("Streamer-Reconnected", &cfg, keys, None);
+    wait_ui_runtime_state(&cfg, &mut a, &mut reconnected);
+    let restored = moon_streamer_state(&reconnected).expect("N2 streamer reconnect state");
+    assert_eq!((restored.source, restored.last_custom_server, restored.receive_enabled, restored.distribution_enabled),
+        (original.source, original.last_custom_server, original.receive_enabled, original.distribution_enabled));
+    println!("OK: FIRETEST Moon Streamer reconnect restored configuration; trading settings unchanged; no order commands sent");
+    println!("FIRETEST Moon Streamer final: {restored:?}");
+}
+
+#[test]
 #[ignore = "live MoonBot with detector relay required; adds a test diagnostic"]
 fn fire_test_core_problems() {
     let _live_test_lock = firetest_live_test_lock();
@@ -10346,6 +10481,7 @@ fn fire_test_active_library_health() {
     let _b_initial_settings = request_settings_until(&mut b, cfg.connect_timeout);
     run_shared_config_gate(&cfg, &mut a, &mut b);
     let initial_runtime_state = wait_ui_runtime_state(&cfg, &mut a, &mut b);
+    let initial_streamer_state = moon_streamer_state(&a).expect("full FireTest requires MoonBot 7.73 N2+");
     run_auto_detect_echo_gate(&cfg, &mut a, initial_runtime_state);
     run_kernel_license_state_gate(&cfg, &mut a, &mut b);
     assert!(
@@ -10405,6 +10541,7 @@ fn fire_test_active_library_health() {
     log_protocol_cpu_pair("after high-loss simple ops gate", &a, &b);
     err_emu.reset("high-loss simple ops gate");
     run_moon_stream_gate(&cfg, &mut a, &mut b);
+    run_moon_streamer_settings_gate(&cfg, &mut a, &mut b);
     run_telegram_state_gate(&cfg, keys);
     run_problems_gate(&cfg, keys, &mut a, &mut b);
     a.client
@@ -10558,6 +10695,10 @@ fn fire_test_active_library_health() {
 
     let after_reconnect = a.snapshot();
     let runtime_after_reconnect = wait_ui_runtime_state(&cfg, &mut a, &mut b);
+    let streamer_after_reconnect = moon_streamer_state(&a).expect("reconnect must recover Moon Streamer settings");
+    assert_eq!(streamer_after_reconnect.source, initial_streamer_state.source);
+    assert_eq!(streamer_after_reconnect.distribution_enabled, initial_streamer_state.distribution_enabled);
+    assert_eq!(streamer_after_reconnect.last_custom_server, initial_streamer_state.last_custom_server);
     run_auto_detect_echo_gate(&cfg, &mut a, runtime_after_reconnect);
     assert_eq!(runtime_after_reconnect.moon_stream_enabled, initial_runtime_state.moon_stream_enabled,
         "Moon Streamer state must survive client reconnect");

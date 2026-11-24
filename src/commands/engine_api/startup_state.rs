@@ -147,4 +147,20 @@ mod tests {
             assert!(parse_startup_state(&data).is_none(), "offset={offset} value={value}");
         }
     }
+
+    #[test]
+    fn moon_streamer_configuration_is_recovered_before_ready() {
+        let mut data = startup_state_fixture();
+        let runtime = crate::commands::ui::moon_streamer_runtime_fixture();
+        let mut record = (runtime.len() as u32).to_le_bytes().to_vec();
+        record.extend_from_slice(&runtime);
+        data.splice(1..18, record);
+        let state = parse_startup_state(&data).unwrap();
+        assert_eq!(state.profit.rep_total_profit, 123.5);
+        let mut dispatcher = crate::events::EventDispatcher::new();
+        dispatcher.apply_startup_state(state);
+        let runtime = dispatcher.settings().runtime_state.unwrap();
+        assert_eq!(runtime.moon_streamer.unwrap().receiver.trades_per_second, 1234);
+        assert_eq!(runtime.moon_stream_enabled, Some(true));
+    }
 }

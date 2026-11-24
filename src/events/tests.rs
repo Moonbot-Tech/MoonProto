@@ -4,6 +4,7 @@ mod problems;
 mod telegram;
 mod services;
 mod strategy_refresh;
+mod moon_streamer;
 mod trade_time;
 use crate::commands::arb::build_arb_prices;
 use crate::commands::balance::build_request_balance_refresh;

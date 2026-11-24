@@ -322,25 +322,78 @@ the mode or echoes the current runtime state, and the terminal updates after
 
 ### Moon Streamer
 
-MoonBot 7.73 N1 and later let a client set and save the core's Moon Streamer
-reception switch without restarting the core:
+MoonBot **7.73 N2+** exposes the core's own reception and distribution settings:
 
 ```rust
-client.settings().set_moon_stream_enabled(true)?;
+use moonproto::state::MoonStreamerSource;
+use std::net::Ipv4Addr;
+
+let stream = client.moon_streamer();
+let ticket = stream.set_source(MoonStreamerSource::Custom(Ipv4Addr::new(203, 0, 113, 9)))?;
+// Independent actions, as needed by the user:
+stream.set_receive_enabled(true)?;
+stream.set_distribution_enabled(false)?;
+stream.refresh()?;
 ```
 
-The call returns when queued. Read the confirmed setting from
-`snapshot().settings().runtime_state.moon_stream_enabled` after
-`SettingsEvent::RuntimeStateUpdated`: `Some(true)` is enabled, `Some(false)` is
-disabled, and `None` means an older core does not report or support this switch.
-Older cores keep working and ignore the command. Setting the current value
-requests a fresh state echo; changing it broadcasts the new state to all clients.
+`set_source(Common)` selects the common server. `set_source(Custom(ip))` selects
+an IPv4 address; `0.0.0.0` is rejected instead of silently meaning Common.
+Source selection changes only the source. `use_last_custom_server()` selects the
+last custom address reported by the core and returns `StateUnavailable` if none
+has been reported. Selecting the current source preserves the connection;
+`reconnect()` explicitly reconnects to it without changing the settings.
 
-This is the configured reception switch. It does not indicate a connected
-streamer or grant a license. Actual reception still depends on the core's
-existing platform, chart and FullProxy settings. It does not start a stream server
-or change its address. Reconnecting a client reads the core's current setting;
-the library does not replay an old ON/OFF choice over changes from another client.
+Each action returns an `EngineActionTicket` immediately. Handle the matching
+`Event::EngineAction` using `ticket.matches(&result)`: `result.success` confirms
+the core operation, including saving configuration for setters, while
+`result.error_msg` reports failures to the initiating client. A save error can
+occur after runtime settings changed. Keep displaying confirmed core state;
+do not assume an error rolled the setting back. Successful state replies are
+retained before completion is emitted. Changes are also broadcast to other
+clients. The library does not optimistically change settings or replay stale
+choices when reconnecting.
+
+Read `snapshot().settings().runtime_state.and_then(|s| s.moon_streamer)` after
+`SettingsEvent::RuntimeStateUpdated`. The full state is recovered during Init.
+Configuration and activity have distinct meanings:
+
+| Value | Meaning |
+|---|---|
+| `receive_enabled`, `source` | The configured reception switch and selected source. |
+| `receiver.online` | Recent stream traffic from that source, not the configured switch. |
+| `receiver.trades_per_second`, `packet_loss_percent`, `max_packet_loss_percent` | Core-sampled receiver rate and loss; loss values are percentages. |
+| `receiver.last_packet_status`, `checksum_errors` | Packet diagnostics; an `Ok` status alone does not imply online reception. |
+| `distribution_enabled` | Whether distribution from this core is configured ON. |
+| `distribution.listener_status` | `NotStarted`, `Listening`, `BindFailed`, or an unknown future status. With distribution enabled, `NotStarted` can mean the core is still loading market data; it is not a bind failure. |
+| `distribution.subscribers`, `udp_port` | Current subscriber count and the core-reported port. A port number or listening socket does not prove remote reachability. |
+| `distribution.port_ping_seen` | A probe was observed, not a continuous firewall check. |
+| `can_configure`, `reception_supported`, `fast_charts` | Core-reported availability and chart-mode context. Configuration commands do not grant a license or change these conditions. |
+
+Call `refresh()` from the application's existing timer, for example every few
+seconds while the panel is visible. The SDK adds no background polling for these
+diagnostics. `request_subscribers()` explicitly fetches the same display-ready
+report as the core's UI, including addresses and resend counts. Read it from
+`snapshot().settings().moon_streamer_subscribers` after the matching completion
+or `SettingsEvent::MoonStreamerSubscribersUpdated`. `Some("")` is a valid empty
+report; `None` means no report has been fetched. Treat reports and diagnostic
+samples as stale while disconnected.
+Request subscriber details again after reconnect; ordinary `refresh()` does not fetch them.
+
+Enabled reception replaces the core's exchange trade feed when its platform and
+chart mode permit it. If the selected streamer stops delivering data, the core
+does not automatically switch back to the exchange. Use
+`set_receive_enabled(false)` to return to direct exchange reception. Distribution
+is controlled separately and does not change the selected source.
+
+On **N1**, the extended state is `None`; retain only the existing
+`client.settings().set_moon_stream_enabled(enabled)` control and read
+`runtime_state.moon_stream_enabled`. This older call means queued, with confirmed
+ON/OFF arriving through runtime state; it has no correlated save-result reply.
+Earlier cores report that switch as `None` too. Use advertised state to select
+available controls rather than sending the new requests to probe an old core.
+
+`RuntimeStateCommand` remains `Copy` and `PartialEq`; it no longer implements
+`Eq` because the extended diagnostics contain floating-point percentages.
 
 ### Starting and Stopping the Core
 

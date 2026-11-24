@@ -23,7 +23,7 @@ use crate::commands::ui::SpotMarketKind;
 use commands::{RuntimeCommand, StratRuntimeCommand, UiRuntimeCommand};
 pub use handles::{
     MoonAccount, MoonBalances, MoonCandles, MoonChartAlerts, MoonChartText, MoonEmulator,
-    MoonHistory, MoonMarkets, MoonOrders, MoonReports, MoonSettings, MoonStrategies, MoonStreams, MoonTrade,
+    MoonHistory, MoonMarkets, MoonOrders, MoonReports, MoonSettings, MoonStrategies, MoonStreamer, MoonStreams, MoonTrade,
 };
 use runtime_loop::runtime_loop;
 pub use types::{
@@ -488,6 +488,11 @@ impl MoonClient {
     /// UI/settings command API.
     pub fn settings(&self) -> MoonSettings<'_> {
         MoonSettings { client: self }
+    }
+
+    /// Configure the core's Moon Streamer and request its diagnostics.
+    pub fn moon_streamer(&self) -> MoonStreamer<'_> {
+        MoonStreamer { client: self }
     }
 
     /// Remote Telegram account setup and service controls on the core.
@@ -1221,6 +1226,9 @@ impl Drop for MoonClient {
         }
     }
 }
+
+#[cfg(test)]
+mod moon_streamer_tests;
 
 #[cfg(test)]
 mod tests {

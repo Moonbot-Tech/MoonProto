@@ -653,14 +653,15 @@ pub(super) fn poll_engine_actions(
     let mut i = 0;
     let now = Instant::now();
     while i < pending.len() {
-        if pending[i].kind == crate::events::EngineActionKind::RequestStrategiesSnapshot
+        if (pending[i].kind == crate::events::EngineActionKind::RequestStrategiesSnapshot
+            || pending[i].kind.is_moon_streamer())
             && (pending[i].peer_app_token != peer_app_token || pending[i].deadline <= now)
         {
             let action = pending.swap_remove(i);
             remove_api_pending(api_pending, action.ticket.request_uid);
             dispatcher.queue_engine_action_disconnected(
                 action.kind, action.ticket.request_uid, action.ticket.method,
-                "Strategy snapshot request expired or core session changed",
+                "State request expired or core session changed",
             );
             continue;
         }

@@ -780,6 +780,8 @@ fn publish_snapshot_profiled(
 mod optimization_bench;
 #[cfg(test)]
 mod strategy_refresh_tests;
+#[cfg(test)]
+mod moon_streamer_tests;
 
 #[cfg(test)]
 mod tests {
