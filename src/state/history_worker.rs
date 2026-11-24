@@ -90,6 +90,8 @@ pub(crate) enum MarketHistoryStreamSectionKind {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MarketHistoryStreamBatch {
     pub(crate) base_time: f64,
+    /// Shared with immediate events; queue delay cannot change row timestamps.
+    pub(crate) time_shift: TradesPacketTimeShift,
     /// Packet-processing boundary timestamp.
     pub(crate) now_time: f64,
     /// Section order from the original `TradesStream` packet. Trade sections
@@ -718,7 +720,7 @@ fn process_last_price_batch(
 }
 
 fn process_stream_batch(registry: &mut MarketHistoryRegistry, batch: MarketHistoryStreamBatch) {
-    let mut time_shift = TradesPacketTimeShift::new();
+    let mut time_shift = batch.time_shift;
 
     for section in batch.sections {
         match section.kind {

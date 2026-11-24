@@ -4,9 +4,9 @@ MoonProto public API uses `MoonTime`: a compact Unix-milliseconds timestamp.
 It is cheap to copy, works naturally with Rust/UI code, and can be converted to
 `SystemTime` when a framework needs it.
 
-The protocol still uses MoonBot wire time (`f64` days since `1899-12-30`) on
-the wire. That is converted at packet boundaries. Application code should not
-store or compare raw wire-day floats.
+Some protocol messages use MoonBot wire time (`f64` days since `1899-12-30`);
+current order snapshots use UTC Unix milliseconds. Conversion happens at packet
+boundaries. Application code should not store or compare raw wire-day floats.
 
 Report replication preserves the core database's local-clock date integers.
 Choose timezone-only conversion or full clock-difference conversion below before
@@ -69,6 +69,34 @@ on a 15-minute grid and combined clock error/network delay below 7.5 minutes;
 halfway values round away from zero. It does not correct clock accuracy or
 reconstruct historical timezone/DST changes. The station's local timezone is
 irrelevant: the source uses its OS UTC clock.
+
+## Live Trades
+
+Compact live trades contain a core-local packet base time plus each row's
+millisecond delta. MoonProto subtracts the receiving client's Ping-derived UTC
+offset above. The same captured shift applies to futures and spot trades,
+liquidations, MM rows and watcher fills, including recovered packets. Retained
+history receives that shift with the batch; worker queue delays and later Pings
+cannot change timestamps already accepted by the dispatcher.
+
+The age of the first trade is not a timezone measurement. Previously a first row
+31 seconds old could make minute rounding shift the whole packet forward by
+60 seconds, even with instantaneous delivery. Using the client's known offset
+also prevents delayed recovery from treating packet age as a clock offset.
+
+Before the first usable Ping, the library falls back to the first known row,
+rounded to five minutes. This preserves fractional timezones and tolerates the
+full 32.76-second row age allowed by the compact format under normal delivery.
+It remains an estimate: combined row age, delivery delay and clock error must
+stay below 150 seconds. After Ping, the 15-minute estimate and its assumptions
+in the preceding section apply. A timezone change takes effect on the next Ping;
+the wire has no historical timezone for packets spanning that change.
+
+Current live order snapshots already carry UTC milliseconds; legacy trace
+points use the full per-client clock difference. Market chart archives are
+converted to UTC by the core before sending. Those paths are unchanged. Raw
+report database dates still need the explicit conversion described below.
+Do not apply another offset to normalized trade, order or archive times.
 
 ## Core Clock And Report Dates
 

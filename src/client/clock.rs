@@ -6,6 +6,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Matches Delphi GlobalMPTimeOffset.
 static NTP_OFFSET_DAYS: AtomicU64 = AtomicU64::new(0);
 
+pub(crate) fn utc_offset_minutes(delta_ms: i64) -> Option<i64> {
+    (delta_ms != i64::MIN).then(|| (delta_ms as f64 / 900_000.0).round() as i64 * 15)
+}
+
 /// Set the process-global NTP correction in seconds.
 ///
 /// `ClientConfig::new` normally starts the managed NTP syncer automatically.

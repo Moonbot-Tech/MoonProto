@@ -9,7 +9,7 @@ use crate::commands::trades_stream::{
     decode_trades_packet, parse_watcher_fills, DecodedTradesPacket, TradeSectionRef,
 };
 use crate::protocol::Command;
-use crate::state::history::{utc_shift_from_wire_local, DELPHI_MSECS_PER_DAY};
+use crate::state::history::{utc_shift_from_wire_local, TradesPacketTimeShift, DELPHI_MSECS_PER_DAY};
 use crate::state::{
     iter_trades_resend_response, MarketHistoryMMOrderInput, MarketHistoryStreamBatch,
     MarketHistoryStreamSection, MarketHistoryStreamSectionKind, MarketHistoryTradeInput,
@@ -22,6 +22,7 @@ impl EventDispatcher {
         payload: &[u8],
         now_ms: i64,
         history_now_time_days: Option<f64>,
+        utc_offset_minutes: Option<i64>,
         out: &mut Vec<Event>,
     ) -> bool {
         // Active library: block TradesStream processing until the market indexes are synced.
@@ -36,6 +37,7 @@ impl EventDispatcher {
                     effects,
                     now_ms,
                     history_now_time_days,
+                    utc_offset_minutes,
                     out,
                 );
                 true
@@ -52,6 +54,7 @@ impl EventDispatcher {
         payload: &[u8],
         now_ms: i64,
         history_now_time_days: Option<f64>,
+        utc_offset_minutes: Option<i64>,
         out: &mut Vec<Event>,
     ) -> bool {
         // Delphi `ProcessTradesResendBatch` feeds every inner packet back into
@@ -70,6 +73,7 @@ impl EventDispatcher {
                         effects,
                         now_ms,
                         history_now_time_days,
+                        utc_offset_minutes,
                         out,
                     );
                 }
@@ -116,6 +120,7 @@ impl EventDispatcher {
         decoded: &DecodedTradesPacket<'_>,
         now_ms: Option<i64>,
         history_now_time_days: Option<f64>,
+        utc_offset_minutes: Option<i64>,
         out: &mut Vec<Event>,
     ) {
         let collect_history =
@@ -123,7 +128,7 @@ impl EventDispatcher {
         let mut history_sections = Vec::new();
         let mut history_trade_rows = Vec::new();
         let mut history_mm_order_rows = Vec::new();
-        let mut packet_time_shift: Option<f64> = None;
+        let mut packet_time_shift = utc_offset_minutes.map(|minutes| -(minutes as f64) / 1440.0);
         for section in decoded.sections() {
             match section {
                 TradeSectionRef::Trades(rows) => {
@@ -318,6 +323,7 @@ impl EventDispatcher {
             if !history_sections.is_empty() {
                 handle.send_stream_batch(MarketHistoryStreamBatch {
                     base_time: decoded.base_time,
+                    time_shift: TradesPacketTimeShift::from_shift(packet_time_shift),
                     now_time,
                     sections: history_sections,
                     trade_rows: history_trade_rows,
@@ -334,12 +340,13 @@ impl EventDispatcher {
         effects: crate::state::TradesPacketEffects,
         now_ms: i64,
         history_now_time_days: Option<f64>,
+        utc_offset_minutes: Option<i64>,
         out: &mut Vec<Event>,
     ) {
         let mut applied_sections = false;
         for effect in effects.iter() {
             if matches!(&effect, TradesPacketEffect::Apply) && !applied_sections {
-                self.apply_known_trades_sections(decoded, Some(now_ms), history_now_time_days, out);
+                self.apply_known_trades_sections(decoded, Some(now_ms), history_now_time_days, utc_offset_minutes, out);
                 applied_sections = true;
             }
             match effect {

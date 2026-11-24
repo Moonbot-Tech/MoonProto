@@ -868,10 +868,11 @@ impl EventDispatcher {
             Command::Order => self.client_new_data_order(payload, now_ms, out),
             Command::OrderBook => self.client_new_data_order_book(payload, now_ms, out),
             Command::TradesStream | Command::TradesResendResponse => {
+                let utc_offset = active_ctx.and_then(|ctx| ctx.server_utc_offset_minutes);
                 let processed = if cmd == Command::TradesStream {
-                    self.client_new_data_trades_stream(payload, now_ms, history_now_time_days, out)
+                    self.client_new_data_trades_stream(payload, now_ms, history_now_time_days, utc_offset, out)
                 } else {
-                    self.client_new_data_trades_resend_response(payload, now_ms, history_now_time_days, out)
+                    self.client_new_data_trades_resend_response(payload, now_ms, history_now_time_days, utc_offset, out)
                 };
                 // Valid duplicate resends still drive recovery, even though no
                 // payload was applied and no public Applied signal was emitted.

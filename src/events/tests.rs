@@ -4,6 +4,7 @@ mod problems;
 mod telegram;
 mod services;
 mod strategy_refresh;
+mod trade_time;
 use crate::commands::arb::build_arb_prices;
 use crate::commands::balance::build_request_balance_refresh;
 use crate::commands::engine_api::EngineMethod;
@@ -2919,6 +2920,7 @@ fn active_dispatch_emits_typed_watcher_fills() {
         round_trip_delay_ms: 50,
         delivery_ratio: 1.0,
         server_time_delta_source: Arc::new(AtomicU64::new(0)),
+        server_utc_offset_minutes: None,
         now_time_days: 45_000.5,
         domain_ready: true,
         trade_storage_intent: Some(crate::client::TradeStorageIntent {
@@ -3030,6 +3032,7 @@ fn active_dispatch_queues_update_markets_last_price_into_history_worker() {
         round_trip_delay_ms: 50,
         delivery_ratio: 1.0,
         server_time_delta_source: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        server_utc_offset_minutes: None,
         now_time_days: 45_000.5,
         domain_ready: true,
         trade_storage_intent: Some(crate::client::TradeStorageIntent {
@@ -3601,7 +3604,7 @@ fn skipped_history_rows_preserve_first_row_time_shift_and_following_sections() {
             d.markets.apply_markets_indexes(vec!["BTCUSDT".to_owned()]);
             let mut payload = 45000.0f64.to_le_bytes().to_vec();
             payload.extend_from_slice(&1u16.to_le_bytes());
-            // The first row and the following fill straddle the minute-rounding boundary.
+            // The first row and the following fill straddle the 150-second rounding boundary.
             let rows = if empty { &[][..] } else { &[(0, 100.0, 1.0), (30000, 101.0, 2.0)][..] };
             if kind == 1 {
                 push_trades_section(&mut payload, kind, 0, rows);
@@ -3610,13 +3613,13 @@ fn skipped_history_rows_preserve_first_row_time_shift_and_following_sections() {
             }
             push_watcher_fills_section(&mut payload, 0, [7; 20], &[(30000, 102.0, 3.0, 0.0, 0.0, 0, 0)]);
             payload.push(0);
-            let now = 45000.0 + 40000.0 / DELPHI_MSECS_PER_DAY;
+            let now = 45000.0 + 160_000.0 / DELPHI_MSECS_PER_DAY;
             let mut out = Vec::new();
-            d.client_new_data_trades_stream(&payload, 1000, Some(now), &mut out);
+            d.client_new_data_trades_stream(&payload, 1000, Some(now), None, &mut out);
             let watcher = out.iter().find_map(|event| match event {
                 Event::WatcherFills(watcher) => Some(watcher), _ => None,
             }).unwrap();
-            let expected = 45000.0 + (if empty { 30000.0 } else { 90000.0 }) / DELPHI_MSECS_PER_DAY;
+            let expected = 45000.0 + (if empty { 30_000.0 } else { 330_000.0 }) / DELPHI_MSECS_PER_DAY;
             assert!((watcher.fills[0].time - expected).abs() < 1e-10);
             assert_eq!(watcher.fills[0].price, 102.0);
             assert!(d.market_history.is_none());
@@ -3644,7 +3647,7 @@ fn retained_mm_and_liquidation_sections_keep_every_row() {
     push_trades_section(&mut payload, 1, 0, &rows);
     push_liquidation_section(&mut payload, 0, &rows);
     payload.push(0);
-    d.client_new_data_trades_stream(&payload, 1000, Some(45000.0), &mut Vec::new());
+    d.client_new_data_trades_stream(&payload, 1000, Some(45000.0), None, &mut Vec::new());
     assert!(worker.flush(mt(45000.0)));
     let readers = worker.readers("BTCUSDT").unwrap();
     let mut mm = Vec::new();

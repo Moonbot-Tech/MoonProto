@@ -109,18 +109,21 @@ pub enum MarketHistoryEvent {
 
 /// Per-packet time-shift state for compact trades-stream rows.
 ///
-/// The first known/stored row in a packet fixes
-/// `TimeShift := round((NowTimeX - RowTime) * 1440) / 1440`; every later row in the
-/// packet uses the same shift. Unknown-market sections skipped by Active Lib do
-/// not fill this value.
+/// Uses the client's Ping-derived timezone, captured when dispatching the packet.
+/// Before the first Ping, the first known row supplies a five-minute estimate.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub(crate) struct TradesPacketTimeShift {
     shift_days: Option<f64>,
 }
 
 impl TradesPacketTimeShift {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn from_shift(shift_days: Option<f64>) -> Self {
+        Self { shift_days }
     }
 
     #[cfg(test)]
@@ -145,7 +148,8 @@ impl TradesPacketTimeShift {
 
 #[inline]
 pub(crate) fn utc_shift_from_wire_local(now_time: f64, row_time: f64) -> f64 {
-    ((now_time - row_time) * 1_440.0).round() / 1_440.0
+    const INTERVALS_PER_DAY: f64 = 24.0 * 60.0 / 5.0;
+    ((now_time - row_time) * INTERVALS_PER_DAY).round() / INTERVALS_PER_DAY
 }
 
 #[inline]

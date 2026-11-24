@@ -171,7 +171,7 @@ fn followup_unretained_rows_benchmark() {
                 packet = packet.wrapping_add(1);
                 payload[8..10].copy_from_slice(&packet.to_le_bytes());
                 out.clear();
-                d.client_new_data_trades_stream(black_box(&payload), 1000, Some(45000.0), &mut out);
+                d.client_new_data_trades_stream(black_box(&payload), 1000, Some(45000.0), None, &mut out);
                 assert!(!out.is_empty());
                 black_box(&out);
             });
@@ -240,7 +240,7 @@ fn followup_retained_rows_benchmark() {
             packet = packet.wrapping_add(1);
             payload[8..10].copy_from_slice(&packet.to_le_bytes());
             out.clear();
-            d.client_new_data_trades_stream(black_box(&payload), 1000, Some(45000.0), &mut out);
+            d.client_new_data_trades_stream(black_box(&payload), 1000, Some(45000.0), None, &mut out);
             black_box(&out);
         });
         assert!(worker.flush(crate::MoonTime::from_delphi_days(45000.0).unwrap()));

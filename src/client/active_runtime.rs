@@ -247,7 +247,7 @@ impl MoonClient {
     /// below 7.5 minutes. Halfway values round away from zero. A new Ping updates
     /// the estimate; reconnect/reset behavior matches [`Self::server_clock`].
     pub fn server_utc_offset_minutes(&self) -> Option<i64> {
-        self.server_time_delta_ms().map(|delta_ms| (delta_ms as f64 / 900_000.0).round() as i64 * 15)
+        super::clock::utc_offset_minutes(self.server_time_delta_ms.load(Ordering::Relaxed))
     }
 
     /// Capture this client's latest clock estimate for converting report dates.

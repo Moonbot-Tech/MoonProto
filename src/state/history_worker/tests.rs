@@ -24,6 +24,7 @@ fn worker_stores_enabled_futures_trades_after_flush() {
 
     let now_time = 45_000.0 + 1.0 / 24.0 + 1.0 / 86_400.0;
     worker.handle().send_stream_batch(MarketHistoryStreamBatch {
+        time_shift: TradesPacketTimeShift::new(),
         base_time: 45_000.0,
         now_time,
         sections: vec![MarketHistoryStreamSection {
@@ -68,6 +69,7 @@ fn worker_does_not_create_market_from_stream_batch() {
     let worker = MarketHistoryWorker::spawn(MarketHistoryConfig::default());
 
     worker.handle().send_stream_batch(MarketHistoryStreamBatch {
+        time_shift: TradesPacketTimeShift::new(),
         base_time: 45_000.0,
         now_time: 45_000.0,
         sections: vec![MarketHistoryStreamSection {
@@ -308,6 +310,7 @@ fn worker_flush_compacts_evicted_futures_to_mini_candles() {
 
     let now_time = 45_000.0 + 1.0 / 24.0;
     worker.handle().send_stream_batch(MarketHistoryStreamBatch {
+        time_shift: TradesPacketTimeShift::new(),
         base_time: 45_000.0,
         now_time,
         sections: vec![MarketHistoryStreamSection {

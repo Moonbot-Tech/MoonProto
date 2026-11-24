@@ -104,4 +104,8 @@ impl Client {
     pub(crate) fn server_time_delta_handle(&self) -> Arc<std::sync::atomic::AtomicU64> {
         Arc::clone(&self.server_time_delta_handle)
     }
+
+    pub(crate) fn server_utc_offset_minutes(&self) -> Option<i64> {
+        super::clock::utc_offset_minutes(self.server_time_delta_ms.load(std::sync::atomic::Ordering::Relaxed))
+    }
 }
