@@ -164,6 +164,17 @@ Set `MOONPROTO_FIRETEST_PROFILE = "full"` for the full health scenario. Keep the
 exact name filter: without it, Cargo also runs the separate ignored tests below;
 the quick-profile setting does not make those tests read-only.
 
+The private config selects the order backend with `order_mode = emulator` or
+`order_mode = exchange` (legacy default). Emulator mode keeps the core's emulator
+switch enabled throughout the full profile and restores its original value even
+when a test assertion fails. The SOL gate verifies both ordinary cancellation and
+N2 forced cancellation against virtual orders. BUY/pending cancellation targets
+the test-created UIDs and still verifies that the test's SELL exit survives.
+It does not exercise core-wide or exchange-wide cancellation: those commands can
+affect pre-existing real orders and have no emulator-only scope. All other full
+profile gates still run, including order fills/sells, report replication, session
+resets, strategy synchronization, loss/reconnect recovery, N2 settings and Streamer.
+
 Focused strategy checks on an updated test core (`allow_mutation = true`):
 
 ```powershell

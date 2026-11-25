@@ -17,6 +17,7 @@
 //! key = <exported MoonBot key>
 //! # transport_mode = 0
 //! allow_mutation = true
+//! order_mode = emulator
 //! market = BTCUSDT
 //! strategy_field = Comment
 //! # strategy_id = 123456789
@@ -43,9 +44,14 @@
 //! At the end of each profile it prints an ActiveLib UI-state report for
 //! BTCUSDT/ETHUSDT: LastPrice/MarkPrice retained lines, volumes, deltas,
 //! funding, balances/assets, and order events already observed during the run.
-//! The full profile also switches the server to real/non-emulator mode for one
-//! SOLUSDT limit-long cancel test: place 1000 USD 5% below market, wait for the
-//! real server order UID, then cancel through the tracked ActiveLib order path.
+//! `order_mode=exchange` (the legacy default) switches the server out of emulator
+//! mode for the SOLUSDT cancellation gate, including exchange-wide cancellation.
+//! `order_mode=emulator` keeps emulation enabled for the whole full profile and
+//! restores the original mode afterward. Its SOL gate creates 1000 USD virtual
+//! orders 5% below market and checks normal and forced cancellation. Core-wide
+//! entry cancellation is replaced by cancellation of the test's own BUY/pending
+//! fixtures, preserving existing non-test orders. Exchange-wide cancellation is
+//! not sent in emulator mode: that command has no emulator-scoped equivalent.
 //! Binance balance updates are intentionally not tied to that exact order:
 //! FireTest only requires the full run to receive and apply live balance events.
 //! Strategy snapshots are also dumped as raw `TStratSnapshot.Data` files under
@@ -123,9 +129,9 @@ const FIRETEST_SLICED_MAX_RETRIES: i32 = 6;
 const PUMP_SLICE: Duration = Duration::from_millis(50);
 const PRICE_NEIGHBORHOOD_PCT: f64 = 0.05;
 const FIRETEST_ORDER_SIZE_USD: f64 = 1000.0;
-const FIRETEST_REAL_BALANCE_ORDER_MARKET: &str = "SOLUSDT";
-const FIRETEST_REAL_BALANCE_ORDER_DISCOUNT: f64 = 0.05;
-const FIRETEST_REAL_BALANCE_ORDER_TIMEOUT: Duration = Duration::from_secs(5);
+const FIRETEST_SOL_CANCEL_MARKET: &str = "SOLUSDT";
+const FIRETEST_SOL_CANCEL_DISCOUNT: f64 = 0.05;
+const FIRETEST_SOL_CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 const FIRETEST_MOONSHOT_STRATEGY_ID: u64 = 0xF17E_5737_0000_0002;
 const FIRETEST_MOONSHOT_NAME: &str = "MoonProto FireTest Shot";
 const FIRETEST_MOONSHOT_FOLDER: &str = "FireTest";
@@ -166,6 +172,26 @@ fn firetest_live_test_lock() -> MutexGuard<'static, ()> {
 enum FireProfile {
     Quick,
     Full,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FireOrderMode {
+    Emulator,
+    Exchange,
+}
+
+impl FireOrderMode {
+    fn parse(value: &str) -> Self {
+        match value.to_ascii_lowercase().as_str() {
+            "emulator" => Self::Emulator,
+            "exchange" => Self::Exchange,
+            _ => panic!("bad FireTest order_mode={value:?}; expected emulator or exchange"),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self { Self::Emulator => "emulator", Self::Exchange => "exchange" }
+    }
 }
 
 #[derive(Clone)]
@@ -214,6 +240,7 @@ struct FireConfig {
     transport_mode: TransportMode,
     key_b64: String,
     allow_mutation: bool,
+    order_mode: FireOrderMode,
     market: String,
     strategy_id: Option<u64>,
     strategy_field: String,
@@ -300,6 +327,7 @@ impl FireConfig {
             .get("market")
             .cloned()
             .unwrap_or_else(|| "BTCUSDT".to_string());
+        let order_mode = FireOrderMode::parse(values.get("order_mode").map(String::as_str).unwrap_or("exchange"));
         let strategy_id = values
             .get("strategy_id")
             .filter(|s| !s.trim().is_empty())
@@ -343,6 +371,7 @@ impl FireConfig {
             transport_mode,
             key_b64,
             allow_mutation,
+            order_mode,
             market,
             strategy_id,
             strategy_field,
@@ -1854,7 +1883,7 @@ fn firetest_retained_markets(cfg: &FireConfig) -> Vec<String> {
     for market in [
         cfg.market.as_str(),
         FIRETEST_MOONSHOT_MARKET,
-        FIRETEST_REAL_BALANCE_ORDER_MARKET,
+        FIRETEST_SOL_CANCEL_MARKET,
     ] {
         if !markets.iter().any(|known| known == market) {
             markets.push(market.to_string());
@@ -6581,7 +6610,7 @@ fn ensure_server_real_order_mode(
 
     let mut real = original.clone();
     real.emu_mode = false;
-    println!("FIRETEST real order cancel: disabling server emulator mode through UI settings");
+    println!("FIRETEST SOL order cancel: disabling server emulator mode through UI settings");
     a.client
         .settings()
         .send(real.clone())
@@ -6846,9 +6875,9 @@ fn cancel_if_known(
     };
     let uid = *uid;
     if session.cancel_order(uid) {
-        println!("FIRETEST real order cancel: cleanup cancel queued uid={uid}");
+        println!("FIRETEST SOL order cancel: cleanup cancel queued uid={uid}");
     } else {
-        println!("FIRETEST real order cancel: cleanup cancel gate refused uid={uid}");
+        println!("FIRETEST SOL order cancel: cleanup cancel gate refused uid={uid}");
     }
     Some(uid)
 }
@@ -8095,11 +8124,14 @@ fn run_manual_pending_gate_body(cfg: &FireConfig, a: &mut Session, b: &mut Sessi
     );
 }
 
-fn run_real_order_cancel_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
-    let restore_emu_mode = ensure_server_real_order_mode(cfg, a, b);
+fn run_sol_order_cancel_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
+    let restore_emu_mode = match cfg.order_mode {
+        FireOrderMode::Emulator => ensure_server_emulator_mode(cfg, a, b),
+        FireOrderMode::Exchange => ensure_server_real_order_mode(cfg, a, b),
+    };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_real_order_cancel_gate_body(a, b, false);
-        run_real_order_cancel_gate_body(a, b, true);
+        run_sol_order_cancel_gate_body(a, b, cfg.order_mode, false);
+        run_sol_order_cancel_gate_body(a, b, cfg.order_mode, true);
     }));
     a.end_order_state_capture();
     b.end_order_state_capture();
@@ -8109,29 +8141,30 @@ fn run_real_order_cancel_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session
     }
 }
 
-fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session, exchange_sweep: bool) {
+fn run_sol_order_cancel_gate_body(a: &mut Session, b: &mut Session, mode: FireOrderMode, second_pass: bool) {
+    let emulator = mode == FireOrderMode::Emulator;
     a.begin_order_state_capture();
     b.begin_order_state_capture();
-    let market = FIRETEST_REAL_BALANCE_ORDER_MARKET;
+    let market = FIRETEST_SOL_CANCEL_MARKET;
     assert_balance_stream_seen(a);
     assert_balance_stream_seen(b);
 
     let ask = pump_pair_until_sessions(
         a,
         b,
-        FIRETEST_REAL_BALANCE_ORDER_TIMEOUT,
-        "SOL live price before real order cancel",
+        FIRETEST_SOL_CANCEL_TIMEOUT,
+        "SOL live price before cancellation",
         |a, _| market_live_ask(a, market).is_some(),
     )
     .then(|| market_live_ask(a, market))
     .flatten()
     .unwrap_or_else(|| {
         panic!(
-            "FireTest real order cancel: no live ask/price for {market} within {:?}",
-            FIRETEST_REAL_BALANCE_ORDER_TIMEOUT
+            "FireTest SOL order cancel: no live ask/price for {market} within {:?}",
+            FIRETEST_SOL_CANCEL_TIMEOUT
         )
     });
-    let price = ask * (1.0 - FIRETEST_REAL_BALANCE_ORDER_DISCOUNT);
+    let price = ask * (1.0 - FIRETEST_SOL_CANCEL_DISCOUNT);
     let baseline = active_balance_probe(a, market);
     let before_uids = a
         .state_snapshot()
@@ -8141,7 +8174,7 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session, exchange_sw
         .collect::<Vec<_>>();
     let request_uid = a.send_new_order(market, false, price, 0, FIRETEST_ORDER_SIZE_USD);
     println!(
-        "FIRETEST real order cancel: sent long request_uid={} market={} ask={:.8} limit={:.8} size_usd={} baseline_balance=[{}]",
+        "FIRETEST SOL order cancel: sent long request_uid={} market={} ask={:.8} limit={:.8} size_usd={} baseline_balance=[{}]",
         request_uid,
         market,
         ask,
@@ -8154,7 +8187,7 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session, exchange_sw
     let mut server_uid = None;
     let mut cancel_event_from = None;
     let mut logged_waiting_for_local_order = false;
-    while start.elapsed() < FIRETEST_REAL_BALANCE_ORDER_TIMEOUT {
+    while start.elapsed() < FIRETEST_SOL_CANCEL_TIMEOUT {
         a.pump(PUMP_SLICE);
         b.pump(PUMP_SLICE);
         let st = a.snapshot();
@@ -8166,24 +8199,24 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session, exchange_sw
                 false,
                 price,
                 FIRETEST_ORDER_SIZE_USD,
-                false,
+                emulator,
             );
             assert!(
                 candidates.len() <= 1,
-                "FireTest real order cancel: ambiguous matching {market} orders {candidates:?}; new_market_orders=[{}]",
+                "FireTest SOL order cancel: ambiguous matching {market} orders {candidates:?}; new_market_orders=[{}]",
                 describe_new_market_orders(a, &before_uids, market)
             );
             server_uid = candidates.first().copied();
         }
         if let Some(uid) = server_uid {
             let local_status = st.order_status_by_uid.get(&uid).copied();
-            if exchange_sweep && local_status == Some(OrderWorkerStatus::None) {
-                continue; // The exchange sweep needs an accepted exchange order, not a local pending.
+            if second_pass && local_status == Some(OrderWorkerStatus::None) {
+                continue; // Force cancellation and the exchange sweep need an active leg.
             }
             if local_status.is_none() {
                 if !logged_waiting_for_local_order {
                     println!(
-                        "FIRETEST real order cancel: server uid={uid} is known, waiting for local ActiveLib order state before cancel"
+                        "FIRETEST SOL order cancel: server uid={uid} is known, waiting for local ActiveLib order state before cancel"
                     );
                     logged_waiting_for_local_order = true;
                 }
@@ -8198,17 +8231,22 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session, exchange_sw
                             | OrderWorkerStatus::SellSet
                     )
                 ),
-                "real order uid={uid} reached non-cancelable local status {local_status:?} before FireTest cancel"
+                "SOL order uid={uid} reached non-cancelable local status {local_status:?} before FireTest cancel"
             );
-            if exchange_sweep {
-                a.client.trade().cancel_all_exchange_buys().expect("queue exchange-wide entry cancellation");
+            if second_pass {
+                match mode {
+                    FireOrderMode::Exchange => a.client.trade().cancel_all_exchange_buys()
+                        .expect("queue exchange-wide entry cancellation"),
+                    FireOrderMode::Emulator => a.client.orders().force_cancel(uid)
+                        .expect("queue forced cancellation of the emulator fixture"),
+                }
             } else {
                 assert!(a.cancel_order(uid),
                     "cancel_order did not pass Delphi local gate for uid={uid} status={local_status:?}");
             }
             cancel_event_from = Some((a.order_state_event_count(), b.order_state_event_count()));
             println!(
-                "FIRETEST real order cancel: server uid={} arrived after {:.2}s; cancel queued immediately",
+                "FIRETEST SOL order cancel: server uid={} arrived after {:.2}s; cancel queued immediately",
                 uid,
                 start.elapsed().as_secs_f64()
             );
@@ -8217,20 +8255,20 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session, exchange_sw
     }
 
     let Some(server_uid) = server_uid else {
-        let _ = cancel_if_known(a, &before_uids, market, price, false);
+        let _ = cancel_if_known(a, &before_uids, market, price, emulator);
         panic!(
-            "FireTest real order cancel: server order uid for {market} did not arrive within {:?}",
-            FIRETEST_REAL_BALANCE_ORDER_TIMEOUT
+            "FireTest SOL order cancel: server order uid for {market} did not arrive within {:?}",
+            FIRETEST_SOL_CANCEL_TIMEOUT
         );
     };
     let Some((a_cancel_event_from, b_cancel_event_from)) = cancel_event_from else {
-        let _ = cancel_if_known(a, &before_uids, market, price, false);
-        panic!("FireTest order uid={server_uid} did not reach a cancellable exchange state");
+        let _ = cancel_if_known(a, &before_uids, market, price, emulator);
+        panic!("FireTest order uid={server_uid} did not reach a cancellable active state");
     };
 
     let cancel_start = Instant::now();
     let removed = loop {
-        if cancel_start.elapsed() >= FIRETEST_REAL_BALANCE_ORDER_TIMEOUT {
+        if cancel_start.elapsed() >= FIRETEST_SOL_CANCEL_TIMEOUT {
             break false;
         }
         a.pump(PUMP_SLICE);
@@ -8248,7 +8286,7 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session, exchange_sw
         {
             let current = active_balance_probe(a, market);
             println!(
-                "FIRETEST real order cancel: terminal BuyCancel broadcast and order removed from both clients after {:.2}s uid={} current_balance=[{}]",
+                "FIRETEST SOL order cancel: terminal BuyCancel broadcast and order removed from both clients after {:.2}s uid={} current_balance=[{}]",
                 cancel_start.elapsed().as_secs_f64(),
                 server_uid,
                 current.summary()
@@ -8260,22 +8298,24 @@ fn run_real_order_cancel_gate_body(a: &mut Session, b: &mut Session, exchange_sw
             Some(OrderWorkerStatus::BuyDone | OrderWorkerStatus::SellDone)
         ) {
             panic!(
-                "FireTest real order cancel: uid={server_uid} unexpectedly filled/closed; limit was 5% below market"
+                "FireTest SOL order cancel: uid={server_uid} unexpectedly filled/closed; limit was 5% below market"
             );
         }
     };
-    if !removed { let _ = cancel_if_known(a, &before_uids, market, price, false); }
+    if !removed { let _ = cancel_if_known(a, &before_uids, market, price, emulator); }
     assert!(
         removed,
-        "FireTest real order cancel: {market} order uid={server_uid} did not broadcast terminal BuyCancel and disappear from both clients within {:?}; A.events=[{}] B.events=[{}]",
-        FIRETEST_REAL_BALANCE_ORDER_TIMEOUT,
+        "FireTest SOL order cancel: {market} order uid={server_uid} did not broadcast terminal BuyCancel and disappear from both clients within {:?}; A.events=[{}] B.events=[{}]",
+        FIRETEST_SOL_CANCEL_TIMEOUT,
         describe_captured_order_states(a, server_uid),
         describe_captured_order_states(b, server_uid)
     );
     assert_balance_stream_seen(a);
     assert_balance_stream_seen(b);
-    println!("OK: real non-emulator SOL order was created, canceled, and removed; balance stream was observed independently");
-    if exchange_sweep { println!("OK: exchange-wide entry cancellation reached the exchange and both clients"); }
+    println!("OK: SOL order created, canceled and removed in {} mode; balance stream observed independently", mode.as_str());
+    if second_pass {
+        println!("OK: {} reached both clients", if emulator { "forced emulator cancellation" } else { "exchange-wide entry cancellation" });
+    }
 }
 
 #[test]
@@ -9507,7 +9547,11 @@ fn run_cancel_all_buys_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session, 
     assert_eq!(buys.len(), 1, "bulk-cancel BUY correlation must be unique");
     assert_eq!(pendings.len(), 1, "bulk-cancel pending correlation must be unique");
     let entries = [buys[0], pendings[0]];
-    a.client.trade().cancel_all_buys().expect("bulk cancellation must queue");
+    if cfg.order_mode == FireOrderMode::Emulator {
+        for uid in entries { assert!(a.cancel_order(uid), "cancel emulator entry fixture uid={uid}"); }
+    } else {
+        a.client.trade().cancel_all_buys().expect("bulk cancellation must queue");
+    }
     assert!(pump_pair_until_sessions(a, b, cfg.connect_timeout, "bulk BUY/pending cancellation", |a, b| {
         [a, b].into_iter().all(|session| entries.iter().all(|uid| !order_is_present(session, *uid)))
     }), "bulk cancellation must remove both entries from both clients");
@@ -9515,7 +9559,7 @@ fn run_cancel_all_buys_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session, 
         assert!(session.state_snapshot().orders().get(sell_uid).is_some_and(|o| o.status == OrderWorkerStatus::SellSet),
             "bulk cancellation must preserve the filled position's SELL exit");
     }
-    println!("OK: cancel_all_buys removed BUY and pending on both clients, preserved SELL uid={sell_uid}");
+    println!("OK: entry cancellation ({}) removed BUY and pending on both clients, preserved SELL uid={sell_uid}", cfg.order_mode.as_str());
 }
 
 fn run_order_lifecycle_gate_body(
@@ -10406,6 +10450,7 @@ fn fire_test_active_library_health() {
     let start = Instant::now();
     let cfg = FireConfig::load_required();
     let profile = FireProfile::from_env();
+    println!("FIRETEST order_mode={}", cfg.order_mode.as_str());
     let key_info = parse_key_info(&cfg.key_b64).expect("invalid MoonProto key in FireTest config");
     let keys = key_info.keys;
 
@@ -10460,327 +10505,339 @@ fn fire_test_active_library_health() {
 
     let mut a = Session::connect("A", &cfg, keys, Some(seeded_strategy.clone()));
     let mut b = Session::connect("B", &cfg, keys, Some(seeded_strategy.clone()));
-    assert_strategy_field_visible_for_firetest(&a, &cfg, &seeded_strategy);
-    assert_strategy_field_visible_for_firetest(&b, &cfg, &seeded_strategy);
-    assert!(
-        a.strategy_snapshot(seeded_strategy_id).is_some()
-            && b.strategy_snapshot(seeded_strategy_id).is_some(),
-        "FireTest local strategies must be available through MoonStateSnapshot before stream checks"
-    );
-    write_strategy_info_dump(FireProfile::Full, &cfg, &[("A", &a), ("B", &b)]);
-
-    assert!(
-        pump_pair_until(&mut a, &mut b, cfg.wait, "initial health", |a, b| {
-            has_initial_health(a) && has_initial_health(b)
-        }),
-        "FireTest initial health failed: both clients must receive startup ProfitState, kernel telemetry, trades and configured orderbook within {:?}",
-        cfg.wait
-    );
-    let a_initial = a.snapshot();
-    let b_initial = b.snapshot();
-    for stats in [&a_initial, &b_initial] {
-        println!("OK: FIRETEST {}: startup ProfitState events={} state={:?}",
-            stats.label, stats.profit_state_events,
-            stats.profit_state.expect("initial health must retain startup profit state"));
-        let health = stats
-            .kernel_health
-            .expect("initial health must retain kernel telemetry");
-        println!(
-            "OK: FIRETEST {}: kernel CPU process={}%, system={}%, memory used={}MB free={}MB cores={}, core RTT={:?}ms, order API latency={:?}ms",
-            stats.label,
-            health.process_cpu_percent,
-            health.system_cpu_percent,
-            health.used_memory_mb.unwrap(),
-            health.free_physical_memory_mb.unwrap(),
-            health.logical_cpu_count.unwrap(),
-            health.core_round_trip_ms,
-            health.order_api_latency_ms
+    let restore_emu_mode = if cfg.order_mode == FireOrderMode::Emulator {
+        let original = request_settings_until(&mut a, cfg.connect_timeout);
+        (!original.emu_mode).then_some(original)
+    } else { None };
+    let full_run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if restore_emu_mode.is_some() {
+            ensure_server_emulator_mode(&cfg, &mut a, &mut b);
+        }
+        assert_strategy_field_visible_for_firetest(&a, &cfg, &seeded_strategy);
+        assert_strategy_field_visible_for_firetest(&b, &cfg, &seeded_strategy);
+        assert!(
+            a.strategy_snapshot(seeded_strategy_id).is_some()
+                && b.strategy_snapshot(seeded_strategy_id).is_some(),
+            "FireTest local strategies must be available through MoonStateSnapshot before stream checks"
         );
-        let license = stats
-            .kernel_license_state
-            .expect("initial health must retain kernel license state");
-        if license.news_service_active(MoonTime::now()) {
+        write_strategy_info_dump(FireProfile::Full, &cfg, &[("A", &a), ("B", &b)]);
+
+        assert!(
+            pump_pair_until(&mut a, &mut b, cfg.wait, "initial health", |a, b| {
+                has_initial_health(a) && has_initial_health(b)
+            }),
+            "FireTest initial health failed: both clients must receive startup ProfitState, kernel telemetry, trades and configured orderbook within {:?}",
+            cfg.wait
+        );
+        let a_initial = a.snapshot();
+        let b_initial = b.snapshot();
+        for stats in [&a_initial, &b_initial] {
+            println!("OK: FIRETEST {}: startup ProfitState events={} state={:?}",
+                stats.label, stats.profit_state_events,
+                stats.profit_state.expect("initial health must retain startup profit state"));
+            let health = stats
+                .kernel_health
+                .expect("initial health must retain kernel telemetry");
             println!(
-                "OK: FIRETEST {}: news history={} retained={} tags_present={}",
+                "OK: FIRETEST {}: kernel CPU process={}%, system={}%, memory used={}MB free={}MB cores={}, core RTT={:?}ms, order API latency={:?}ms",
                 stats.label,
-                stats.news_history_count,
-                stats.news_snapshot_count,
-                stats.news_tags_present
+                health.process_cpu_percent,
+                health.system_cpu_percent,
+                health.used_memory_mb.unwrap(),
+                health.free_physical_memory_mb.unwrap(),
+                health.logical_cpu_count.unwrap(),
+                health.core_round_trip_ms,
+                health.order_api_latency_ms
             );
-        } else {
+            let license = stats
+                .kernel_license_state
+                .expect("initial health must retain kernel license state");
+            if license.news_service_active(MoonTime::now()) {
+                println!(
+                    "OK: FIRETEST {}: news history={} retained={} tags_present={}",
+                    stats.label,
+                    stats.news_history_count,
+                    stats.news_snapshot_count,
+                    stats.news_tags_present
+                );
+            } else {
+                println!(
+                    "FIRETEST SKIPPED {}: news history/tags check; no active News service subscription (news_valid_until={:?})",
+                    stats.label, license.news_valid_until
+                );
+            }
+        }
+        run_session_profit_and_hl_limit_gate(&cfg, &mut a, &mut b);
+        if a_initial.lev_manage_events == 0 || b_initial.lev_manage_events == 0 {
             println!(
-                "FIRETEST SKIPPED {}: news history/tags check; no active News service subscription (news_valid_until={:?})",
-                stats.label, license.news_valid_until
+                "FIRETEST NOTE initial health: LevManage was not observed on both clients (A={} B={}); live market/trades/orderbook health does not depend on this optional SrvConnect UI extension",
+                a_initial.lev_manage_events, b_initial.lev_manage_events
             );
         }
-    }
-    run_session_profit_and_hl_limit_gate(&cfg, &mut a, &mut b);
-    if a_initial.lev_manage_events == 0 || b_initial.lev_manage_events == 0 {
-        println!(
-            "FIRETEST NOTE initial health: LevManage was not observed on both clients (A={} B={}); live market/trades/orderbook health does not depend on this optional SrvConnect UI extension",
-            a_initial.lev_manage_events, b_initial.lev_manage_events
+        assert!(
+            pump_pair_until_nonblocking_api_refresh(&mut a, &mut b, &cfg, cfg.connect_timeout),
+            "FireTest non-blocking API refresh failed within {:?}: A=[{}] B=[{}]",
+            cfg.connect_timeout,
+            a.snapshot().summary(),
+            b.snapshot().summary()
         );
-    }
-    assert!(
-        pump_pair_until_nonblocking_api_refresh(&mut a, &mut b, &cfg, cfg.connect_timeout),
-        "FireTest non-blocking API refresh failed within {:?}: A=[{}] B=[{}]",
-        cfg.connect_timeout,
-        a.snapshot().summary(),
-        b.snapshot().summary()
-    );
-    let _a_initial_settings = request_settings_until(&mut a, cfg.connect_timeout);
-    let _b_initial_settings = request_settings_until(&mut b, cfg.connect_timeout);
-    run_shared_config_gate(&cfg, &mut a, &mut b);
-    n2_controls::run_exit_policy_gate(&cfg, &mut a, &mut b);
-    let initial_runtime_state = wait_ui_runtime_state(&cfg, &mut a, &mut b);
-    let initial_streamer_state = moon_streamer_state(&a).expect("full FireTest requires MoonBot 7.73 N2+");
-    run_auto_detect_echo_gate(&cfg, &mut a, initial_runtime_state);
-    run_kernel_license_state_gate(&cfg, &mut a, &mut b);
-    assert!(
-        pump_pair_until(
-            &mut a,
-            &mut b,
+        let _a_initial_settings = request_settings_until(&mut a, cfg.connect_timeout);
+        let _b_initial_settings = request_settings_until(&mut b, cfg.connect_timeout);
+        run_shared_config_gate(&cfg, &mut a, &mut b);
+        n2_controls::run_exit_policy_gate(&cfg, &mut a, &mut b);
+        let initial_runtime_state = wait_ui_runtime_state(&cfg, &mut a, &mut b);
+        let initial_streamer_state = moon_streamer_state(&a).expect("full FireTest requires MoonBot 7.73 N2+");
+        run_auto_detect_echo_gate(&cfg, &mut a, initial_runtime_state);
+        run_kernel_license_state_gate(&cfg, &mut a, &mut b);
+        assert!(
+            pump_pair_until(
+                &mut a,
+                &mut b,
+                cfg.wait,
+                "market book/trades/UpdateMarketsList consistency",
+                |a, b| has_market_consistency(a) && has_market_consistency(b)
+            ),
+            "FireTest market consistency failed within {:?}: A=[{}] B=[{}]",
             cfg.wait,
-            "market book/trades/UpdateMarketsList consistency",
-            |a, b| has_market_consistency(a) && has_market_consistency(b)
-        ),
-        "FireTest market consistency failed within {:?}: A=[{}] B=[{}]",
-        cfg.wait,
-        a.snapshot().market_probe_summary(),
-        b.snapshot().market_probe_summary()
-    );
-    println!(
-        "OK: market consistency A=[{}] B=[{}]",
-        a.snapshot().market_probe_summary(),
-        b.snapshot().market_probe_summary()
-    );
-    run_candle_timeframe_state_gate(&cfg, &mut a, &mut b);
-    log_err_emu_pair("initial health 10% gate", &a, &b);
-    log_protocol_cpu_pair("initial health 10% gate", &a, &b);
-
-    a.request_candles_snapshot();
-    assert!(
-        pump_pair_until(
-            &mut a,
-            &mut b,
-            cfg.candles_timeout,
-            "full candles snapshot under err_emu",
-            |a, _| a
-                .candles_complete
-                .as_ref()
-                .map(CandlesSnapshotSummary::is_healthy)
-                .unwrap_or(false)
-                && a.retained_candles_healthy()
-                && a.parse_failed == 0
-        ),
-        "client A did not receive a complete candles snapshot within {:?}",
-        cfg.candles_timeout
-    );
-    let candles_stats = a.snapshot();
-    if let Some(candles) = candles_stats.candles_complete.as_ref() {
-        println!(
-            "OK: full candles snapshot {} retained_candles_5m={} newest_age_s={:?}",
-            candles.summary(),
-            candles_stats.retained_candles_5m,
-            candles_stats.retained_candles_5m_newest_age_s
+            a.snapshot().market_probe_summary(),
+            b.snapshot().market_probe_summary()
         );
-    }
-    log_protocol_cpu_pair("after candles 10% gate", &a, &b);
-    err_emu.reset("initial chunked response gates");
-    run_market_history_archive_gate(&cfg, &mut a, &mut b, cfg.candles_timeout);
-    log_protocol_cpu_pair("after three-market chart archive gate", &a, &b);
-    run_high_loss_simple_ops_gate(&mut a, &mut b, &mut err_emu, cfg.high_loss_timeout);
-    log_protocol_cpu_pair("after high-loss simple ops gate", &a, &b);
-    err_emu.reset("high-loss simple ops gate");
-    run_moon_stream_gate(&cfg, &mut a, &mut b);
-    run_moon_streamer_settings_gate(&cfg, &mut a, &mut b);
-    run_telegram_state_gate(&cfg, keys);
-    run_problems_gate(&cfg, keys, &mut a, &mut b);
-    a.client
-        .debug_reset_err_emu_diagnostics()
-        .expect("reset A err_emu diagnostics");
-    b.client
-        .debug_reset_err_emu_diagnostics()
-        .expect("reset B err_emu diagnostics");
+        println!(
+            "OK: market consistency A=[{}] B=[{}]",
+            a.snapshot().market_probe_summary(),
+            b.snapshot().market_probe_summary()
+        );
+        run_candle_timeframe_state_gate(&cfg, &mut a, &mut b);
+        log_err_emu_pair("initial health 10% gate", &a, &b);
+        log_protocol_cpu_pair("initial health 10% gate", &a, &b);
 
-    run_transfer_assets_refresh_coalescing_gate(&mut a, &mut b, cfg.connect_timeout);
+        a.request_candles_snapshot();
+        assert!(
+            pump_pair_until(
+                &mut a,
+                &mut b,
+                cfg.candles_timeout,
+                "full candles snapshot under err_emu",
+                |a, _| a
+                    .candles_complete
+                    .as_ref()
+                    .map(CandlesSnapshotSummary::is_healthy)
+                    .unwrap_or(false)
+                    && a.retained_candles_healthy()
+                    && a.parse_failed == 0
+            ),
+            "client A did not receive a complete candles snapshot within {:?}",
+            cfg.candles_timeout
+        );
+        let candles_stats = a.snapshot();
+        if let Some(candles) = candles_stats.candles_complete.as_ref() {
+            println!(
+                "OK: full candles snapshot {} retained_candles_5m={} newest_age_s={:?}",
+                candles.summary(),
+                candles_stats.retained_candles_5m,
+                candles_stats.retained_candles_5m_newest_age_s
+            );
+        }
+        log_protocol_cpu_pair("after candles 10% gate", &a, &b);
+        err_emu.reset("initial chunked response gates");
+        run_market_history_archive_gate(&cfg, &mut a, &mut b, cfg.candles_timeout);
+        log_protocol_cpu_pair("after three-market chart archive gate", &a, &b);
+        run_high_loss_simple_ops_gate(&mut a, &mut b, &mut err_emu, cfg.high_loss_timeout);
+        log_protocol_cpu_pair("after high-loss simple ops gate", &a, &b);
+        err_emu.reset("high-loss simple ops gate");
+        run_moon_stream_gate(&cfg, &mut a, &mut b);
+        run_moon_streamer_settings_gate(&cfg, &mut a, &mut b);
+        run_telegram_state_gate(&cfg, keys);
+        run_problems_gate(&cfg, keys, &mut a, &mut b);
+        a.client
+            .debug_reset_err_emu_diagnostics()
+            .expect("reset A err_emu diagnostics");
+        b.client
+            .debug_reset_err_emu_diagnostics()
+            .expect("reset B err_emu diagnostics");
 
-    run_report_database_gate(&cfg, keys, &mut a);
-    run_order_lifecycle_gate(&cfg, &mut a, &mut b);
-    run_session_profit_sync_gate(&cfg, keys);
-    run_real_order_cancel_gate(&cfg, &mut a, &mut b);
-    run_strategy_order_sync_gate(&cfg, keys, &mut a, &mut b);
+        run_transfer_assets_refresh_coalescing_gate(&mut a, &mut b, cfg.connect_timeout);
 
-    run_strategy_folder_sync_gate(&cfg, keys, &mut a, &mut b);
-    run_moonshot_strategy_gate(&cfg, &mut a, &mut b);
-    run_manual_strategy_snapshot_check(&cfg, keys, true);
-    run_runtime_restart_now_gate(&cfg, &mut a, &mut b);
+        run_report_database_gate(&cfg, keys, &mut a);
+        run_order_lifecycle_gate(&cfg, &mut a, &mut b);
+        run_session_profit_sync_gate(&cfg, keys);
+        run_sol_order_cancel_gate(&cfg, &mut a, &mut b);
+        run_strategy_order_sync_gate(&cfg, keys, &mut a, &mut b);
 
-    let a_initial = a.snapshot();
-    let original_settings = a_initial
-        .last_settings
-        .clone()
-        .expect("settings were counted but not stored");
-    let original_strategy = a
-        .strategy_snapshot(seeded_strategy_id)
-        .expect("seeded strategy missing from dispatcher state");
-    let field = select_field(&original_strategy, &cfg.strategy_field);
-    let original_field_value = match original_strategy.fields.get(field.as_str()) {
-        Some(FieldValue::String(value)) => value.clone(),
-        _ => panic!("selected field `{field}` missing from seeded strategy"),
-    };
+        run_strategy_folder_sync_gate(&cfg, keys, &mut a, &mut b);
+        run_moonshot_strategy_gate(&cfg, &mut a, &mut b);
+        run_manual_strategy_snapshot_check(&cfg, keys, true);
+        run_runtime_restart_now_gate(&cfg, &mut a, &mut b);
 
-    let run_id = now_epoch_ms();
-    let mutated_field_value = format!("firetest-{run_id}");
-    let mutated_strategy = with_strategy_string(
-        original_strategy.clone(),
-        &field,
-        mutated_field_value.clone(),
-        1,
-    );
-    let mut mutated_settings = original_settings.clone();
-    mutated_settings.x_sell = if original_settings.x_sell == i32::MAX {
-        original_settings.x_sell - 1
-    } else {
-        original_settings.x_sell + 1
-    };
+        let a_initial = a.snapshot();
+        let original_settings = a_initial
+            .last_settings
+            .clone()
+            .expect("settings were counted but not stored");
+        let original_strategy = a
+            .strategy_snapshot(seeded_strategy_id)
+            .expect("seeded strategy missing from dispatcher state");
+        let field = select_field(&original_strategy, &cfg.strategy_field);
+        let original_field_value = match original_strategy.fields.get(field.as_str()) {
+            Some(FieldValue::String(value)) => value.clone(),
+            _ => panic!("selected field `{field}` missing from seeded strategy"),
+        };
 
-    println!(
-        "FIRETEST mutation: strategy_id={} field={} {:?}->{:?}; x_sell {}->{}",
-        original_strategy.strategy_id,
-        field,
-        original_field_value,
-        mutated_field_value,
-        original_settings.x_sell,
-        mutated_settings.x_sell
-    );
-    a.sync_local_strategies(std::slice::from_ref(&mutated_strategy));
-    a.client
-        .settings()
-        .send(mutated_settings.clone())
-        .expect("MoonClient send_settings must queue");
+        let run_id = now_epoch_ms();
+        let mutated_field_value = format!("firetest-{run_id}");
+        let mutated_strategy = with_strategy_string(
+            original_strategy.clone(),
+            &field,
+            mutated_field_value.clone(),
+            1,
+        );
+        let mut mutated_settings = original_settings.clone();
+        mutated_settings.x_sell = if original_settings.x_sell == i32::MAX {
+            original_settings.x_sell - 1
+        } else {
+            original_settings.x_sell + 1
+        };
 
-    let mutation_seen =
-        pump_pair_until(&mut a, &mut b, cfg.wait, "cross-client mutation", |a, b| {
+        println!(
+            "FIRETEST mutation: strategy_id={} field={} {:?}->{:?}; x_sell {}->{}",
+            original_strategy.strategy_id,
+            field,
+            original_field_value,
+            mutated_field_value,
+            original_settings.x_sell,
+            mutated_settings.x_sell
+        );
+        a.sync_local_strategies(std::slice::from_ref(&mutated_strategy));
+        a.client
+            .settings()
+            .send(mutated_settings.clone())
+            .expect("MoonClient send_settings must queue");
+
+        let mutation_seen =
+            pump_pair_until(&mut a, &mut b, cfg.wait, "cross-client mutation", |a, b| {
+                strategy_field_string(a, original_strategy.strategy_id, &field)
+                    .is_some_and(|value| value == mutated_field_value)
+                    && b.last_settings
+                        .as_ref()
+                        .map(|s| s.x_sell == mutated_settings.x_sell)
+                        .unwrap_or(false)
+                    && strategy_field_string(b, original_strategy.strategy_id, &field)
+                        .map(|value| value == mutated_field_value)
+                        .unwrap_or(false)
+            });
+
+        let restored_strategy = with_strategy_string(
+            original_strategy.clone(),
+            &field,
+            original_field_value.clone(),
+            2,
+        );
+        a.sync_local_strategies(std::slice::from_ref(&restored_strategy));
+        a.client
+            .settings()
+            .send(original_settings.clone())
+            .expect("MoonClient send_settings must queue");
+        let restored = pump_pair_until(&mut a, &mut b, cfg.wait, "restore mutation", |a, b| {
             strategy_field_string(a, original_strategy.strategy_id, &field)
-                .is_some_and(|value| value == mutated_field_value)
+                .is_some_and(|value| value == original_field_value)
                 && b.last_settings
                     .as_ref()
-                    .map(|s| s.x_sell == mutated_settings.x_sell)
+                    .map(|s| s.x_sell == original_settings.x_sell)
                     .unwrap_or(false)
                 && strategy_field_string(b, original_strategy.strategy_id, &field)
-                    .map(|value| value == mutated_field_value)
+                    .map(|value| value == original_field_value)
                     .unwrap_or(false)
         });
 
-    let restored_strategy = with_strategy_string(
-        original_strategy.clone(),
-        &field,
-        original_field_value.clone(),
-        2,
-    );
-    a.sync_local_strategies(std::slice::from_ref(&restored_strategy));
-    a.client
-        .settings()
-        .send(original_settings.clone())
-        .expect("MoonClient send_settings must queue");
-    let restored = pump_pair_until(&mut a, &mut b, cfg.wait, "restore mutation", |a, b| {
-        strategy_field_string(a, original_strategy.strategy_id, &field)
-            .is_some_and(|value| value == original_field_value)
-            && b.last_settings
-                .as_ref()
-                .map(|s| s.x_sell == original_settings.x_sell)
-                .unwrap_or(false)
-            && strategy_field_string(b, original_strategy.strategy_id, &field)
-                .map(|value| value == original_field_value)
-                .unwrap_or(false)
-    });
+        assert!(
+            mutation_seen,
+            "client A did not receive a canonical strategy confirmation or client B missed the mutation"
+        );
+        assert!(
+            restored,
+            "client A did not receive a canonical strategy restore confirmation or client B missed it"
+        );
 
-    assert!(
-        mutation_seen,
-        "client A did not receive a canonical strategy confirmation or client B missed the mutation"
-    );
-    assert!(
-        restored,
-        "client A did not receive a canonical strategy restore confirmation or client B missed it"
-    );
-
-    let before_blackhole = a.snapshot();
-    a.client
-        .debug_set_outgoing_blackhole(true)
-        .expect("enable outgoing blackhole");
-    let disconnect_start = Instant::now();
-    let disconnected = pump_pair_until(
-        &mut a,
-        &mut b,
-        cfg.disconnect_timeout,
-        "server-side disconnect after outgoing blackhole",
-        |a, _| a.reconnecting > before_blackhole.reconnecting,
-    );
-    let disconnected_after = disconnect_start.elapsed();
-    a.client
-        .debug_set_outgoing_blackhole(false)
-        .expect("disable outgoing blackhole");
-    assert!(
-        disconnected,
-        "client A did not enter reconnecting state within {:?} while outgoing blackhole was enabled",
-        cfg.disconnect_timeout
-    );
-    println!(
-        "OK: server/client detected silence after {:.2}s",
-        disconnected_after.as_secs_f64()
-    );
-
-    let before_reconnect = a.snapshot();
-    let reconnected = pump_pair_until(
-        &mut a,
-        &mut b,
-        cfg.reconnect_timeout,
-        "automatic reconnect",
-        |a, _| a.connected_again > before_reconnect.connected_again,
-    );
-    assert!(
-        reconnected && a.snapshot().connected_now,
-        "client A did not reconnect within {:?}",
-        cfg.reconnect_timeout
-    );
-
-    let after_reconnect = a.snapshot();
-    let runtime_after_reconnect = wait_ui_runtime_state(&cfg, &mut a, &mut b);
-    let streamer_after_reconnect = moon_streamer_state(&a).expect("reconnect must recover Moon Streamer settings");
-    assert_eq!(streamer_after_reconnect.source, initial_streamer_state.source);
-    assert_eq!(streamer_after_reconnect.distribution_enabled, initial_streamer_state.distribution_enabled);
-    assert_eq!(streamer_after_reconnect.last_custom_server, initial_streamer_state.last_custom_server);
-    run_auto_detect_echo_gate(&cfg, &mut a, runtime_after_reconnect);
-    assert_eq!(runtime_after_reconnect.moon_stream_enabled, initial_runtime_state.moon_stream_enabled,
-        "Moon Streamer state must survive client reconnect");
-    let trades_before = after_reconnect.trades_apply;
-    let books_before = after_reconnect.orderbook_apply;
-    assert!(
-        pump_pair_until(
+        let before_blackhole = a.snapshot();
+        a.client
+            .debug_set_outgoing_blackhole(true)
+            .expect("enable outgoing blackhole");
+        let disconnect_start = Instant::now();
+        let disconnected = pump_pair_until(
             &mut a,
             &mut b,
-            cfg.wait,
-            "streams after reconnect",
-            |a, _| { a.trades_apply > trades_before && a.orderbook_apply > books_before }
-        ),
-        "client A did not receive trades and orderbook after reconnect within {:?}",
-        cfg.wait
-    );
+            cfg.disconnect_timeout,
+            "server-side disconnect after outgoing blackhole",
+            |a, _| a.reconnecting > before_blackhole.reconnecting,
+        );
+        let disconnected_after = disconnect_start.elapsed();
+        a.client
+            .debug_set_outgoing_blackhole(false)
+            .expect("disable outgoing blackhole");
+        assert!(
+            disconnected,
+            "client A did not enter reconnecting state within {:?} while outgoing blackhole was enabled",
+            cfg.disconnect_timeout
+        );
+        println!(
+            "OK: server/client detected silence after {:.2}s",
+            disconnected_after.as_secs_f64()
+        );
 
-    pump_pair_for(&mut a, &mut b, Duration::from_millis(200));
-    a.assert_coin_card_candles_healthy(&cfg.market, FIRETEST_COIN_CARD_KIND);
-    b.assert_coin_card_candles_healthy(&cfg.market, FIRETEST_COIN_CARD_KIND);
-    let a_stats = a.snapshot();
-    let b_stats = b.snapshot();
-    assert!(
-        a_stats.server_logs + b_stats.server_logs > 0,
-        "FireTest did not receive any encrypted server LogMsg events: A=[{}] B=[{}]",
-        a_stats.summary(),
-        b_stats.summary()
-    );
-    log_protocol_cpu_pair("final", &a, &b);
-    write_strategy_info_dump(FireProfile::Full, &cfg, &[("A", &a), ("B", &b)]);
-    a.emit_active_lib_report(FireProfile::Full, start);
-    println!("FIRETEST_PASS");
+        let before_reconnect = a.snapshot();
+        let reconnected = pump_pair_until(
+            &mut a,
+            &mut b,
+            cfg.reconnect_timeout,
+            "automatic reconnect",
+            |a, _| a.connected_again > before_reconnect.connected_again,
+        );
+        assert!(
+            reconnected && a.snapshot().connected_now,
+            "client A did not reconnect within {:?}",
+            cfg.reconnect_timeout
+        );
+
+        let after_reconnect = a.snapshot();
+        let runtime_after_reconnect = wait_ui_runtime_state(&cfg, &mut a, &mut b);
+        let streamer_after_reconnect = moon_streamer_state(&a).expect("reconnect must recover Moon Streamer settings");
+        assert_eq!(streamer_after_reconnect.source, initial_streamer_state.source);
+        assert_eq!(streamer_after_reconnect.distribution_enabled, initial_streamer_state.distribution_enabled);
+        assert_eq!(streamer_after_reconnect.last_custom_server, initial_streamer_state.last_custom_server);
+        run_auto_detect_echo_gate(&cfg, &mut a, runtime_after_reconnect);
+        assert_eq!(runtime_after_reconnect.moon_stream_enabled, initial_runtime_state.moon_stream_enabled,
+            "Moon Streamer state must survive client reconnect");
+        let trades_before = after_reconnect.trades_apply;
+        let books_before = after_reconnect.orderbook_apply;
+        assert!(
+            pump_pair_until(
+                &mut a,
+                &mut b,
+                cfg.wait,
+                "streams after reconnect",
+                |a, _| { a.trades_apply > trades_before && a.orderbook_apply > books_before }
+            ),
+            "client A did not receive trades and orderbook after reconnect within {:?}",
+            cfg.wait
+        );
+
+        pump_pair_for(&mut a, &mut b, Duration::from_millis(200));
+        a.assert_coin_card_candles_healthy(&cfg.market, FIRETEST_COIN_CARD_KIND);
+        b.assert_coin_card_candles_healthy(&cfg.market, FIRETEST_COIN_CARD_KIND);
+        let a_stats = a.snapshot();
+        let b_stats = b.snapshot();
+        assert!(
+            a_stats.server_logs + b_stats.server_logs > 0,
+            "FireTest did not receive any encrypted server LogMsg events: A=[{}] B=[{}]",
+            a_stats.summary(),
+            b_stats.summary()
+        );
+        log_protocol_cpu_pair("final", &a, &b);
+        write_strategy_info_dump(FireProfile::Full, &cfg, &[("A", &a), ("B", &b)]);
+        a.emit_active_lib_report(FireProfile::Full, start);
+    }));
+    err_emu.reset("full profile cleanup");
+    restore_server_emulator_mode(&cfg, &mut a, &mut b, restore_emu_mode);
+    if let Err(error) = full_run { std::panic::resume_unwind(error); }
+    println!("FIRETEST_PASS order_mode={}", cfg.order_mode.as_str());
 }

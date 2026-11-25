@@ -237,7 +237,15 @@ cargo test --release --features diagnostics --test fire_test fire_test_active_li
 ```
 
 - **Quick profile** (< 30 s, one client) — connect / AuthDone / InitDone, base/auth checks, markets & server-index map, strategy schema, core CPU/memory/core-count telemetry, startup news/tags, trades & orderbook subscriptions, retained trades/price/history, MarkPrice + funding/balance/order UI state, `ParseFailed == 0`, and PMTU/CPU gates.
-- **Full profile** (destructive/stress, `allow_mutation = true`) — two live clients, `err_emu` packet loss (10% → 50%), chunked candles under loss, settings/strategy broadcast and restore, report-schema/database migration plus offline catch-up, an emulator order lifecycle, and a real SOLUSDT safety gate: place a $1000 long limit 5% below market, cancel it through the tracked Active Lib order path, and verify that balance changes arrive without a manual balance request. It also exercises simple operations at 50% loss, forced reconnect and post-reconnect delivery, plus sliced/retry/parse/PMTU/CPU diagnostics.
+- **Full profile** (destructive/stress, `allow_mutation = true`) — two live clients, `err_emu` packet loss (10% → 50%), chunked candles under loss, settings/strategy broadcast and restore, report-schema/database migration plus offline catch-up, an emulator order lifecycle, and SOLUSDT cancellation: place a $1000 long limit 5% below market, cancel it through the tracked Active Lib order path, and verify live balance delivery. The order backend is selected below. It also exercises simple operations at 50% loss, forced reconnect and post-reconnect delivery, plus sliced/retry/parse/PMTU/CPU diagnostics.
+
+Set `order_mode = emulator` in the private FireTest config to run the full profile
+with virtual orders throughout. It restores the original emulator switch at the
+end. SOL cancellation covers normal and N2 forced cancellation; BUY/pending
+cleanup targets only test fixtures. Global core/exchange cancellation commands
+are not sent in this mode because they could affect existing exchange orders.
+`order_mode = exchange` preserves the previous scenario and is the default when
+the setting is omitted. The selected mode is printed with the final result.
 
 The release CPU gates allow up to **10 ms** for receive/dispatch, including synchronous
 decoding and application of whole snapshots. Writer work, event enqueueing, and send
