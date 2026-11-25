@@ -80,6 +80,8 @@ mod compact;
 mod core_management;
 #[path = "fire_test/history_compare.rs"]
 mod history_compare;
+#[path = "fire_test/n2_controls.rs"]
+mod n2_controls;
 
 use moonproto::client::{set_err_emu, ErrEmuDiagnostics, ErrEmuSlicedDatagramDiagnostics};
 use moonproto::commands::{
@@ -507,6 +509,8 @@ struct SessionStats {
     raw_events: u64,
     server_logs: u64,
     settings_events: u64,
+    shared_config_events: u64,
+    chart_text_events: u64,
     lev_manage_events: u64,
     runtime_state_events: u64,
     runtime_state: Option<RuntimeStateProbe>,
@@ -599,6 +603,8 @@ impl Clone for SessionStats {
             raw_events: self.raw_events,
             server_logs: self.server_logs,
             settings_events: self.settings_events,
+            shared_config_events: self.shared_config_events,
+            chart_text_events: self.chart_text_events,
             lev_manage_events: self.lev_manage_events,
             runtime_state_events: self.runtime_state_events,
             runtime_state: self.runtime_state,
@@ -3226,6 +3232,10 @@ fn record_event(
         Event::MarketHistoryArchive { ticket, trades } => {
             log_server_event(&st, event_no, format!("MarketHistoryArchive {ticket:?} trades={}", trades.len()));
         }
+        Event::ChartText(text) => {
+            st.chart_text_events += 1;
+            log_server_event(&st, event_no, format!("ChartText {text:?}"));
+        }
         Event::Markets(ev) => {
             st.market_events += 1;
             if let Some(dispatcher) = dispatcher {
@@ -3264,6 +3274,10 @@ fn record_event(
                     "UI ClientSettingsUpdated; state snapshot is refreshed after pump",
                 );
             }
+        }
+        Event::Settings(SettingsEvent::SharedConfigUpdated) => {
+            st.shared_config_events += 1;
+            log_server_event(&st, event_no, "UI SharedConfigUpdated");
         }
         Event::Settings(SettingsEvent::LevManageUpdated) => {
             st.settings_events += 1;
@@ -10517,6 +10531,7 @@ fn fire_test_active_library_health() {
     let _a_initial_settings = request_settings_until(&mut a, cfg.connect_timeout);
     let _b_initial_settings = request_settings_until(&mut b, cfg.connect_timeout);
     run_shared_config_gate(&cfg, &mut a, &mut b);
+    n2_controls::run_exit_policy_gate(&cfg, &mut a, &mut b);
     let initial_runtime_state = wait_ui_runtime_state(&cfg, &mut a, &mut b);
     let initial_streamer_state = moon_streamer_state(&a).expect("full FireTest requires MoonBot 7.73 N2+");
     run_auto_detect_echo_gate(&cfg, &mut a, initial_runtime_state);

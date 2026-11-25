@@ -176,6 +176,31 @@ and reconnected clients, and remove their fixtures. Folder sync covers empty and
 nested folders, combined rename/path edits, and deletion. Order sync covers
 reorders with and without parameter edits.
 
+Focused N2 controls on an updated core (`allow_mutation = true`):
+
+```powershell
+cargo test --release --features diagnostics --test fire_test n2_controls::fire_test_n2_controls -- --exact --ignored --nocapture
+cargo test --release --features diagnostics --test fire_test fire_test_moon_streamer_controls -- --exact --ignored --nocapture
+```
+
+The N2 controls case toggles `cancel_buys_on_exit` through compact and full
+settings, checks both clients, and imports a legacy full snapshot while the
+policy is enabled to verify that omission does not disable it. It restores the
+original policy even if a mutation assertion fails. It does not shut down the
+core or send order commands. The full profile also includes this settings gate.
+The focused case reuses the existing 50% packet-loss gate: read-only Engine
+requests, live trades/orderbook delivery, an outgoing network blackhole and
+automatic reconnect. It then requires fresh chart-text events without
+reselecting the chart.
+This proves recovery on the observed reconnect path; hard-session token changes
+and rebuilt runtime owners also have deterministic regressions.
+
+The separate Moon Streamer case changes and restores source/reception/distribution,
+checks cross-client broadcasts and a new connection, and reads diagnostics and
+subscribers. Both focused cases verify unchanged emulator and strategy runtime
+state. They complement the quick health profile; they do not run the full
+profile's order, session-reset and strategy-mutation scenarios.
+
 `fire_test_core_problems` checks diagnostic-list delivery and test notifications;
 see [its opt-in clear behavior](../docs/problems.md#firetest) before running it.
 
