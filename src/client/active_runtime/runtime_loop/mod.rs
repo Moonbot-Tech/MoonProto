@@ -786,6 +786,7 @@ mod moon_streamer_tests;
 #[cfg(test)]
 mod tests {
     mod guarded_orders;
+    mod force_cancel;
     use super::*;
     use crate::commands::engine_api::ServerInfo;
     use crate::commands::market::{BaseCurrency, ExchangeCode};

@@ -311,7 +311,8 @@ println!("Minimum core: {}", compatibility.minimum_core_version);
 println!("{}", compatibility.comment);
 ```
 
-The current requirement is **MoonBot 7.73 N2**, which adds Moon Streamer source
+The current requirement is **MoonBot 7.73 N2**, which adds `orders().force_cancel()`
+for a selected active order (ignored by older cores), plus Moon Streamer source
 selection, independent reception/distribution, reconnect, diagnostics, subscriber
 details and save-result replies. Older cores omit `runtime_state.moon_streamer`;
 N1 retains the existing reception switch without a save receipt.

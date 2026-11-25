@@ -205,7 +205,14 @@ impl OrderState {
         Some(payload)
     }
 
-    pub(crate) fn send_cancel_if_requested(&mut self, uid: u64) -> Option<OrderCommandPayload> {
+    pub(crate) fn send_cancel_if_requested(&mut self, uid: u64, force: bool) -> Option<OrderCommandPayload> {
+        if force {
+            return match self.get(uid)?.status {
+                OrderWorkerStatus::BuySet => Some(OrderCommandPayload::ForceCancelBuy { order_id: uid }),
+                OrderWorkerStatus::SellSet => Some(OrderCommandPayload::ForceCancelSell { order_id: uid }),
+                _ => None,
+            };
+        }
         let order = self.order_mut(uid)?;
         let payload = match order.status {
             OrderWorkerStatus::None => OrderCommandPayload::PendingCancel { order_id: uid },

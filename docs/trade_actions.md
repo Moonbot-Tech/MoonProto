@@ -63,6 +63,33 @@ flags are checked exactly once before sending.
 The runtime keeps the newest UI target, and the protocol send queue coalesces an
 older move that has not yet been copied by the writer.
 
+## Force Cancellation Of A Selected Order
+
+On **MoonBot 7.73 N2+**, a separate user action can force cancellation of a stuck
+active order:
+
+```rust
+client.orders().force_cancel(order)?;
+```
+
+The runtime selects the currently active BUY or SELL leg of that tracked order.
+Pending entries and missing/inactive orders do not send a force request; use
+ordinary `cancel(...)` for pending entries. Ordinary cancellation is unchanged.
+
+The core attempts cancellation and checks the exchange. After three checks
+without confirmation, it stops tracking the order locally and continues
+cancellation in the background. Previous failed cancellation attempts count,
+so an already-stuck cancellation can finish immediately. Detected fills are
+handled by the core's existing cancellation flow. The core rejects the request
+while that order is being joined or split.
+
+Explain this consequence in the action's confirmation: **the order can remain
+open on the exchange after the bot stops tracking it**. `Ok(())` only means the
+intent was queued; it is not an exchange acknowledgement. MoonProto does not
+remove the retained order optimistically. Continue displaying the core's normal
+order updates. Older cores ignore this request; there is no fallback to ordinary
+cancellation.
+
 ## Market Trade Intents
 
 New orders and market-level actions use `client.trade()`. User code supplies a

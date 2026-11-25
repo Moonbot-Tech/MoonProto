@@ -164,6 +164,7 @@ pub(super) enum RuntimeCommandKind {
     },
     CancelOrder {
         uid: u64,
+        force: bool,
     },
     UpdateStops {
         uid: u64,

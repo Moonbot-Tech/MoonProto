@@ -21,7 +21,8 @@ pub struct CoreCompatibility {
 pub const fn core_compatibility() -> CoreCompatibility {
     CoreCompatibility {
         minimum_core_version: "7.73 N2",
-        comment: "7.73 N2 adds Moon Streamer source selection, independent reception/distribution controls, \
+        comment: "7.73 N2 adds orders().force_cancel() for a selected active order; older cores ignore this request. \
+                  N2 also adds Moon Streamer source selection, independent reception/distribution controls, \
                   reconnect, diagnostics, subscriber details and save-result replies. Older cores omit \
                   runtime_state.moon_streamer; N1 retains settings().set_moon_stream_enabled() without a save receipt. \
                   7.73 N1 adds the Moon Streamer switch and its configured state, \

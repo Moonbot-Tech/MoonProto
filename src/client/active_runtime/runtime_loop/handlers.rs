@@ -403,7 +403,7 @@ pub(super) fn handle_command(
             let current = dispatcher.orders().get(guard.uid()).is_some_and(|order| guard.matches(order));
             let result = current && match action {
                 GuardedOrderAction::Move(price) => client.replace_tracked_order(dispatcher.orders_mut(), guard.uid(), price),
-                GuardedOrderAction::Cancel => client.cancel_tracked_order(dispatcher.orders_mut(), guard.uid()),
+                GuardedOrderAction::Cancel => client.cancel_tracked_order(dispatcher.orders_mut(), guard.uid(), false),
                 GuardedOrderAction::Panic(enabled) => client.turn_tracked_order_panic_sell(dispatcher.orders_mut(), guard.uid(), enabled),
             };
             let _ = reply.send(result);
@@ -892,8 +892,8 @@ fn handle_order_action(
         RuntimeCommandKind::MoveOrder { uid, new_price } => {
             client.replace_tracked_order(dispatcher.orders_mut(), *uid, *new_price)
         }
-        RuntimeCommandKind::CancelOrder { uid } => {
-            client.cancel_tracked_order(dispatcher.orders_mut(), *uid)
+        RuntimeCommandKind::CancelOrder { uid, force } => {
+            client.cancel_tracked_order(dispatcher.orders_mut(), *uid, *force)
         }
         RuntimeCommandKind::UpdateStops { uid, stops } => {
             client.update_tracked_order_stops(dispatcher.orders_mut(), *uid, stops)
@@ -932,7 +932,7 @@ fn queue_order_action_rejected(
     {
         let uid = match kind {
             RuntimeCommandKind::MoveOrder { uid, .. }
-            | RuntimeCommandKind::CancelOrder { uid }
+            | RuntimeCommandKind::CancelOrder { uid, .. }
             | RuntimeCommandKind::UpdateStops { uid, .. }
             | RuntimeCommandKind::UpdateVStop { uid, .. }
             | RuntimeCommandKind::TurnOrderPanicSell { uid, .. }

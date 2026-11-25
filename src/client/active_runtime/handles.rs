@@ -239,7 +239,18 @@ impl MoonOrders {
     /// Cancel one tracked order.
     pub fn cancel(&self, order: impl Into<OrderTarget>) -> Result<(), MoonClientError> {
         let uid = order.into().uid();
-        self.send_intent(RuntimeCommandKind::CancelOrder { uid })
+        self.send_intent(RuntimeCommandKind::CancelOrder { uid, force: false })
+    }
+
+    /// Force cancellation of the currently active BUY or SELL leg (MoonBot 7.73 N2+).
+    ///
+    /// After three unconfirmed checks (including prior failed attempts), the core
+    /// stops tracking the order and continues cancellation in the background.
+    /// The order may still be open on the exchange. Pending entries are not eligible.
+    /// Success means queued, not cancelled; retained state changes only on core updates.
+    pub fn force_cancel(&self, order: impl Into<OrderTarget>) -> Result<(), MoonClientError> {
+        let uid = order.into().uid();
+        self.send_intent(RuntimeCommandKind::CancelOrder { uid, force: true })
     }
 
     /// Cancel only the order incarnation and phase captured by the caller; report runtime admission.

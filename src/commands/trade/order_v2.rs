@@ -509,6 +509,12 @@ pub(crate) enum OrderCommandPayload {
     CancelSell {
         order_id: u64,
     },
+    ForceCancelBuy {
+        order_id: u64,
+    },
+    ForceCancelSell {
+        order_id: u64,
+    },
     PendingCancel {
         order_id: u64,
     },
@@ -596,16 +602,18 @@ impl OrderCommandPayload {
             Self::PanicSellAll => 17,
             Self::StartPending { .. } => 18,
             Self::CancelAllBuys => 19,
+            Self::ForceCancelBuy { .. } => 20,
+            Self::ForceCancelSell { .. } => 21,
             Self::Unknown(opcode) => *opcode,
         }
     }
 
     pub(crate) const fn group(&self) -> Option<OrderCommandGroup> {
         match self {
-            Self::TargetBuy { .. } | Self::CancelBuy { .. } | Self::PendingCancel { .. } => {
+            Self::TargetBuy { .. } | Self::CancelBuy { .. } | Self::PendingCancel { .. } | Self::ForceCancelBuy { .. } => {
                 Some(OrderCommandGroup::Buy)
             }
-            Self::TargetSell { .. } | Self::CancelSell { .. } => Some(OrderCommandGroup::Sell),
+            Self::TargetSell { .. } | Self::CancelSell { .. } | Self::ForceCancelSell { .. } => Some(OrderCommandGroup::Sell),
             Self::Stops { .. } => Some(OrderCommandGroup::Stops),
             Self::VStop { .. } => Some(OrderCommandGroup::VStop),
             Self::Panic { .. } => Some(OrderCommandGroup::Panic),
@@ -624,6 +632,8 @@ impl OrderCommandPayload {
             | Self::Immune { order_id, .. }
             | Self::CancelBuy { order_id }
             | Self::CancelSell { order_id }
+            | Self::ForceCancelBuy { order_id }
+            | Self::ForceCancelSell { order_id }
             | Self::PendingCancel { order_id }
             | Self::SplitOrder { order_id, .. } => Some(*order_id),
             _ => None,
@@ -676,6 +686,8 @@ impl OrderCommandPayload {
             }
             Self::CancelBuy { order_id }
             | Self::CancelSell { order_id }
+            | Self::ForceCancelBuy { order_id }
+            | Self::ForceCancelSell { order_id }
             | Self::PendingCancel { order_id } => out.extend_from_slice(&order_id.to_le_bytes()),
             Self::Start {
                 market_name,
@@ -908,6 +920,8 @@ impl OrderCommandPayload {
                 }
             }
             19 => Self::CancelAllBuys,
+            20 => Self::ForceCancelBuy { order_id: read_u64_zero_tail(input) },
+            21 => Self::ForceCancelSell { order_id: read_u64_zero_tail(input) },
             _ => Self::Unknown(opcode),
         }
     }
@@ -1505,6 +1519,8 @@ mod tests {
             (7, OrderCommandPayload::CancelBuy { order_id }),
             (8, OrderCommandPayload::CancelSell { order_id }),
             (9, OrderCommandPayload::PendingCancel { order_id }),
+            (20, OrderCommandPayload::ForceCancelBuy { order_id }),
+            (21, OrderCommandPayload::ForceCancelSell { order_id }),
         ] {
             assert_body(payload, with_u64(vec![opcode], order_id));
         }

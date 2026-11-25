@@ -79,11 +79,11 @@ impl Client {
         self.request_order_status(0, 0)
     }
 
-    pub(crate) fn cancel_order(&self, orders: &mut crate::state::OrderState, uid: u64) -> bool {
+    pub(crate) fn cancel_order(&self, orders: &mut crate::state::OrderState, uid: u64, force: bool) -> bool {
         if !self.domain_ready_for_typed_send() {
             return false;
         }
-        let Some(payload) = orders.send_cancel_if_requested(uid) else {
+        let Some(payload) = orders.send_cancel_if_requested(uid, force) else {
             return false;
         };
         self.send_order_command_payload(payload)
@@ -93,8 +93,9 @@ impl Client {
         &self,
         orders: &mut crate::state::OrderState,
         uid: u64,
+        force: bool,
     ) -> bool {
-        self.cancel_order(orders, uid)
+        self.cancel_order(orders, uid, force)
     }
 
     pub(crate) fn join_orders(&self, request_uid: u64, market: &str, is_short: bool) -> bool {
@@ -230,7 +231,7 @@ impl Client {
             .collect();
         let mut changed = false;
         for uid in uids {
-            changed |= self.cancel_order(orders, uid);
+            changed |= self.cancel_order(orders, uid, false);
         }
         changed
     }
