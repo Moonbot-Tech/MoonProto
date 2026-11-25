@@ -127,6 +127,7 @@ const CMD_PROBLEMS_TEST: u8 = 35;
 const CMD_TELEGRAM_STATE: u8 = 36;
 const CMD_MOON_STREAM: u8 = 62;
 const CMD_CANCEL_ALL_EXCHANGE_BUYS: u8 = 63;
+const CMD_ENTRY_PRICE_RANGE: u8 = 64;
 
 pub(crate) const NEWS_RELAY_KIND_NEWS: u8 = 0;
 pub(crate) const NEWS_RELAY_KIND_TAGS: u8 = 1;
@@ -199,7 +200,8 @@ struct WireAutoStartConfig2 {
     btc_lower_then: LeF64,
     market_higher_then: LeF64,
     show_old_listing: u8,
-    _u1: [u8; 8],
+    cancel_buys_on_exit: u8,
+    _u1: [u8; 7],
     reset_session: u8,
     _pad1: [u8; 2],
     _u2: [LeI32; 8],
@@ -316,6 +318,7 @@ impl WireAutoStartConfig2 {
             btc_lower_than: self.btc_lower_then.get(),
             market_higher_than: self.market_higher_then.get(),
             show_old_listing: self.show_old_listing != 0,
+            cancel_buys_on_exit: self.cancel_buys_on_exit != 0,
             reset_session: self.reset_session != 0,
             max_session_cap: self.max_session_cap.get(),
             rs_hours: self.rs_hours.get(),
@@ -328,6 +331,7 @@ impl WireAutoStartConfig2 {
         self.btc_lower_then = LeF64::new(cfg.btc_lower_than);
         self.market_higher_then = LeF64::new(cfg.market_higher_than);
         self.show_old_listing = cfg.show_old_listing as u8;
+        self.cancel_buys_on_exit = cfg.cancel_buys_on_exit as u8;
         self.reset_session = cfg.reset_session as u8;
         self.max_session_cap = LeI32::new(cfg.max_session_cap);
         self.rs_hours = LeI32::new(cfg.rs_hours);
@@ -562,6 +566,9 @@ pub struct AutoStartConfig2 {
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2-show-old-listing).
     pub show_old_listing: bool,
+    /// Cancel this core's remaining entry orders and pending entries on normal core shutdown.
+    /// Disabled by default. Closing a terminal or relogging does not trigger cancellation.
+    pub cancel_buys_on_exit: bool,
     /// Reset each market's session profit after `rs_hours` without a completed trade on that market. This is an
     /// inactivity timeout, not a global periodic reset.
     ///
@@ -1898,6 +1905,18 @@ impl AlertObjectCommand {
     }
 }
 
+/// Transient notification that the core corrected a manual entry price to an exchange boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryPriceCorrection {
+    pub market_name: String,
+    /// Manual price requested before the core applied an exchange price boundary.
+    pub requested_price: f64,
+    /// Exchange lower boundary; zero means no lower boundary was supplied.
+    pub min_price: f64,
+    /// Exchange upper boundary; zero means no upper boundary was supplied.
+    pub max_price: f64,
+}
+
 /// `TChartTextStateCommand` (UI CmdId=17).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChartTextStateCommand {
@@ -2043,6 +2062,7 @@ pub enum UICommand {
         uid: u64,
     },
     ChartTextState(ChartTextStateCommand),
+    EntryPriceCorrection(EntryPriceCorrection),
     ChartTextSnapshot(ChartTextSnapshotCommand),
     OrdersHistoryRequest(OrdersHistoryRequest),
     RuntimeState(RuntimeStateCommand),

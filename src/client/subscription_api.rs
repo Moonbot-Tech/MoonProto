@@ -283,7 +283,7 @@ impl Client {
         delay_orderbooks: bool,
         delay_trades: bool,
     ) {
-        let (all_trades_intent, mm_orders_sub, logs_sub, orderbook_subs, candle_subs) = {
+        let (all_trades_intent, mm_orders_sub, logs_sub, orderbook_subs, candle_subs, chart_text) = {
             let registry = self.subscriptions.subscription_registry.lock();
             (
                 registry.all_trades_intent,
@@ -295,11 +295,15 @@ impl Client {
                     .iter()
                     .map(|(market, &kind)| (market.clone(), kind))
                     .collect::<Vec<_>>(),
+                registry.chart_text_state.clone(),
             )
         };
 
         if let Some(subscribe) = logs_sub {
             self.send_logs_subscribe_cmd(subscribe);
+        }
+        if let Some(request) = chart_text {
+            self.send_typed_domain_cmd(crate::commands::ui::build_chart_text_state(&request), Command::UI);
         }
         match all_trades_intent {
             AllTradesIntent::Subscribed(sub) if !delay_trades => {

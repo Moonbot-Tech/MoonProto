@@ -127,6 +127,8 @@ pub(crate) struct SubscriptionRegistry {
     /// Explicit log preference from Init or the runtime setter; None leaves
     /// the core's default enabled state unchanged.
     pub logs_sub: Option<bool>,
+    /// Latest chart-text choice, including an explicit empty/disabled request.
+    pub chart_text_state: Option<crate::commands::ui::ChartTextStateCommand>,
     pub candle_subs: HashMap<String, DeepHistoryKind>,
     pub report_sync: Option<crate::state::ReportSyncRequest>,
     pub(crate) report_sync_expected_epoch: Option<i32>,

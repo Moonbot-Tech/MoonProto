@@ -21,7 +21,9 @@ pub struct CoreCompatibility {
 pub const fn core_compatibility() -> CoreCompatibility {
     CoreCompatibility {
         minimum_core_version: "7.73 N2",
-        comment: "7.73 N2 adds orders().force_cancel() for a selected active order; older cores ignore this request. \
+        comment: "7.73 N2 adds cancel_buys_on_exit and manual entry-price correction notices. \
+                  Older cores do not act on the exit setting or send these notices. \
+                  N2 adds orders().force_cancel() for a selected active order; older cores ignore this request. \
                   Updated N2 builds also reject older/repeated strategy start/stop intents by action ID; \
                   earlier N2 and older compatible cores ignore that tail and use arrival order. \
                   N2 also adds Moon Streamer source selection, independent reception/distribution controls, \

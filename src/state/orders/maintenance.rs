@@ -78,10 +78,15 @@ impl OrderState {
             .collect();
         let mut events = Vec::with_capacity(uids.len());
         for uid in uids {
+            let replacing = self.mirrors.get(&uid)
+                .map_or((false, false), |mirror| (mirror.state.read_u8(27) != 0, mirror.state.read_u8(36) != 0));
             if let Some(order) = self.order_mut(uid) {
                 order.replace_sent_time_ms = 0;
-                order.bulk_replace_buy = false;
-                order.bulk_replace_sell = false;
+                if order.last_sent_target_is_buy {
+                    order.bulk_replace_buy = replacing.0;
+                } else {
+                    order.bulk_replace_sell = replacing.1;
+                }
             }
             if let Some(order) = self.order_arc(uid) {
                 events.push(OrderEvent::Updated(order));

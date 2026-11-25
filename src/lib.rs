@@ -178,6 +178,7 @@ pub use client::{
     SplitOrderParams, StartupState, StartupStatus, TradeContextError, TradesStreamMode,
     TradesSubscription, TransportMode, VStopParams,
 };
+pub use commands::ui::EntryPriceCorrection;
 #[cfg(feature = "diagnostics")]
 #[doc(hidden)]
 pub use commands::engine_api::EngineMethod;

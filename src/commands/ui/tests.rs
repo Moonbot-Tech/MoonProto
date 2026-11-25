@@ -1158,6 +1158,7 @@ fn client_settings_autostart2_helpers_preserve_reserved_tail() {
         btc_lower_than: -2.5,
         market_higher_than: 3.75,
         show_old_listing: true,
+        cancel_buys_on_exit: true,
         reset_session: true,
         max_session_cap: 1000,
         rs_hours: 12,
@@ -1173,7 +1174,8 @@ fn client_settings_autostart2_helpers_preserve_reserved_tail() {
     assert_eq!(&settings.as_cfg2[76..80], &1000i32.to_le_bytes());
     assert_eq!(&settings.as_cfg2[80..84], &12i32.to_le_bytes());
 
-    assert_eq!(&settings.as_cfg2[33..41], &[0xCC; 8]);
+    assert_eq!(settings.as_cfg2[33], 1);
+    assert_eq!(&settings.as_cfg2[34..41], &[0xCC; 7]);
     assert_eq!(&settings.as_cfg2[42..44], &[0xCC; 2]);
     assert_eq!(&settings.as_cfg2[44..76], &[0xCC; 32]);
     assert_eq!(&settings.as_cfg2[84..88], &[0xCC; 4]);
@@ -1185,9 +1187,31 @@ fn client_settings_autostart2_helpers_preserve_reserved_tail() {
     assert_eq!(decoded.btc_lower_than, -2.5);
     assert_eq!(decoded.market_higher_than, 3.75);
     assert!(decoded.show_old_listing);
+    assert!(decoded.cancel_buys_on_exit);
     assert!(decoded.reset_session);
     assert_eq!(decoded.max_session_cap, 1000);
     assert_eq!(decoded.rs_hours, 12);
+}
+
+#[test]
+fn cancel_buys_on_exit_compact_roundtrip_uses_reserved_byte_33() {
+    assert!(!AutoStartConfig2::default().cancel_buys_on_exit);
+    for value in [true, false] {
+        let mut settings = ClientSettingsCommand { as_cfg2: vec![0xCC; AS_CFG2_SIZE], ..Default::default() };
+        settings.update_auto_start_config2(|cfg| {
+            cfg.cancel_buys_on_exit = value;
+            cfg.reset_session = true;
+        });
+        assert_eq!(settings.as_cfg2.len(), 168);
+        assert_eq!(settings.as_cfg2[33], u8::from(value));
+        assert_eq!(settings.as_cfg2[41], 1);
+        assert_eq!(&settings.as_cfg2[34..41], &[0xCC; 7]);
+        let raw = build_client_settings(&settings);
+        let UICommand::ClientSettings(parsed) = UICommand::parse(&raw).unwrap() else { panic!() };
+        assert_eq!(parsed.auto_start_config2().cancel_buys_on_exit, value);
+        assert!(parsed.auto_start_config2().reset_session);
+        assert_eq!(parsed.as_cfg2, settings.as_cfg2);
+    }
 }
 
 #[test]

@@ -465,6 +465,9 @@ pub enum Event {
     ChartAlert(crate::state::ChartAlertEvent),
     /// Ready chart text rows for one market were replaced by the core.
     ChartText(crate::state::ChartTextSnapshot),
+    /// Best-effort core notification that a manual entry price reached an exchange boundary.
+    /// This is a market-level UI hint, not an order-specific acknowledgement.
+    EntryPriceCorrection(crate::commands::ui::EntryPriceCorrection),
     /// Markets state was updated after an Engine API response.
     Markets(MarketsEvent),
     /// Engine API response that was not consumed by the pending-response

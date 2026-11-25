@@ -95,6 +95,11 @@ Do not combine this stream with typed report replication in one database.
 
 ## Order Fields
 
+The `bulk_replace_buy` / `bulk_replace_sell` indicators reflect the core's
+replacement state, including a MoonHook waiting to rearm. When the local
+five-second wait for a target confirmation expires, only that wait ends: the
+affected indicator returns to the latest core value. The other side is unchanged.
+
 `Order` is the user-facing retained order object. The most common fields are:
 
 ```rust

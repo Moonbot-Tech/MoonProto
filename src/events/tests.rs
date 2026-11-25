@@ -6,6 +6,7 @@ mod services;
 mod strategy_refresh;
 mod moon_streamer;
 mod trade_time;
+mod n2_controls;
 use crate::commands::arb::build_arb_prices;
 use crate::commands::balance::build_request_balance_refresh;
 use crate::commands::engine_api::EngineMethod;

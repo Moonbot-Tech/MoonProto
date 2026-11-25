@@ -214,6 +214,13 @@ impl EventDispatcher {
         // fires only on a CHANGE of the token between an established session and
         // a new one (hard reconnect via `WantNewHello` or a server restart with a new ST).
         let current_token = ctx.server_token;
+        if current_token != self.last_known_server_token {
+            let request = ctx.subscription_registry.lock().chart_text_state.clone();
+            self.chart_text.clear_snapshots();
+            if let Some(request) = request {
+                self.chart_text.set_visible_market(&request);
+            }
+        }
         if current_token != 0
             && self.last_known_server_token != 0
             && self.last_known_server_token != current_token

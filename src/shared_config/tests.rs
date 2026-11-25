@@ -219,6 +219,37 @@ fn roundtrip_modified_ui() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn cancel_buys_on_exit_full_tail_distinguishes_false_from_legacy_absence() {
+    assert_eq!(AutoStartConfig2::default().cancel_buys_on_exit, Some(false));
+    let mut cfg = SharedConfig::default();
+    cfg.trading.use_hl_fast_ioc = true;
+    for value in [true, false] {
+        cfg.trading.auto_start_2.cancel_buys_on_exit = Some(value);
+        let raw = serialize_payload(&cfg).unwrap();
+        let parsed = parse_payload(&raw).unwrap();
+        assert_eq!(parsed.trading.auto_start_2.cancel_buys_on_exit, Some(value));
+        let trading = 7 + 5 + u32::from_le_bytes(raw[8..12].try_into().unwrap()) as usize;
+        assert_eq!(raw[trading], 2);
+        let size = u32::from_le_bytes(raw[trading + 1..trading + 5].try_into().unwrap());
+        let end = trading + 5 + size as usize;
+        assert_eq!(&raw[end - 2..end], &[1, u8::from(value)]);
+        let mut legacy = raw;
+        legacy.remove(end - 1);
+        legacy[trading + 1..trading + 5].copy_from_slice(&(size - 1).to_le_bytes());
+        let parsed = parse_payload(&legacy).unwrap();
+        assert_eq!(parsed.trading.auto_start_2.cancel_buys_on_exit, None);
+        assert!(parsed.trading.use_hl_fast_ioc);
+        assert_eq!(serialize_payload(&parsed).unwrap(), legacy,
+            "an older full packet must not acquire a false byte that would disable the core setting");
+    }
+    cfg.trading.unknown_tail = vec![0xAA, 0xBB];
+    let parsed = parse_payload(&serialize_payload(&cfg).unwrap()).unwrap();
+    assert_eq!(parsed.trading.unknown_tail, cfg.trading.unknown_tail);
+    cfg.trading.auto_start_2.cancel_buys_on_exit = None;
+    assert!(serialize_payload(&cfg).is_err(), "a missing positional field cannot precede future tail bytes");
+}
+
+#[test]
 fn unknown_tail_signals() {
     let cfg = SharedConfig::default();
     let mut bytes = serialize_payload(&cfg).unwrap();
@@ -479,6 +510,7 @@ fn absorb_client_settings() {
         1,                                 // join_sell_kind
         true,                              // ignore_strat_sell_price
         true,                              // use_hl_fast_ioc
+        true,                              // cancel_buys_on_exit
     );
 
     assert_eq!(cfg.trading.x_sell, 10);

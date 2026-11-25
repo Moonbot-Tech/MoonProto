@@ -224,6 +224,7 @@ impl SettingsState {
                     settings.join_sell_kind,
                     settings.ignore_strat_sell_price,
                     settings.use_hl_fast_ioc,
+                    settings.auto_start_config2().cancel_buys_on_exit,
                 );
             }
         }
@@ -287,6 +288,7 @@ impl SettingsState {
             | UICommand::AlertObject(_)
             | UICommand::AlertSnapshotRequest { .. }
             | UICommand::ChartTextState(_)
+            | UICommand::EntryPriceCorrection(_)
             | UICommand::ChartTextSnapshot(_)
             | UICommand::OrdersHistoryRequest(_)
             | UICommand::RestartNow { .. }
@@ -572,6 +574,34 @@ mod tests {
         st.apply(UICommand::ClientSettings(Box::new(compact)));
 
         assert_eq!(st.build_shared_config().unwrap().trading.x_sell, 25);
+    }
+
+    #[test]
+    fn cancel_buys_on_exit_small_big_edits_and_core_echo_agree() {
+        for value in [true, false] {
+            let mut st = SettingsState::new();
+            let mut full = crate::shared_config::SharedConfig::default();
+            full.trading.auto_start_2.cancel_buys_on_exit = Some(!value);
+            apply_shared_config(&mut st, &full);
+            let mut small = ClientSettingsCommand::default();
+            small.update_auto_start_config2(|cfg| cfg.cancel_buys_on_exit = value);
+            st.apply(UICommand::parse(&build_client_settings(&small)).unwrap());
+            let edit = st.build_shared_config().unwrap();
+            let sent = crate::shared_config::parse_payload(&crate::shared_config::serialize_payload(&edit).unwrap()).unwrap();
+            assert_eq!(sent.trading.auto_start_2.cancel_buys_on_exit, Some(value));
+            // A later full response supersedes the older compact value.
+            apply_shared_config(&mut st, &full);
+            assert_eq!(st.build_shared_config().unwrap().trading.auto_start_2.cancel_buys_on_exit, Some(!value));
+            // The normal compact broadcast updates the checkbox after a full-config edit.
+            small.update_auto_start_config2(|cfg| cfg.cancel_buys_on_exit = !value);
+            st.apply(UICommand::parse(&build_client_settings(&small)).unwrap());
+            assert_eq!(st.client_settings.as_ref().unwrap().auto_start_config2().cancel_buys_on_exit, !value);
+            assert_eq!(st.build_shared_config().unwrap().trading.auto_start_2.cancel_buys_on_exit, Some(!value));
+            // Re-sending an old full packet must leave this setting unspecified.
+            full.trading.auto_start_2.cancel_buys_on_exit = None;
+            apply_shared_config(&mut st, &full);
+            assert_eq!(st.build_shared_config().unwrap().trading.auto_start_2.cancel_buys_on_exit, None);
+        }
     }
 
     #[test]

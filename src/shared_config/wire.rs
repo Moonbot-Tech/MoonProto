@@ -608,6 +608,8 @@ fn parse_auto_start_2(r: &mut Reader) -> Result<AutoStartConfig2, SharedConfigEr
         btc_lower_then: r.read_f64()?,
         market_higher_then: r.read_f64()?,
         show_old_listing: r.read_bool()?,
+        // This field was appended to the Trading section, not inserted here.
+        cancel_buys_on_exit: None,
         reset_session: r.read_bool()?,
         max_session_cap: r.read_i32()?,
         rs_hours: r.read_i32()?,
@@ -690,7 +692,7 @@ fn parse_trading(r: &mut Reader, block_end: usize) -> Result<TradingSection, Sha
     let log_level = r.read_i32()?;
     let binance_connection = r.read_i32()?;
     let auto_start = parse_auto_start(r)?;
-    let auto_start_2 = parse_auto_start_2(r)?;
+    let mut auto_start_2 = parse_auto_start_2(r)?;
     let fav_markets = r.read_string_x()?;
 
     let x_ask = r.read_i32()?;
@@ -916,6 +918,9 @@ fn parse_trading(r: &mut Reader, block_end: usize) -> Result<TradingSection, Sha
     } else {
         false
     };
+    if r.pos < block_end {
+        auto_start_2.cancel_buys_on_exit = Some(r.read_bool()?);
+    }
 
     let unknown_tail = if r.pos < block_end {
         copy_bytes(&r.data[r.pos..block_end])?
@@ -1881,6 +1886,11 @@ fn write_trading(w: &mut Writer, t: &TradingSection) {
     w.write_bool(t.deltas_by_trades);
     w.write_bool(t.ignore_strat_sell_price);
     w.write_bool(t.use_hl_fast_ioc);
+    if let Some(value) = t.auto_start_2.cancel_buys_on_exit {
+        w.write_bool(value);
+    } else if !t.unknown_tail.is_empty() {
+        w.fail("cannot omit cancel_buys_on_exit before unknown Trading tail bytes");
+    }
     w.write_bytes(&t.unknown_tail);
 }
 

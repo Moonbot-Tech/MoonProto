@@ -779,6 +779,7 @@ policy, not client-side timers:
 | Exclude emulator trades from stop/loss accounting | `ignore_emulator` |
 | Resume trading after market deltas return to the configured range | `restart_on_market`, `btc_higher_than`, `btc_lower_than`, `market_higher_than` |
 | Listing/session policy | `show_old_listing`, `reset_session`, `rs_hours`, `max_session_cap` |
+| Cancel remaining entry orders and pending entries on normal core exit | `cancel_buys_on_exit` (N2+) |
 
 `restart_err_time` and `restart_ping_time` are **minutes** before resuming
 trading, not seconds or process-restart timers. `errors_level` is a smoothed
@@ -792,6 +793,30 @@ Edit the compact views through `update_auto_start_config(...)` and
 for the startup preferences described above. Detailed loss windows, working
 hours and recovery conditions are in
 [startup and protection](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md).
+
+### Entry Cancellation On Core Exit
+
+`AutoStartConfig2.cancel_buys_on_exit` is OFF by default. When enabled, normal
+shutdown of the core cancels its own manual and strategy entries, including the
+unfilled remainder of partial entries, and removes pending entries from restart
+recovery. Closing a separate terminal or relogging does not trigger this action.
+This setting does not close existing positions.
+
+Edit a fresh compact settings snapshot with
+`settings.update_auto_start_config2(|cfg| cfg.cancel_buys_on_exit = true)` and
+send it through `client.settings().send(&settings)`. Or use the full configuration:
+
+```rust
+let mut config = client.settings().build_shared_config()?;
+config.trading.auto_start_2.cancel_buys_on_exit = Some(true);
+client.settings().send_shared_config(&config)?;
+```
+
+The full format distinguishes an omitted old setting (`None`) from explicit
+OFF (`Some(false)`) and ON (`Some(true)`). Re-serializing an old full snapshot
+keeps the field absent, so it does not reset the core's current choice. A fresh
+offline default is `Some(false)`. Compact/full broadcasts follow the usual
+receive-order overlay rule when building the next full edit.
 
 ## Pending Deduplication
 
@@ -857,6 +882,23 @@ It is a full replacement for the currently requested market. If the user has
 already switched the fullscreen chart, the late snapshot is ignored. The latest
 accepted value is available from
 `snapshot().chart_text().get("BTCUSDT")`.
+
+The latest chart-text choice, including an explicit clear, is restored after
+reconnect. Rows from the previous core session are cleared while fresh text is
+awaited; the application does not need to reselect the chart.
+
+## Manual Entry Price Corrections
+
+`Event::EntryPriceCorrection` reports the market name, requested manual price,
+and the exchange's lower/upper price boundaries (`0` means no boundary on that
+side). The core emits this when a manual entry or amendment actually reaches a
+boundary. It is a transient market-level hint, not an order acknowledgement;
+there is no order ID in the notification.
+
+The core broadcasts these hints on a best-effort basis, normally at most once
+per two seconds across all markets. An application can highlight the affected
+chart briefly (MoonBot uses three seconds). The SDK adds no timer or retained
+notice list. Authoritative order prices still come from normal order updates.
 
 ## Low-Level Parsing
 

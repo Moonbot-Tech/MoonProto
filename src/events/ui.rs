@@ -30,6 +30,7 @@ impl EventDispatcher {
                     out.push(Event::ChartText(snapshot));
                 }
             }
+            Some(UICommand::EntryPriceCorrection(notice)) => out.push(Event::EntryPriceCorrection(notice)),
             Some(UICommand::AlertSnapshotRequest { .. } | UICommand::ChartTextState(_)) => {}
             Some(UICommand::NewsRelay(command)) => match self.news.apply_relay(command) {
                 Ok(Some(event)) => out.push(Event::News(event)),

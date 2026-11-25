@@ -811,6 +811,33 @@ fn order_maintenance_uses_deadlines_instead_of_per_tick_map_scans() {
 }
 
 #[test]
+fn target_timeout_preserves_the_core_replacing_flag_and_the_other_leg() {
+    for status in [OrderWorkerStatus::BuySet, OrderWorkerStatus::SellSet] {
+        for core_replacing in [false, true] {
+            let buy = status == OrderWorkerStatus::BuySet;
+            let mut canonical = state(status, 0);
+            canonical.0[27] = u8::from(if buy { core_replacing } else { true });
+            canonical.0[36] = u8::from(if buy { true } else { core_replacing });
+            put_f64(&mut canonical, 28, 100.0);
+            let mut orders = OrderState::new();
+            apply(&mut orders, image(7, 1, desc("BTCUSDT"), canonical.clone()), APP_TOKEN, true);
+            // The same target need not produce another TARGET patch from the core.
+            orders.send_replace_if_requested(7, 100.0, 1_000).unwrap();
+            let held = orders.snapshot();
+            assert!(orders.tick_bulk_replace_timeouts(6_000).is_empty());
+            let events = orders.tick_bulk_replace_timeouts(6_001);
+            assert!(matches!(events.as_slice(), [OrderEvent::Updated(order)] if order.uid == 7));
+            let order = orders.get(7).unwrap();
+            assert_eq!(order.replace_sent_time_ms, 0);
+            assert_eq!(order.bulk_replace_buy, if buy { core_replacing } else { true });
+            assert_eq!(order.bulk_replace_sell, if buy { true } else { core_replacing });
+            assert_eq!(orders.mirrors[&7].state, canonical);
+            assert!(held.get(7).unwrap().bulk_replace_buy && held.get(7).unwrap().bulk_replace_sell);
+        }
+    }
+}
+
+#[test]
 fn market_panic_off_updates_every_sell_and_emits_auto_stop_setters() {
     let stops = StopSettings::disabled()
         .with_stop_loss_fixed(95.0, 0.25)

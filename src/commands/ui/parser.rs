@@ -367,6 +367,16 @@ impl UICommand {
                 enabled: read_bool(payload, &mut pos)?,
             }),
             CMD_CANCEL_ALL_EXCHANGE_BUYS => Some(UICommand::CancelAllExchangeBuys { uid }),
+            CMD_ENTRY_PRICE_RANGE => {
+                let market_name = read_string(payload, &mut pos)?;
+                let bounds = payload.get(pos..pos + 24)?;
+                Some(UICommand::EntryPriceCorrection(EntryPriceCorrection {
+                    market_name,
+                    requested_price: f64::from_le_bytes(bounds[..8].try_into().unwrap()),
+                    min_price: f64::from_le_bytes(bounds[8..16].try_into().unwrap()),
+                    max_price: f64::from_le_bytes(bounds[16..24].try_into().unwrap()),
+                }))
+            }
 
             CMD_NEWS_RELAY => {
                 let kind = read_u8_zero_tail(payload, &mut pos);

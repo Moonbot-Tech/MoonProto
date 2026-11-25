@@ -59,6 +59,11 @@ whether to retry.
 applications do not need to call it during startup because the runtime already
 maintains the background request.
 
+`trading.auto_start_2.cancel_buys_on_exit` uses `Some(true)` / `Some(false)` for
+an explicit choice. `None` preserves absence in older full snapshots, leaving
+the core's current value unchanged on import. Compact settings expose the same
+choice as a boolean; see [core exit policy](ui.md#entry-cancellation-on-core-exit).
+
 ## Files And Clipboard
 
 Use the same typed model for portable safe-share data:

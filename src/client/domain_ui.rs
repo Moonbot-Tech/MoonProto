@@ -203,6 +203,7 @@ impl Client {
     /// Send `TChartTextStateCommand` (UI CmdId=17, High,
     /// `UK_ChartTextState`).
     pub(crate) fn ui_chart_text_state(&self, cmd: &crate::commands::ui::ChartTextStateCommand) {
+        self.subscriptions.subscription_registry.lock().chart_text_state = Some(cmd.clone());
         let raw = crate::commands::ui::build_chart_text_state(cmd);
         self.send_typed_domain_cmd(raw, Command::UI);
     }

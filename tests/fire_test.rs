@@ -8738,6 +8738,9 @@ fn run_shared_config_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
 
     changed.trading.ignore_strat_sell_price = !original.trading.ignore_strat_sell_price;
     changed.trading.use_hl_fast_ioc = !original.trading.use_hl_fast_ioc;
+    let original_exit_policy = retained_shared_config(a).unwrap().trading.auto_start_2.cancel_buys_on_exit
+        .expect("full FireTest requires N2 cancel_buys_on_exit support");
+    changed.trading.auto_start_2.cancel_buys_on_exit = Some(!original_exit_policy);
     let changed_x_sell = changed.trading.x_sell;
     let changed_time_scale = changed.visual.chart_time_scale;
     let mutation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -8762,12 +8765,14 @@ fn run_shared_config_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
                                 && shared.visual.chart_time_scale == changed_time_scale
                                 && shared.trading.ignore_strat_sell_price == changed.trading.ignore_strat_sell_price
                                 && shared.trading.use_hl_fast_ioc == changed.trading.use_hl_fast_ioc
+                                && shared.trading.auto_start_2.cancel_buys_on_exit == Some(!original_exit_policy)
                         }) && settings
                             .client_settings
                             .as_ref()
                             .is_some_and(|compact| compact.x_sell == changed_x_sell
                                 && compact.ignore_strat_sell_price == changed.trading.ignore_strat_sell_price
-                                && compact.use_hl_fast_ioc == changed.trading.use_hl_fast_ioc)
+                                && compact.use_hl_fast_ioc == changed.trading.use_hl_fast_ioc
+                                && compact.auto_start_config2().cancel_buys_on_exit != original_exit_policy)
                     })
                 }
             ),
@@ -8784,6 +8789,7 @@ fn run_shared_config_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
             assert_eq!(built.visual.chart_time_scale, changed_time_scale);
             assert_eq!(built.trading.ignore_strat_sell_price, changed.trading.ignore_strat_sell_price);
             assert_eq!(built.trading.use_hl_fast_ioc, changed.trading.use_hl_fast_ioc);
+            assert_eq!(built.trading.auto_start_2.cancel_buys_on_exit, Some(!original_exit_policy));
         }
     }));
 
@@ -8808,12 +8814,14 @@ fn run_shared_config_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session) {
                             && shared.visual.chart_time_scale == original.visual.chart_time_scale
                             && shared.trading.ignore_strat_sell_price == original.trading.ignore_strat_sell_price
                             && shared.trading.use_hl_fast_ioc == original.trading.use_hl_fast_ioc
+                            && shared.trading.auto_start_2.cancel_buys_on_exit == Some(original_exit_policy)
                     }) && settings
                         .client_settings
                         .as_ref()
                         .is_some_and(|compact| compact.x_sell == original.trading.x_sell
                             && compact.ignore_strat_sell_price == original.trading.ignore_strat_sell_price
-                            && compact.use_hl_fast_ioc == original.trading.use_hl_fast_ioc)
+                            && compact.use_hl_fast_ioc == original.trading.use_hl_fast_ioc
+                            && compact.auto_start_config2().cancel_buys_on_exit == original_exit_policy)
                 })
             }
         ),
@@ -10245,6 +10253,35 @@ fn fire_test_moon_streamer_controls() {
         (original.source, original.last_custom_server, original.receive_enabled, original.distribution_enabled));
     println!("OK: FIRETEST Moon Streamer reconnect restored configuration; trading settings unchanged; no order commands sent");
     println!("FIRETEST Moon Streamer final: {restored:?}");
+}
+
+#[test]
+#[ignore = "live MoonBot required; read-only settings and per-client chart-text subscription"]
+fn fire_test_n2_read_only() {
+    let _live_test_lock = firetest_live_test_lock();
+    let cfg = FireConfig::load_required();
+    let keys = parse_key_info(&cfg.key_b64).expect("invalid FireTest key").keys;
+    let _err_emu = ErrEmuGuard::set(0);
+    let mut session = Session::connect("N2-ReadOnly", &cfg, keys, None);
+    assert!(pump_session_until(&mut session, cfg.connect_timeout, "full and compact settings", |s| {
+        s.maybe_state_snapshot().is_some_and(|state|
+            state.settings().shared_config.is_some() && state.settings().client_settings.is_some())
+    }));
+    let state = session.state_snapshot();
+    let full = state.settings().shared_config.as_ref().unwrap();
+    if let Some(value) = full.trading.auto_start_2.cancel_buys_on_exit {
+        assert_eq!(state.settings().client_settings.as_ref().unwrap().auto_start_config2().cancel_buys_on_exit, value);
+        println!("OK: N2 cancel_buys_on_exit full/compact agree: {value}");
+    } else {
+        println!("OK: older core full settings omit cancel_buys_on_exit; legacy compatibility");
+    }
+    session.client.chart_text().set_visible_market(&cfg.market, true, true).unwrap();
+    assert!(pump_session_until(&mut session, cfg.wait, "chart-text snapshot", |s|
+        s.state_snapshot().chart_text().get(&cfg.market).is_some()));
+    session.client.chart_text().clear_visible_market().unwrap();
+    assert!(pump_session_until(&mut session, cfg.wait, "clear chart text", |s|
+        s.state_snapshot().chart_text().get(&cfg.market).is_none()));
+    println!("FIRETEST_N2_READ_ONLY_PASS: no trading or persistent settings commands sent");
 }
 
 #[test]

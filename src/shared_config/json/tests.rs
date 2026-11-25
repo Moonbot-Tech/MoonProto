@@ -3,6 +3,21 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn cancel_buys_on_exit_json_patch_preserves_absence_until_explicitly_edited() {
+    let mut cfg = SharedConfig::default();
+    cfg.trading.auto_start_2.cancel_buys_on_exit = None;
+    assert_eq!(cfg.json_values().unwrap()["trading"]["auto_start_2"]["cancel_buys_on_exit"], Value::Null);
+    for value in [true, false] {
+        let patched = cfg.patch_json(&BTreeMap::from([
+            ("trading.auto_start_2.cancel_buys_on_exit".into(), json!(value)),
+        ])).unwrap();
+        assert_eq!(patched.trading.auto_start_2.cancel_buys_on_exit, Some(value));
+        let parsed = super::super::parse_payload(&super::super::serialize_payload(&patched).unwrap()).unwrap();
+        assert_eq!(parsed.trading.auto_start_2.cancel_buys_on_exit, Some(value));
+    }
+}
+
 /// A changed field must not reset an unrelated setting or future-version section bytes.
 #[test]
 fn patch_preserves_unmentioned_fields_and_metadata() {

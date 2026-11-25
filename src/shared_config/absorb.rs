@@ -60,6 +60,7 @@ impl SharedConfig {
     /// | `join_sell_kind` | `trading.multi_orders.join_sell_kind` |
     /// | `ignore_strat_sell_price` | `trading.ignore_strat_sell_price` |
     /// | `use_hl_fast_ioc` | `trading.use_hl_fast_ioc` |
+    /// | `auto_start_config2().cancel_buys_on_exit` | `trading.auto_start_2.cancel_buys_on_exit` |
     ///
     /// Not absorbed: `emu_mode`, `temp_bl_symbols`, `temp_bl_times`,
     /// `manual_strategy_id` (needs name resolution — see module doc).
@@ -90,6 +91,7 @@ impl SharedConfig {
         join_sell_kind: u8,
         ignore_strat_sell_price: bool,
         use_hl_fast_ioc: bool,
+        cancel_buys_on_exit: bool,
     ) {
         self.trading.x_sell = x_sell;
         self.trading.x_sell_scalp = x_sell_scalp;
@@ -116,6 +118,7 @@ impl SharedConfig {
         self.trading.multi_orders.join_sell_kind = join_sell_kind;
         self.trading.ignore_strat_sell_price = ignore_strat_sell_price;
         self.trading.use_hl_fast_ioc = use_hl_fast_ioc;
+        self.trading.auto_start_2.cancel_buys_on_exit = Some(cancel_buys_on_exit);
     }
 
     /// Overlay leverage-management fields from a `LevManage` command.

@@ -88,6 +88,33 @@ fn mark_post_init(client: &mut Client) {
 }
 
 #[test]
+fn reconnect_restores_latest_chart_text_choice_including_explicit_clear() {
+    use crate::commands::ui::{ChartTextStateCommand, UICommand};
+    let shared = ClientSharedState::new();
+    let mut client = Client::new_with_shared(dummy_cfg(), shared.clone());
+    mark_post_init(&mut client);
+    client.ui_chart_text_state(&ChartTextStateCommand::new("BTCUSDT", true, false));
+    for request in [ChartTextStateCommand::new("ETHUSDT", false, true), ChartTextStateCommand::new("", false, false)] {
+        client.ui_chart_text_state(&request);
+        drain_send_items(&client);
+        client.restore_domain_after_reconnect();
+        let states: Vec<_> = drain_send_items(&client).into_iter().filter_map(|item| {
+            if item.cmd != Command::UI.to_byte() { return None; }
+            match UICommand::parse(&item.data) { Some(UICommand::ChartTextState(cmd)) => Some(cmd), _ => None }
+        }).collect();
+        assert_eq!(states, [request]);
+    }
+    drop(client);
+    let mut rebuilt = Client::new_with_shared(dummy_cfg(), shared);
+    rebuilt.restore_domain_after_reconnect();
+    assert!(drain_send_items(&rebuilt).is_empty(), "restore stays gated until Init");
+    mark_post_init(&mut rebuilt);
+    rebuilt.restore_domain_after_reconnect();
+    assert!(drain_send_items(&rebuilt).iter().any(|item|
+        matches!(UICommand::parse(&item.data), Some(UICommand::ChartTextState(cmd)) if cmd.market_name.is_empty())));
+}
+
+#[test]
 fn shared_state_preserves_subscription_intent_across_runtime_rebuild() {
     let shared = ClientSharedState::new();
     let first = Client::new_with_shared(dummy_cfg(), shared.clone());

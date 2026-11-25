@@ -1286,6 +1286,12 @@ pub struct AutoStartConfig2 {
     ///
     /// [MoonDoc reference](https://github.com/Moonbot-Tech/MoonDoc/blob/main/reference/settings/01-startup-and-protection.md#autostartconfig2-show-old-listing).
     pub show_old_listing: bool,
+    /// Cancel this core's remaining entry orders and pending entries on normal core shutdown.
+    /// Closing a terminal or relogging does not trigger cancellation. New configs default to
+    /// `Some(false)`; `None` means an older snapshot omitted this setting, so importing it leaves
+    /// the core's current value unchanged. Set `Some(true)` or `Some(false)` to edit it explicitly.
+    #[serde(default)]
+    pub cancel_buys_on_exit: Option<bool>,
     /// Reset each market's session profit after `rs_hours` without a completed trade on that market. This is an
     /// inactivity timeout, not a global periodic reset.
     ///
@@ -3199,6 +3205,7 @@ impl Default for AutoStartConfig2 {
             btc_lower_then: 0.5,
             market_higher_then: -0.1,
             show_old_listing: false,
+            cancel_buys_on_exit: Some(false),
             reset_session: false,
             max_session_cap: 0,
             rs_hours: 0,

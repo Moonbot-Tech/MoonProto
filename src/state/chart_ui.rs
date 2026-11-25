@@ -111,6 +111,10 @@ struct ChartTextRequest {
 }
 
 impl ChartTextState {
+    pub(crate) fn clear_snapshots(&mut self) {
+        self.by_market.clear();
+    }
+
     pub fn get(&self, market_name: &str) -> Option<&ChartTextSnapshot> {
         self.by_market.get(market_name)
     }
