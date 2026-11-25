@@ -89,8 +89,40 @@ fn strat_start_stop_v2_roundtrip() {
             assert_eq!(s.uid, 42);
             assert!(!s.is_start);
             assert_eq!(s.items, items);
+            assert_ne!(s.action_id, 0);
+            assert_eq!(&raw[raw.len() - 8..], &s.action_id.to_le_bytes());
         }
         _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
+fn strat_start_stop_v2_reads_only_a_complete_action_id_tail() {
+    let items = [StratCheckedItem { strategy_id: 123, checked: true }];
+    let mut raw = build_strat_start_stop_v2(42, true, &items);
+    let legacy_len = 11 + 1 + 2 + 9;
+    raw[legacy_len..].copy_from_slice(&0x8877_6655_4433_2211u64.to_le_bytes());
+    for tail_len in 0..=8 {
+        let UICommand::StratStartStopV2(cmd) = UICommand::parse(&raw[..legacy_len + tail_len]).unwrap() else {
+            panic!("expected start/stop");
+        };
+        assert_eq!(cmd.items, items);
+        assert_eq!(cmd.action_id, if tail_len == 8 { 0x8877_6655_4433_2211 } else { 0 });
+    }
+    raw.extend_from_slice(b"future extension");
+    let UICommand::StratStartStopV2(cmd) = UICommand::parse(&raw).unwrap() else { panic!() };
+    assert_eq!(cmd.action_id, 0x8877_6655_4433_2211);
+}
+
+#[test]
+fn strat_start_stop_v2_action_id_is_independent_of_the_header_uid() {
+    let mut previous = 0;
+    for (uid, start) in [(u64::MAX, true), (1, false), (1, true)] {
+        let raw = build_strat_start_stop_v2(uid, start, &[]);
+        let UICommand::StratStartStopV2(cmd) = UICommand::parse(&raw).unwrap() else { panic!() };
+        assert!(cmd.action_id > previous);
+        assert_eq!(cmd.uid, uid);
+        previous = cmd.action_id;
     }
 }
 
@@ -567,7 +599,7 @@ fn word_count_builders_write_only_declared_wrapped_count() {
         })
         .collect();
     let raw = build_strat_start_stop_v2(42, true, &items);
-    assert_eq!(raw.len(), 11 + 1 + 2 + 9);
+    assert_eq!(raw.len(), 11 + 1 + 2 + 9 + 8);
     match UICommand::parse(&raw).unwrap() {
         UICommand::StratStartStopV2(s) => {
             assert!(s.is_start);

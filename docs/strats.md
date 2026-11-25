@@ -744,6 +744,18 @@ application does not need to wait for a separate checked-state echo before
 starting or stopping strategies. This delivery fix does not require a core
 upgrade on cores that already support strategy start/stop with checked state.
 
+Each newly formed start/stop request also carries an increasing action ID,
+independent of the transport message ID. Fragment retries keep the same action
+ID. Updated **MoonBot 7.73 N2** builds use it to reject an older or repeated
+start/stop from the same client before applying its checked delta or action.
+If a newer Stop arrives before an older Start, that Start cannot restart the
+strategies. A subsequent new Start still works. Applications do not allocate
+IDs or manage an extra queue.
+
+Earlier cores, including the original N2 builds, ignore the appended ID and
+retain their previous arrival-order behavior. They remain compatible with the
+new SDK, but need an updated N2 build for this ordering protection.
+
 Low-level compatibility tools may still use raw checked-sync/start-stop and
 snapshot helpers, but those helpers are hidden diagnostics. Regular
 applications should prefer `MoonClient` helpers so the library-owned strategy

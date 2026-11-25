@@ -446,6 +446,8 @@ fn strategy_start_stop_slices_checked_delta_within_pmtu() {
                 assert_eq!(sliced.len(), 1, "the action is sent even without a checked delta");
                 assert_eq!(sliced[0].max_retries, 6);
                 assert!(sliced[0].encrypted && sliced[0].u_key.is_none());
+                let expected_action_id = u64::from_le_bytes(sliced[0].data[sliced[0].data.len() - 8..].try_into().unwrap());
+                assert_ne!(expected_action_id, 0);
                 writer(&mut client).create_sliced_and_send(&sliced[0]);
                 assert_eq!(client.sending.len(), 1);
                 if count == 264 { assert!(client.sending[0].blocks_count > 1); }
@@ -476,9 +478,75 @@ fn strategy_start_stop_slices_checked_delta_within_pmtu() {
                 };
                 assert_eq!(command.is_start, is_start);
                 assert_eq!(command.items, items);
+                assert_eq!(command.action_id, expected_action_id);
             }
         }
     }
+}
+
+#[test]
+fn reordered_sliced_strategy_actions_keep_the_latest_core_intent() {
+    use crate::commands::{strat::StratCheckedItem, ui::UICommand};
+    let mut client = Client::new(dummy_cfg());
+    client.testing_set_domain_ready(true);
+    client.actual_pmtu = 508;
+    client.encode_cipher = Some(crypto::cipher_from_key(&[0; 16]));
+    client.recv.data_read_state.decode_cipher = Some(crypto::cipher_from_key(&[0; 16]));
+    let items: Vec<_> = (0..300u64).map(|i| StratCheckedItem {
+        strategy_id: (i + 1).wrapping_mul(0x9e3779b97f4a7c15u64), checked: true,
+    }).collect();
+    client.ui_strat_start_stop_v2(true, &items);
+    client.sender_internal().ui_strat_start_stop_v2(false, &[]);
+    client.ui_strat_start_stop_v2(true, &items);
+    let (sliced, high, low) = client.take_send_queues_for_test();
+    assert!(high.is_empty() && low.is_empty());
+    assert_eq!(sliced.len(), 3);
+    let mut ids = Vec::new();
+    for item in &sliced {
+        let UICommand::StratStartStopV2(cmd) = UICommand::parse(&item.data).unwrap() else { panic!() };
+        ids.push(cmd.action_id);
+        writer(&mut client).create_sliced_and_send(item);
+    }
+    assert!(ids[0] > 0 && ids[0] < ids[1] && ids[1] < ids[2]);
+    assert!(client.sending.iter().find(|d| d.datagram_num == 0).unwrap().blocks_count > 1);
+    assert_eq!(client.sending[0].datagram_num, 1, "the smaller Stop is scheduled before the older Start");
+    let mut receiver = slicing::SlicingReceiver::new();
+    let mut completed = Vec::new();
+    // Stop completes before the older Start. Fragments also arrive in reverse order, twice.
+    for datagram in &client.sending {
+        for slice in datagram.slices.iter().rev() {
+            if let (Some((_, cmd, payload, _, _)), _) = receiver.on_new_sliced(slice) {
+                completed.push((cmd, payload));
+            }
+            assert!(receiver.on_new_sliced(slice).0.is_none());
+        }
+    }
+    assert_eq!(completed.len(), 3);
+    let mut decoded = Vec::new();
+    for (cmd, bytes) in completed {
+        let (cmd, bytes) = Client::decode_command_payload_owned(&mut client.recv.data_read_state, cmd, bytes).unwrap();
+        assert_eq!(cmd, Command::UI.to_byte());
+        let UICommand::StratStartStopV2(action) = UICommand::parse(&bytes).unwrap() else { panic!() };
+        decoded.push(action);
+    }
+    // Reference consumer: MoonBot ProcessUICommand checks the per-client watermark
+    // before applying either the checked delta or the action. No such gate is added to the SDK.
+    let mut last_id = 0;
+    let mut applied = Vec::new();
+    for index in [0, 1, 0, 2, 1] {
+        let action = &decoded[index];
+        if action.action_id <= last_id { continue; }
+        last_id = action.action_id;
+        applied.push((action.is_start, action.items.len()));
+    }
+    assert_eq!(applied, [(false, 0), (true, 300)]);
+    // Recreating a client does not restart the existing process-wide sequence.
+    let mut rebuilt = Client::new(dummy_cfg());
+    rebuilt.testing_set_domain_ready(true);
+    rebuilt.ui_strat_start_stop_v2(false, &[]);
+    let raw = rebuilt.take_send_queues_for_test().0.remove(0).data;
+    let UICommand::StratStartStopV2(action) = UICommand::parse(&raw).unwrap() else { panic!() };
+    assert!(action.action_id > last_id);
 }
 
 #[test]

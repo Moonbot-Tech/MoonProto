@@ -77,8 +77,11 @@ impl UICommand {
                 for _ in 0..count {
                     items.push(StratCheckedItem::read_from_delphi_stream(payload, &mut pos));
                 }
+                let action_id = payload.get(pos..pos + 8)
+                    .map_or(0, |bytes| u64::from_le_bytes(bytes.try_into().unwrap()));
                 Some(UICommand::StratStartStopV2(StratStartStopV2 {
                     uid,
+                    action_id,
                     is_start,
                     items,
                 }))

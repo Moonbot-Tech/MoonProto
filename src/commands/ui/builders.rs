@@ -132,13 +132,15 @@ pub(crate) fn build_strat_start_stop_v2(
 ) -> Vec<u8> {
     let count = items.len() as u16;
     let count_usize = usize::from(count);
-    let mut out = Vec::with_capacity(11 + 1 + 2 + count_usize * 9);
+    let mut out = Vec::with_capacity(11 + 1 + 2 + count_usize * 9 + 8);
     write_header(&mut out, CMD_STRAT_START_STOP_V2, uid);
     out.push(is_start as u8);
     out.extend_from_slice(&count.to_le_bytes());
     for it in items.iter().take(count_usize) {
         it.write_to(&mut out);
     }
+    // Separate from the random header UID; retries reuse these serialized bytes.
+    out.extend_from_slice(&crate::commands::trade::next_order_action_id().to_le_bytes());
     out
 }
 

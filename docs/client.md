@@ -316,6 +316,9 @@ for a selected active order (ignored by older cores), plus Moon Streamer source
 selection, independent reception/distribution, reconnect, diagnostics, subscriber
 details and save-result replies. Older cores omit `runtime_state.moon_streamer`;
 N1 retains the existing reception switch without a save receipt.
+Updated N2 builds also protect strategy start/stop against reordered or repeated
+requests. Original N2 builds remain compatible but use arrival order; see
+[strategy controls](strats.md).
 N1 also adds `trade().cancel_all_exchange_buys()` for exchange-wide entry-order
 cancellation. Earlier compatible cores ignore these commands and report
 `moon_stream_enabled` as `None`. See [Moon Streamer](ui.md#moon-streamer)

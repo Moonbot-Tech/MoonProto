@@ -1313,6 +1313,12 @@ pub struct StratStartStopV2 {
     pub uid: u64,
     #[cfg(not(any(test, feature = "diagnostics")))]
     pub(crate) uid: u64,
+    /// Monotonic start/stop intent ID; zero denotes the legacy payload without ordering protection.
+    #[cfg(any(test, feature = "diagnostics"))]
+    #[doc(hidden)]
+    pub action_id: u64,
+    #[cfg(not(any(test, feature = "diagnostics")))]
+    pub(crate) action_id: u64,
     pub is_start: bool,
     pub items: Vec<StratCheckedItem>,
 }
