@@ -75,6 +75,9 @@ impl EventDispatcher {
                     );
                     return;
                 };
+                if apply_outcome.undecoded_fields {
+                    self.pending_strategy_snapshot_request_uid.get_or_insert(0);
+                }
                 self.strats.last_server_epoch = snap.server_epoch;
                 if snap.full {
                     self.strats

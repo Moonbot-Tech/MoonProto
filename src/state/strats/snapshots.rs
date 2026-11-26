@@ -184,7 +184,7 @@ impl StratsState {
                 outcome.submitted.push(strategy.strategy_id);
                 continue;
             };
-            if self.strategy_effectively_equal(strategy.as_ref(), confirmed.as_ref()) {
+            if self.strategy_matches_desired(confirmed.as_ref(), strategy.as_ref()) {
                 continue;
             }
             if revision_strictly_dominates(confirmed.as_ref(), strategy.as_ref()) {
@@ -357,9 +357,23 @@ impl StratsState {
         timed_out
     }
 
+    // A venue change can reveal fields without changing the strategy revision.
+    // Complete that projection without overwriting known values or local edits.
+    fn complete_equal_revision_fields(&mut self, incoming: &StrategySnapshot) -> bool {
+        let Some(current) = self.snapshots_by_id.get_mut(&incoming.strategy_id) else {
+            return false;
+        };
+        if !same_revision(current, incoming) || !current.fields.has_unknown_from(&incoming.fields) {
+            return false;
+        }
+        Arc::make_mut(current).fields.complete_from(&incoming.fields);
+        true
+    }
+
     fn apply_server_snapshot(
         &mut self,
         snapshot: StrategySnapshot,
+        full: bool,
         outcome: &mut StrategySnapshotApplyOutcome,
     ) -> bool {
         let snapshot = Arc::new(snapshot);
@@ -368,7 +382,7 @@ impl StratsState {
             let desired = edit.desired();
             if same_revision(snapshot.as_ref(), desired) {
                 Some(
-                    if self.strategy_effectively_equal(snapshot.as_ref(), desired) {
+                    if self.strategy_matches_desired(snapshot.as_ref(), desired) {
                         StrategyResolutionKind::Confirmed
                     } else {
                         StrategyResolutionKind::Adjusted
@@ -388,6 +402,7 @@ impl StratsState {
                 });
             }
         }
+        let completed = full && self.complete_equal_revision_fields(&snapshot);
         let canonical_changed =
             self.upsert_snapshot_arc_without_cache_invalidation(Arc::clone(&snapshot));
         match edit_result {
@@ -412,27 +427,27 @@ impl StratsState {
             None => {}
         }
         self.recompute_next_strategy_edit_deadline();
-        canonical_changed || edit_result.is_some()
+        completed || canonical_changed || edit_result.is_some()
     }
 
-    fn strategy_effectively_equal(
+    fn strategy_matches_desired(
         &self,
-        left: &StrategySnapshot,
-        right: &StrategySnapshot,
+        actual: &StrategySnapshot,
+        desired: &StrategySnapshot,
     ) -> bool {
-        same_revision(left, right)
-            && left.strategy_id == right.strategy_id
-            && left.checked == right.checked
-            && left.kind() == right.kind()
-            && left.path == right.path
-            && left
+        same_revision(actual, desired)
+            && actual.strategy_id == desired.strategy_id
+            && actual.checked == desired.checked
+            && actual.kind() == desired.kind()
+            && actual.path == desired.path
+            && actual
                 .fields
                 .iter()
-                .all(|(name, value)| self.field_matches(name, value, right))
-            && right
+                .all(|(name, value)| !desired.fields.knows_field(name) || self.field_matches(name, value, desired))
+            && desired
                 .fields
                 .iter()
-                .all(|(name, value)| self.field_matches(name, value, left))
+                .all(|(name, value)| self.field_matches(name, value, actual))
     }
 
     fn field_matches(&self, name: &str, value: &FieldValue, other: &StrategySnapshot) -> bool {
@@ -468,7 +483,6 @@ impl StratsState {
             }
             None => parse_strategy_batch_with_schema(deflate_data, None)?,
         };
-        let _ = full;
         // Delphi `ApplyStratSnapshot(IsFull=true)` does not clear strategies
         // absent from the incoming payload. They remain local "Own" strategies.
         let count = batch.strategies.len();
@@ -479,7 +493,7 @@ impl StratsState {
         for s in &batch.strategies {
             client_max_last_date = client_max_last_date.max(s.last_date);
             skipped_old |= self.snapshot_is_old_or_equal(s);
-            changed |= self.apply_server_snapshot(s.clone(), &mut outcome);
+            changed |= self.apply_server_snapshot(s.clone(), full, &mut outcome);
         }
         self.update_snapshot_payload_cache_after_apply(
             (count, &batch.paths),
@@ -496,7 +510,6 @@ impl StratsState {
         deflate_data: &[u8],
         full: bool,
     ) -> Option<StrategySnapshotApplyOutcome> {
-        let _ = full;
         let field_types = self.schema_field_types.clone();
         let existing_versions: HashMap<u64, (u64, i32)> = self
             .by_id
@@ -522,9 +535,14 @@ impl StratsState {
             |strategy_id, strategy_ver, last_date| {
                 order.push(strategy_id);
                 client_max_last_date.set(client_max_last_date.get().max(last_date));
-                let old_or_equal = existing_versions.get(&strategy_id).is_some_and(
+                let skip_revision = existing_versions.get(&strategy_id).is_some_and(
                     |(existing_last_date, existing_strategy_ver)| {
-                        *existing_last_date >= last_date && *existing_strategy_ver >= strategy_ver
+                        let old_or_equal = *existing_last_date >= last_date && *existing_strategy_ver >= strategy_ver;
+                        if old_or_equal {
+                            // Equal revisions merge fields, so their wire payload is not the retained snapshot.
+                            skipped_old.set(true);
+                        }
+                        old_or_equal && !(full && *existing_last_date == last_date && *existing_strategy_ver == strategy_ver)
                     },
                 );
                 let resolves_pending = pending_versions.get(&strategy_id).is_some_and(
@@ -536,14 +554,11 @@ impl StratsState {
                                     || strategy_ver > *pending_strategy_ver))
                     },
                 );
-                let skip = old_or_equal && !resolves_pending;
-                if skip {
-                    skipped_old.set(true);
-                }
-                skip
+                skip_revision && !resolves_pending
             },
             |s| {
-                changed |= self.apply_server_snapshot(s, &mut outcome);
+                outcome.undecoded_fields |= s.fields.has_skipped_values();
+                changed |= self.apply_server_snapshot(s, full, &mut outcome);
             },
         )?;
         outcome.count = count;
@@ -595,20 +610,13 @@ impl StratsState {
 
         let schema = Arc::clone(self.schema.as_ref()?);
         let mut builder = crate::commands::strategy_serializer::StrategyBatchBuilder::new(&schema);
-        let mut client_max_last_date = 0u64;
-        let mut write_strategy = |strategy: &StrategySnapshot| {
-            client_max_last_date = client_max_last_date.max(strategy.last_date);
-            builder.write_strategy(strategy);
-        };
-        if let Some(local) = &self.local_snapshots {
-            for strategy in local {
-                write_strategy(strategy);
-            }
+        let client_max_last_date = if let Some(local) = &self.local_snapshots {
+            builder.write_strategies(local.iter().map(Arc::as_ref), |id| {
+                if self.strategy_edits.contains_key(&id) { None } else { self.snapshot(id) }
+            })
         } else {
-            for strategy in self.snapshots() {
-                write_strategy(strategy);
-            }
-        }
+            builder.write_strategies(self.order.iter().filter_map(|id| self.snapshots_by_id.get(id).map(Arc::as_ref)), |_| None)
+        };
         for path in self.outgoing_folder_paths() {
             builder.path_index(&path);
         }

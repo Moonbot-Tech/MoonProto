@@ -2,7 +2,7 @@
 
 use super::{
     FieldValue, StrategyBatch, StrategyFields, StrategySnapshot, TID_BOOL, TID_BYTE, TID_DOUBLE,
-    TID_INT32, TID_INT64, TID_SINGLE, TID_STRING, TID_UINT32, TID_UINT64, TID_WORD, TID_ZERO_FLAG,
+    TID_INT32, TID_INT64, TID_KEEP, TID_SINGLE, TID_STRING, TID_UINT32, TID_UINT64, TID_WORD, TID_ZERO_FLAG,
 };
 use crate::commands::inflate::{read_inflate_to_vec, MAX_INFLATE_OUTPUT_SIZE};
 use crate::commands::registry::decode_utf8_delphi;
@@ -282,6 +282,10 @@ fn read_strategy_fields(
     for _ in 0..field_count {
         let field_idx = read_u16(data, pos)? as usize;
         let type_id = read_u8(data, pos)?;
+        if type_id == TID_KEEP {
+            fields.keep_field(field_idx);
+            continue;
+        }
         let is_zero = (type_id & TID_ZERO_FLAG) != 0;
         let real_type = type_id & 0x7F;
 
@@ -289,10 +293,12 @@ fn read_strategy_fields(
             let Some(expected_type_id) = reader_fields.get(field_idx).and_then(|field| *field)
             else {
                 skip_field_by_type_id(data, pos, type_id)?;
+                fields.keep_field(field_idx);
                 continue;
             };
             if real_type != expected_type_id {
                 skip_field_by_type_id(data, pos, type_id)?;
+                fields.keep_field(field_idx);
                 continue;
             }
         }

@@ -1,9 +1,10 @@
 //! `TStrategySerializer` snapshot writer.
 
-use super::{FieldValue, StrategySnapshot, TID_ZERO_FLAG};
+use super::{FieldValue, StrategySnapshot, TID_KEEP, TID_ZERO_FLAG};
 use crate::commands::strategy_schema::{StrategySchema, StrategySchemaField};
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
@@ -80,23 +81,53 @@ impl<'a> StrategyBatchBuilder<'a> {
         i
     }
 
-    /// Add a single strategy.
-    pub(crate) fn write_strategy(&mut self, s: &StrategySnapshot) {
-        let path_id = self.path_index(&s.path);
-
+    fn declare_kind(&mut self, kind: u8) {
         // The name dictionary declares every field this sender knows for the
         // strategy kind. The core resets a known-but-absent field to its
         // default; fields unknown to the sender remain untouched.
-        if self.dictionary_kinds.insert(s.kind) {
+        if self.dictionary_kinds.insert(kind) {
             for field in self.schema_fields {
                 let name = field.name.as_str();
-                if field.visible_for_kind(s.kind) && !self.name_idx.contains_key(name) {
+                if field.visible_for_kind(kind) && !self.name_idx.contains_key(name) {
                     let idx = self.name_dict.len() as u16;
                     self.name_dict.push(field.name.clone());
                     self.name_idx.insert(field.name.clone(), idx);
                 }
             }
         }
+    }
+
+    /// Declare the entire batch before writing rows: a later kind may add a
+    /// name that an earlier row must explicitly preserve instead of defaulting.
+    /// The confirmed fallback is only for rows without pending edits. Pending
+    /// rows keep unknown fields so they cannot overwrite another client's edit.
+    pub(crate) fn write_strategies<'b>(
+        &mut self,
+        strategies: impl Iterator<Item = &'b StrategySnapshot> + Clone,
+        confirmed: impl Fn(u64) -> Option<&'b StrategySnapshot>,
+    ) -> u64 {
+        for strategy in strategies.clone() {
+            self.declare_kind(strategy.kind);
+        }
+        let mut max_date = 0;
+        for strategy in strategies {
+            max_date = max_date.max(strategy.last_date);
+            let mut outgoing = Cow::Borrowed(strategy);
+            if let Some(known) = confirmed(strategy.strategy_id) {
+                if strategy.last_date == known.last_date && strategy.strategy_ver == known.strategy_ver
+                    && strategy.fields.has_unknown_from(&known.fields) {
+                    outgoing.to_mut().fields.complete_from(&known.fields);
+                }
+            }
+            self.write_strategy(&outgoing);
+        }
+        max_date
+    }
+
+    /// Add a single strategy. Multiple rows use `write_strategies`.
+    pub(crate) fn write_strategy(&mut self, s: &StrategySnapshot) {
+        let path_id = self.path_index(&s.path);
+        self.declare_kind(s.kind);
 
         // Header
         self.body.extend_from_slice(&s.strategy_id.to_le_bytes());
@@ -134,6 +165,21 @@ impl<'a> StrategyBatchBuilder<'a> {
             self.body.extend_from_slice(&idx.to_le_bytes());
             write_field(&mut self.body, value);
             field_count = field_count.wrapping_add(1);
+        }
+        if let Some(names) = s.fields.declared_names() {
+            let mut known = vec![false; self.name_dict.len()];
+            for name in names {
+                if let Some(&idx) = self.name_idx.get(name.as_ref()) {
+                    known[idx as usize] = true;
+                }
+            }
+            for (idx, known) in known.into_iter().enumerate() {
+                if !known {
+                    self.body.extend_from_slice(&(idx as u16).to_le_bytes());
+                    self.body.push(TID_KEEP);
+                    field_count = field_count.wrapping_add(1);
+                }
+            }
         }
         // Backfill count
         self.body[count_offset..count_offset + 2].copy_from_slice(&field_count.to_le_bytes());

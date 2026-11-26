@@ -45,7 +45,7 @@ impl StratsState {
         }
     }
 
-    /// Latest strategy schema received during Init.
+    /// Latest strategy schema received during Init or automatic resync.
     pub fn strategy_schema(&self) -> Option<&StrategySchema> {
         self.schema.as_deref()
     }

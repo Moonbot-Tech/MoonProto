@@ -432,8 +432,8 @@ impl EventDispatcher {
                     });
                 } else {
                     self.pending_strategy_snapshot_request_uid = Some(uid);
-                    actions.push(ActiveAction::RequestStrategySchema);
                 }
+                actions.push(ActiveAction::RequestStrategySchema);
             } else {
                 self.pending_strategy_snapshot_request_uid = Some(uid);
             }

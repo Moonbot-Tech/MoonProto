@@ -4238,6 +4238,7 @@ fn snapshot_requested_without_provider_sends_owned_empty_snapshot() {
 
     // Drain send queues -- there must be a Command::Strat with an empty serializer batch.
     let mut empty_snapshot_sends = 0;
+    let mut schema_requests = 0;
     for item in drain_client_send_items(&client) {
         if item.cmd == Command::Strat.to_byte() {
             let cmd = crate::commands::strat::StratCommand::parse(&item.data)
@@ -4251,6 +4252,7 @@ fn snapshot_requested_without_provider_sends_owned_empty_snapshot() {
                     assert!(batch.strategies.is_empty());
                     empty_snapshot_sends += 1;
                 }
+                crate::commands::strat::StratCommand::SchemaRequest { .. } => schema_requests += 1,
                 other => panic!("expected snapshot reply, got {other:?}"),
             }
         }
@@ -4259,6 +4261,7 @@ fn snapshot_requested_without_provider_sends_owned_empty_snapshot() {
         empty_snapshot_sends, 1,
         "without a provider -- an empty owned snapshot must be sent"
     );
+    assert_eq!(schema_requests, 1, "an empty client must refresh the venue's schema too");
 
     assert!(
         out.is_empty(),

@@ -43,6 +43,9 @@
 //! - `TID_UINT64=9`:  8 bytes (unsigned)
 //! - `TID_SINGLE=10`: 4 bytes (f32)
 //! - `TID_ZERO_FLAG = 0x80` (high bit): value is the zero value for that TypeID.
+//! - `TID_KEEP = 0x80` (reserved TypeID 0, no payload): keep the receiver's value.
+//!   Delphi's type-mismatch path skips assignment but marks the name read, so
+//!   the default pass does not reset it, including with older cores.
 //!
 //! ## Unknown TypeID
 //! The reader falls back to an 8-byte skip, matching Delphi
@@ -79,6 +82,7 @@ pub(crate) const TID_UINT64: u8 = 9;
 pub(crate) const TID_SINGLE: u8 = 10;
 #[doc(hidden)]
 pub(crate) const TID_ZERO_FLAG: u8 = 0x80;
+pub(crate) const TID_KEEP: u8 = TID_ZERO_FLAG;
 
 mod editor;
 mod reader;

@@ -1,6 +1,9 @@
 use super::*;
 
 #[cfg(test)]
+mod schema_refresh_regression;
+
+#[cfg(test)]
 mod api_pending_dispatch_tests;
 #[cfg(test)]
 mod api_retry_tests;

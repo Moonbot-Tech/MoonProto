@@ -577,6 +577,27 @@ field to its schema default. A field absent from the dictionary is unknown to
 the sender and remains untouched, which preserves compatibility with newer
 core fields.
 
+A decoded row also retains which names its sender knew. A new schema does not
+turn an unreceived field into a default. Sending a decoded row preserves core
+values for fields that row has not received, including pending edits and batches
+whose rows know different fields. Explicitly inserting a value, including a
+default, expresses an edit; application-created field sets keep their full-schema contract.
+`StrategyFields::knows_field` exposes this distinction to adjustment displays.
+
+Automatic resync refreshes the schema. A Full at the same edit date/version
+completes previously unknown fields without replacing known values or changing
+the revision. Exact submitted edits remain available through `desired()`;
+unexpressed fields do not count as core adjustments.
+Automatic Full replies may complete an acknowledged local row from confirmed
+state at the same revision. Pending rows keep unknown fields, so resending a
+comment cannot overwrite a concurrent change made by another client.
+
+This SDK update can be deployed before the corresponding core fix: it uses
+existing core serialization behavior and adds no new command or core requirement.
+On cores that retain the previous exchange's schema after an exchange switch,
+restart the core to expose the correct fields until the core fix is installed.
+The SDK cannot recover fields that the core itself does not send.
+
 Raw serializer parsers remain available for diagnostics and custom protocol
 tools, but they are hidden from the normal API surface. Applications should use
 decoded `StratsState` from `MoonClient::snapshot()`.

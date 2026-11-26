@@ -187,6 +187,9 @@ pub struct StrategySnapshot {
 pub struct StrategyFields {
     names: Arc<Vec<Arc<str>>>,
     entries: Vec<(usize, FieldValue)>,
+    // None: an application-created full snapshot. Some: a decoded projection;
+    // its dictionary declares known defaults, except for per-row Keep markers.
+    unknown: Option<Vec<usize>>,
 }
 
 impl PartialEq for StrategyFields {
@@ -207,11 +210,12 @@ impl StrategyFields {
         Self {
             names: Arc::default(),
             entries: Vec::with_capacity(capacity),
+            unknown: None,
         }
     }
 
     pub(super) fn with_dictionary(names: Arc<Vec<Arc<str>>>, capacity: usize) -> Self {
-        Self { names, entries: Vec::with_capacity(capacity) }
+        Self { names, entries: Vec::with_capacity(capacity), unknown: Some(Vec::new()) }
     }
 
     pub fn insert<K>(&mut self, key: K, value: FieldValue) -> Option<FieldValue>
@@ -233,7 +237,64 @@ impl StrategyFields {
                 names.len() - 1
             });
         self.entries.push((index, value));
+        if let Some(unknown) = &mut self.unknown {
+            unknown.retain(|&i| i != index);
+        }
         None
+    }
+
+    /// Whether omission means a known default, rather than an unreceived field.
+    /// Application-created field sets describe the full schema; decoded sets
+    /// retain the sender's dictionary even when all values were defaults.
+    pub fn knows_field(&self, name: &str) -> bool {
+        self.unknown.as_ref().is_none_or(|unknown| {
+            self.names.iter().position(|n| n.as_ref() == name)
+                .is_some_and(|index| !unknown.contains(&index))
+        })
+    }
+
+    pub(super) fn declared_names(&self) -> Option<impl Iterator<Item = &Arc<str>>> {
+        self.unknown.as_ref().map(|unknown| {
+            self.names.iter().enumerate().filter(|(index, _)| !unknown.contains(index)).map(|(_, name)| name)
+        })
+    }
+
+    pub(super) fn keep_field(&mut self, index: usize) {
+        let unknown = self.unknown.as_mut().unwrap();
+        if index < self.names.len() && !unknown.contains(&index) {
+            unknown.push(index);
+        }
+    }
+
+    /// Number of known names retained in this field set, including omitted defaults.
+    pub fn declared_field_count(&self) -> usize {
+        self.names.len() - self.unknown.as_ref().map_or(0, Vec::len)
+    }
+
+    pub(crate) fn has_skipped_values(&self) -> bool {
+        self.unknown.as_ref().is_some_and(|unknown| !unknown.is_empty())
+    }
+
+    pub(crate) fn complete_from(&mut self, other: &Self) {
+        for name in other.names.iter() {
+            if self.knows_field(name) || !other.knows_field(name) {
+                continue;
+            }
+            if let Some(value) = other.get(name) {
+                self.insert(name.clone(), value.clone());
+            } else if let Some(index) = self.names.iter().position(|n| n == name) {
+                self.unknown.as_mut().unwrap().retain(|&i| i != index);
+            } else {
+                Arc::make_mut(&mut self.names).push(name.clone());
+            }
+        }
+    }
+
+    pub(crate) fn has_unknown_from(&self, other: &Self) -> bool {
+        if self.unknown.is_none() || (self.names == other.names && self.unknown == other.unknown) {
+            return false;
+        }
+        other.names.iter().any(|name| !self.knows_field(name) && other.knows_field(name))
     }
 
     #[inline]

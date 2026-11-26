@@ -177,12 +177,9 @@ impl EventDispatcher {
             return None;
         }
         let mut builder = StrategyBatchBuilder::new(self.strats.strategy_schema()?);
-        let mut client_max_last_date = 0;
-        for &id in strategy_ids {
-            let strategy = self.strats.strategy_edit(id)?.desired();
-            client_max_last_date = client_max_last_date.max(strategy.last_date);
-            builder.write_strategy(strategy);
-        }
+        let strategies = strategy_ids.iter().map(|&id| self.strats.strategy_edit(id).map(|edit| edit.desired()))
+            .collect::<Option<Vec<_>>>()?;
+        let client_max_last_date = builder.write_strategies(strategies.into_iter(), |_| None);
         Some(StrategySnapshotReply::from_payload(
             0,
             client_max_last_date,
