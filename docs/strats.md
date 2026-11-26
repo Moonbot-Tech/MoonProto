@@ -592,12 +592,6 @@ Automatic Full replies may complete an acknowledged local row from confirmed
 state at the same revision. Pending rows keep unknown fields, so resending a
 comment cannot overwrite a concurrent change made by another client.
 
-This SDK update can be deployed before the corresponding core fix: it uses
-existing core serialization behavior and adds no new command or core requirement.
-On cores that retain the previous exchange's schema after an exchange switch,
-restart the core to expose the correct fields until the core fix is installed.
-The SDK cannot recover fields that the core itself does not send.
-
 Raw serializer parsers remain available for diagnostics and custom protocol
 tools, but they are hidden from the normal API surface. Applications should use
 decoded `StratsState` from `MoonClient::snapshot()`.
