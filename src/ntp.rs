@@ -108,7 +108,7 @@ where
     F: FnMut(u64) -> Option<(f64, f64)>,
 {
     let force_sync = state.best_delay_ms == 0;
-    state.best_delay_ms = ((state.best_delay_ms as f64 * 1.05).round() as i64) + 1;
+    state.best_delay_ms = ((state.best_delay_ms as f64 * 1.05).round() as i64).saturating_add(1);
     let mut large_offset_retry_count = 0;
     let mut attempts = 0usize;
     let mut effective_try_count = try_count;
@@ -278,6 +278,10 @@ fn release_process_sync() {
     }
 }
 
+fn relaxed_sync_delay_ms(min_delay_ms: i64) -> i64 {
+    ((min_delay_ms as f64 * 1.1) as i64).saturating_add(10)
+}
+
 /// Background NTP sync thread — byte-exact port of `TMoonProtoTymeSyncer.Execute`
 /// (MoonProtoIntStruct.pas:1246-1303).
 ///
@@ -350,7 +354,7 @@ where
                     if try_count > 1000 {
                         try_count = 2;
                         // Widen the acceptance window — let a worse RTT win (Delphi pas:1281)
-                        min_delay_ms = ((min_delay_ms as f64 * 1.1) as i64) + 10;
+                        min_delay_ms = relaxed_sync_delay_ms(min_delay_ms);
                     }
 
                     if try_count < 4 {
@@ -464,6 +468,46 @@ mod tests {
 
         assert!(!result.synced);
         assert_eq!(state.receive_timeout_ms, 600);
+    }
+
+    #[test]
+    fn failed_initial_sync_still_accepts_a_result_after_retry_window_relaxation() {
+        let mut state = NtpState::default();
+        let first = get_best_ntp_with_state(&mut state, 4, |_| None);
+        assert!(!first.synced);
+        let mut min_delay_ms = if first.synced { first.round_trip_ms } else { i64::MAX };
+
+        // Each call represents the worker's >1000-tick retry boundary.
+        for _ in 0..3 {
+            min_delay_ms = relaxed_sync_delay_ms(min_delay_ms);
+            assert_eq!(min_delay_ms, i64::MAX);
+        }
+
+        let retry = get_best_ntp_with_state(&mut state, 2, |_| Some((0.125, 0.020)));
+        assert!(retry.synced);
+        assert!(retry.round_trip_ms < min_delay_ms, "the worker must accept the recovered sync");
+        assert_eq!(retry.time_offset, 0.125);
+    }
+
+    #[test]
+    fn retry_window_preserves_normal_delay_growth_and_saturates_at_the_limit() {
+        for (delay, expected) in [(0, 10), (1, 11), (20, 32), (100, 120), (1000, 1110), (i64::MAX - 1, i64::MAX)] {
+            assert_eq!(relaxed_sync_delay_ms(delay), expected);
+        }
+    }
+
+    #[test]
+    fn prolonged_sync_failure_still_accepts_a_response_above_the_fast_rtt_threshold() {
+        let mut state = NtpState::default();
+        for _ in 0..1000 {
+            // Advance unsuccessful selection windows without network waits.
+            let result = get_best_ntp_with_state(&mut state, 0, |_| unreachable!());
+            assert!(!result.synced);
+        }
+        let retry = get_best_ntp_with_state(&mut state, 2, |_| Some((0.125, 0.120)));
+        assert!(retry.synced);
+        assert_eq!(retry.round_trip_ms, 120);
+        assert_eq!(retry.time_offset, 0.125);
     }
 
     static PROCESS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
