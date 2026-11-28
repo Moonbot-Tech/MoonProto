@@ -16,6 +16,8 @@
 
 pub(crate) mod account;
 pub(crate) mod balances;
+mod cancelled_orders;
+pub use cancelled_orders::{CancelledOrder, CancelledOrders, CANCELLED_ORDERS_HISTORY_LIMIT};
 pub(crate) mod chart_ui;
 pub(crate) mod coin_card_candles;
 pub(crate) mod epoch;
@@ -38,6 +40,7 @@ mod services;
 pub use services::*;
 pub(crate) mod report;
 mod report_traces;
+pub(crate) use report_traces::parse_traces;
 pub(crate) mod seq_ring;
 pub(crate) mod settings;
 pub(crate) mod strats;

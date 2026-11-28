@@ -1,4 +1,5 @@
 use super::*;
+mod cancelled_orders;
 
 #[cfg(test)]
 mod schema_refresh_regression;

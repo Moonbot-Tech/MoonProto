@@ -16,6 +16,7 @@
 pub(crate) mod arb;
 pub(crate) mod balance;
 pub(crate) mod candles;
+pub(crate) mod cancelled_orders;
 pub(crate) mod chunked_response;
 pub(crate) mod engine_api;
 pub(crate) mod engine_request;

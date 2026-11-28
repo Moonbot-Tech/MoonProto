@@ -289,6 +289,40 @@ the result in the terminal. Report rows also carry optional
 See [archived order traces](reports.md#archived-order-traces)
 for the request timing, inherited lines, rendering, and local-cache contract.
 
+## Recent Cancelled Orders
+
+MoonBot 7.73 N4 retains the last 100 cancelled orders across all markets in memory.
+MoonProto recovers them automatically after initialization and reconnect, and
+receives new cancellations while connected. Read them separately from live orders:
+
+```rust
+let snapshot = client.snapshot().unwrap();
+for order in snapshot.cancelled_orders().iter() {
+    draw_cancelled_order(order);
+}
+```
+
+`CancelledOrder` includes the original live `uid`, market/exchange, strategy,
+emulator/short flags, order side, creation/cancellation times, price, quantity,
+and archived trace geometry. Times are already UTC `MoonTime` values. Draw a
+fixed-price segment between the two times when `traces` is empty; otherwise use
+the [archived trace geometry](reports.md#geometry).
+
+Iteration follows the core's retention order, newest first, even when packets or
+order finalization arrive late. `get(uid)` resolves one retained cancellation.
+Repeated delivery uses the same UID and does not append duplicates or emit
+another `Event::CancelledOrderHistory`. That event describes retained history,
+not a new trading action: do not use it to replay order notifications.
+Keep UI caches scoped to the connected core and key them by this UID.
+History survives changing the core's exchange within the same process; filter
+by `exchange` and `base_currency` when drawing a particular trading account.
+
+The history has its own bounded storage; ordinary live-order updates do not
+scan or rebuild it. Held snapshots remain immutable and share their records.
+Recovery is asynchronous and does not delay `Ready`. The core's buffer is not a
+disk archive; a new core process starts a new history. Applications that need
+longer retention can persist received records themselves.
+
 ## Lifecycle Notes
 
 The v4 order channel is a canonical replica. A complete order image and a

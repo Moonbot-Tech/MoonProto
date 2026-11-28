@@ -3,6 +3,10 @@ use super::*;
 pub(crate) const REPORT_RESPONSE_TIMEOUT_MS: i64 = 15_000;
 
 impl Client {
+    pub(crate) fn request_cancelled_orders(&self) {
+        self.send_trade(crate::commands::cancelled_orders::build_request(rand::random()));
+    }
+
     pub(crate) fn send_report_trace_request(&self, ticket: crate::ReportTraceTicket) -> bool {
         self.send_trade(crate::commands::report::build_trace_request(ticket.request_id, ticket.report_uid))
     }

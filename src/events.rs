@@ -134,6 +134,7 @@ impl<T: Clone> CowState<T> {
 /// immutable [`MoonStateSnapshot`] copies published by [`crate::MoonClient`].
 pub(crate) struct EventDispatcher {
     pub(crate) orders: OrderState,
+    pub(crate) cancelled_orders: crate::state::CancelledOrders,
     pub(crate) reports: ReportReplicationState,
     pub(crate) order_books: CowState<OrderBooks>,
     pub(crate) trades: CowState<TradesState>,
@@ -261,6 +262,7 @@ impl Default for EventDispatcher {
     fn default() -> Self {
         Self {
             orders: OrderState::default(),
+            cancelled_orders: Default::default(),
             reports: ReportReplicationState::default(),
             order_books: CowState::default(),
             trades: CowState::default(),

@@ -405,6 +405,9 @@ pub enum Event {
     /// Order channel event: order creation, update, removal, or snapshot
     /// follow-up.
     Order(OrderEvent),
+    /// A new retained historical cancellation, from live delivery or reconnect recovery.
+    /// This is not a live order-action notification. Repeated UIDs emit no event.
+    CancelledOrderHistory(std::sync::Arc<crate::CancelledOrder>),
     /// OrderBook channel: applied updates/low-level cache control events.
     OrderBook(OrderBookEvent),
     /// TradesStream channel event. A packet can produce several

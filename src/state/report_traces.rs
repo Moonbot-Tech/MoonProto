@@ -39,7 +39,7 @@ pub struct ReportTrace {
     pub points: Arc<[ReportTracePoint]>,
 }
 
-fn parse_traces(data: &[u8]) -> Option<Arc<[ReportTrace]>> {
+pub(crate) fn parse_traces(data: &[u8]) -> Option<Arc<[ReportTrace]>> {
     if data.is_empty() {
         return Some(Arc::from([]));
     }

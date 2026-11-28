@@ -40,6 +40,9 @@ pub enum TradeCommand {
     #[allow(dead_code)] // Request shape is parsed for registry parity; clients only send it.
     ReportTraceRequest(crate::commands::report::RepTraceRequest),
     ReportTrace(crate::commands::report::RepTrace),
+    #[allow(dead_code)] // Parsed for registry parity; clients only send requests.
+    CancelledOrdersRequest(BaseCommandHeader),
+    CancelledOrderHistory(u64, std::sync::Arc<crate::CancelledOrder>),
     OrderImage(OrderImage),
     OrderPatch(OrderPatch),
     OrdersSnapshot(OrdersSnapshot),
@@ -142,6 +145,9 @@ impl TradeCommand {
             45 => Some(Self::OrderStatusRequest(OrderStatusRequest::read(input)?)),
             46 => Some(Self::OrderNotFound(BaseCommandHeader::read(input)?)),
             47 => Some(Self::OrderCommand(OrderCommand::read(input)?)),
+            54 => Some(Self::CancelledOrdersRequest(BaseCommandHeader::read(input)?)),
+            55 => crate::commands::cancelled_orders::read(input)
+                .map(|(sequence, order)| Self::CancelledOrderHistory(sequence, order)),
             _ => {
                 *input = &[];
                 Some(Self::Unknown { cmd_id, uid })
@@ -168,6 +174,8 @@ impl TradeCommand {
             Self::ReportAliveMap(c) => c.header.uid,
             Self::ReportTraceRequest(c) => c.header.uid,
             Self::ReportTrace(c) => c.header.uid,
+            Self::CancelledOrdersRequest(h) => h.uid,
+            Self::CancelledOrderHistory(_, order) => order.uid,
             Self::OrderImage(c) => c.header.uid,
             Self::OrderPatch(c) => c.header.uid,
             Self::OrdersSnapshot(c) => c.header.uid,

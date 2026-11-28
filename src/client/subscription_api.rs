@@ -251,6 +251,7 @@ impl Client {
         // can race the Fine boundary; this independent request closes that
         // window and also reconciles orders missed while the transport was down.
         self.request_orders_snapshot();
+        self.request_cancelled_orders();
 
         let indexes_stale = self.peer_app_token != 0 && !self.market_indexes_current_for_peer();
         let orderbooks_need_fresh_indexes =

@@ -8131,7 +8131,23 @@ fn run_sol_order_cancel_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session)
     };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_sol_order_cancel_gate_body(a, b, cfg.order_mode, false);
-        run_sol_order_cancel_gate_body(a, b, cfg.order_mode, true);
+        let uid = run_sol_order_cancel_gate_body(a, b, cfg.order_mode, true);
+        assert!(pump_pair_until_sessions(a, b, cfg.connect_timeout, "cancelled order history broadcast", |a, b| {
+            [a, b].into_iter().all(|s| s.state_snapshot().cancelled_orders().get(uid).is_some())
+        }), "cancelled order uid={uid} missing from history");
+        let saved = a.state_snapshot().cancelled_orders().get(uid).unwrap().clone();
+        assert_eq!(saved.is_emulator, cfg.order_mode == FireOrderMode::Emulator);
+        assert_eq!(saved.market, FIRETEST_SOL_CANCEL_MARKET);
+        assert!(saved.cancelled_at.unix_millis() >= saved.created_at.unix_millis());
+        let keys = parse_key_info(&cfg.key_b64).expect("invalid FireTest key").keys;
+        let mut late = Session::connect("Cancelled-orders-late", cfg, keys, None);
+        assert!(pump_pair_until_sessions(a, &mut late, cfg.connect_timeout, "offline cancellation recovery", |_, s| {
+            s.state_snapshot().cancelled_orders().get(uid).is_some()
+        }), "late client did not recover cancelled order uid={uid}");
+        assert_eq!(late.state_snapshot().cancelled_orders().get(uid), Some(&saved));
+        assert_eq!(late.state_snapshot().cancelled_orders().iter().filter(|r| r.uid == uid).count(), 1);
+        assert!(late.state_snapshot().cancelled_orders().len() <= moonproto::CANCELLED_ORDERS_HISTORY_LIMIT);
+        println!("OK: cancelled order uid={uid} delivered live and recovered by a late client without duplicates");
     }));
     a.end_order_state_capture();
     b.end_order_state_capture();
@@ -8141,7 +8157,7 @@ fn run_sol_order_cancel_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session)
     }
 }
 
-fn run_sol_order_cancel_gate_body(a: &mut Session, b: &mut Session, mode: FireOrderMode, second_pass: bool) {
+fn run_sol_order_cancel_gate_body(a: &mut Session, b: &mut Session, mode: FireOrderMode, second_pass: bool) -> u64 {
     let emulator = mode == FireOrderMode::Emulator;
     a.begin_order_state_capture();
     b.begin_order_state_capture();
@@ -8316,6 +8332,7 @@ fn run_sol_order_cancel_gate_body(a: &mut Session, b: &mut Session, mode: FireOr
     if second_pass {
         println!("OK: {} reached both clients", if emulator { "forced emulator cancellation" } else { "exchange-wide entry cancellation" });
     }
+    server_uid
 }
 
 #[test]

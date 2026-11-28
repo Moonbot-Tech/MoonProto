@@ -20,8 +20,9 @@ pub struct CoreCompatibility {
 /// ```
 pub const fn core_compatibility() -> CoreCompatibility {
     CoreCompatibility {
-        minimum_core_version: "7.73 N2",
-        comment: "7.73 N2 adds cancel_buys_on_exit and manual entry-price correction notices. \
+        minimum_core_version: "7.73 N4",
+        comment: "7.73 N4 adds automatic recovery of the last 100 cancelled orders, separate from live orders. \
+                  7.73 N2 adds cancel_buys_on_exit and manual entry-price correction notices. \
                   Older cores do not act on the exit setting or send these notices. \
                   N2 adds orders().force_cancel() for a selected active order; older cores ignore this request. \
                   Updated N2 builds also reject older/repeated strategy start/stop intents by action ID; \
