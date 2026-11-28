@@ -215,7 +215,7 @@ pub use commands::ui::{
     SpotMarketKind, TempBlacklistEntry,
 };
 pub use state::{StrategyEdit, StrategyEditStatus};
-pub use state::{CancelledOrder, CancelledOrders, CANCELLED_ORDERS_HISTORY_LIMIT};
+pub use state::{OrderLine, OrderLinePoint, OrderLinesEvent, OrderLinesTicket};
 // Parameter types named by public high-level handle methods but defined in
 // command submodules (`MoonTrade::move_all_sells`/`move_all_buys`,
 // `MoonCandles::request_coin_card`).

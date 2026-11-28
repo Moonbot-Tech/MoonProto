@@ -13,7 +13,6 @@ use crate::state::{MarketHandle, OrderBookKind, OrderBookReadGuard, TopOfBook};
 #[derive(Debug, Clone)]
 pub struct MoonStateSnapshot {
     orders: Orders,
-    cancelled_orders: crate::state::CancelledOrders,
     report_schema: Option<std::sync::Arc<crate::state::ReportSchema>>,
     order_books: CowState<OrderBooks>,
     account: CowState<AccountState>,
@@ -44,11 +43,6 @@ impl MoonStateSnapshot {
     /// Read-only order state, keyed by server order UID.
     pub fn orders(&self) -> &Orders {
         &self.orders
-    }
-
-    /// Last 100 cancellations, recovered automatically on connection and reconnect.
-    pub fn cancelled_orders(&self) -> &crate::state::CancelledOrders {
-        &self.cancelled_orders
     }
 
     /// Last validated append-only report DB schema received from the core.
@@ -371,7 +365,6 @@ impl EventDispatcher {
     pub(crate) fn snapshot(&self) -> MoonStateSnapshot {
         MoonStateSnapshot {
             orders: self.orders.snapshot(),
-            cancelled_orders: self.cancelled_orders.clone(),
             report_schema: self.reports.schema().cloned(),
             order_books: self.order_books.clone(),
             account: self.account.clone(),

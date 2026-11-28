@@ -246,7 +246,6 @@ impl EventDispatcher {
             && self.last_known_peer_app_token != ctx.peer_app_token
         {
             self.news.clear_for_new_world();
-            self.cancelled_orders = Default::default();
             self.settings.problems = Default::default();
             self.settings.telegram = None;
             self.settings.watchdogs = None;

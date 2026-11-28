@@ -175,9 +175,11 @@ affect pre-existing real orders and have no emulator-only scope. All other full
 profile gates still run, including order fills/sells, report replication, session
 resets, strategy synchronization, loss/reconnect recovery, N2 settings and Streamer.
 
-The N4 cancellation-history check observes the same cancelled UID on both live
-clients, then connects a fresh client and verifies automatic recovery of the
-same record without duplicates, independently of the live order list.
+The N4 order-line check connects a fresh client after cancellation, requests
+one market and all markets, and verifies the retained line's protocol UID,
+original geometry and matching chart IDs. Local tests cover main-thread ownership,
+immutable outgoing pages, reordered/duplicate/missing pages, empty results and
+imported lines sharing an ID.
 
 Focused strategy checks on an updated test core (`allow_mutation = true`):
 

@@ -134,7 +134,7 @@ impl<T: Clone> CowState<T> {
 /// immutable [`MoonStateSnapshot`] copies published by [`crate::MoonClient`].
 pub(crate) struct EventDispatcher {
     pub(crate) orders: OrderState,
-    pub(crate) cancelled_orders: crate::state::CancelledOrders,
+    pub(crate) order_line_requests: crate::state::order_lines::OrderLineRequests,
     pub(crate) reports: ReportReplicationState,
     pub(crate) order_books: CowState<OrderBooks>,
     pub(crate) trades: CowState<TradesState>,
@@ -262,7 +262,7 @@ impl Default for EventDispatcher {
     fn default() -> Self {
         Self {
             orders: OrderState::default(),
-            cancelled_orders: Default::default(),
+            order_line_requests: Default::default(),
             reports: ReportReplicationState::default(),
             order_books: CowState::default(),
             trades: CowState::default(),
@@ -437,10 +437,20 @@ impl EventDispatcher {
         }
     }
 
-    pub(crate) fn tick_report_trace_timeouts(&mut self, now: std::time::Instant) {
+    pub(crate) fn request_order_lines(&mut self, client: &crate::client::Client, ticket: crate::OrderLinesTicket) {
+        let request_id = ticket.request_id;
+        let sent = client.send_order_lines_request(request_id, ticket.market.as_deref());
+        self.order_line_requests.begin(ticket, std::time::Instant::now());
+        if !sent {
+            self.queued_events.extend(self.order_line_requests.fail(request_id, "client is not ready for order lines"));
+        }
+    }
+
+    pub(crate) fn tick_trace_timeouts(&mut self, now: std::time::Instant) {
         let mut events = Vec::new();
         self.reports.traces.tick(now, &mut events);
         self.queued_events.extend(events.into_iter().map(Event::Report));
+        self.order_line_requests.tick(now, |event| self.queued_events.extend([event]));
     }
 
     pub(crate) fn retry_active_report_alive_map(

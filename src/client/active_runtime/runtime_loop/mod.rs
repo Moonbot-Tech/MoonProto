@@ -251,7 +251,7 @@ pub(super) fn runtime_loop(
                 );
             let now = Instant::now();
             let strategy_edits_changed = dispatcher.tick_strategy_edit_timeouts(now);
-            dispatcher.tick_report_trace_timeouts(now);
+            dispatcher.tick_trace_timeouts(now);
             server_info_changed
                 || candles_changed
                 || market_history_changed
@@ -1413,11 +1413,11 @@ mod tests {
         assert_eq!(deferred.len(), 1);
         let (sliced, high, low) = client.take_send_queues_for_test();
         assert!(sliced.is_empty() && high.is_empty() && low.is_empty());
-        dispatcher.tick_report_trace_timeouts(Instant::now() + Duration::from_secs(60));
+        dispatcher.tick_trace_timeouts(Instant::now() + Duration::from_secs(60));
         assert!(dispatcher.take_queued_events().is_empty());
         drain_deferred_and_live_commands(&mut client, &mut dispatcher, &rx, &mut pending, &mut deferred);
         assert_eq!(client.take_send_queues_for_test().1.len(), 1);
-        dispatcher.tick_report_trace_timeouts(Instant::now() + Duration::from_secs(60));
+        dispatcher.tick_trace_timeouts(Instant::now() + Duration::from_secs(60));
         assert!(matches!(dispatcher.take_queued_events().as_slice(),
             [crate::Event::Report(crate::ReportEvent::TraceFailed { ticket: actual, .. })] if *actual == ticket));
         let retry = reports.request_traces(-99).unwrap();

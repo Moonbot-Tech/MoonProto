@@ -289,39 +289,51 @@ the result in the terminal. Report rows also carry optional
 See [archived order traces](reports.md#archived-order-traces)
 for the request timing, inherited lines, rendering, and local-cache contract.
 
-## Recent Cancelled Orders
+## Existing Core Order Lines
 
-MoonBot 7.73 N4 retains the last 100 cancelled orders across all markets in memory.
-MoonProto recovers them automatically after initialization and reconnect, and
-receives new cancellations while connected. Read them separately from live orders:
+MoonBot 7.73 N4 can return the order lines that it currently retains on its
+charts, including the original price moves. Request one market or all markets:
 
 ```rust
-let snapshot = client.snapshot().unwrap();
-for order in snapshot.cancelled_orders().iter() {
-    draw_cancelled_order(order);
-}
+let one = client.orders().request_lines(Some("BTCUSDT"))?;
+let all = client.orders().request_lines(None)?;
 ```
 
-`CancelledOrder` includes the original live `uid`, market/exchange, strategy,
-emulator/short flags, order side, creation/cancellation times, price, quantity,
-and archived trace geometry. Times are already UTC `MoonTime` values. Draw a
-fixed-price segment between the two times when `traces` is empty; otherwise use
-the [archived trace geometry](reports.md#geometry).
+Both calls return immediately. Match the returned `OrderLinesTicket` with
+`Event::OrderLines(OrderLinesEvent::Ready { ticket, lines })` or `Failed`.
+The SDK handles page reordering and repeats and publishes only a complete
+snapshot. An empty `Ready` is a valid empty result. Missing pages or a failed
+request produce `Failed`, not a partial set of lines. Requests are independent;
+there is no automatic subscription or background history download.
 
-Iteration follows the core's retention order, newest first, even when packets or
-order finalization arrive late. `get(uid)` resolves one retained cancellation.
-Repeated delivery uses the same UID and does not append duplicates or emit
-another `Event::CancelledOrderHistory`. That event describes retained history,
-not a new trading action: do not use it to replay order notifications.
-Keep UI caches scoped to the connected core and key them by this UID.
-History survives changing the core's exchange within the same process; filter
-by `exchange` and `base_currency` when drawing a particular trading account.
+Each `OrderLine` has the core's `line_id`, its market/exchange/base
+currency, buy/sell type, stop marker and full `points` in UTC milliseconds with
+`f64` prices. `order_uid`, when present, links it to the live MoonProto order;
+`native_order_id` is the core's separate order-leg ID. Match by `(order_uid, order_type)` when
+combining snapshots with live order legs. Existing figures without a protocol
+link still have their `line_id`. Points use the core's original
+[order-line geometry](reports.md#geometry), including price moves.
 
-The history has its own bounded storage; ordinary live-order updates do not
-scan or rebuild it. Held snapshots remain immutable and share their records.
-Recovery is asynchronous and does not delay `Ready`. The core's buffer is not a
-disk archive; a new core process starts a new history. Applications that need
-longer retention can persist received records themselves.
+Apply each complete snapshot as a replacement for the requested market, or for
+all markets when requesting all lines. Do not append repeated snapshots or merge
+by `line_id`: importing chart figures on the core can produce different geometries
+with the same ID, and the snapshot preserves both.
+
+The core collects the snapshot entirely on its main thread and passes only
+immutable bytes to transport. Pages are bounded by the Sliced payload size;
+a long line can cross page boundaries. The SDK reads the assembled pages without
+first concatenating them into another full byte buffer.
+
+This API reads existing chart objects. It does not create an additional history,
+retain cancelled orders separately, or write an archive to disk. Availability is
+whatever the core still has when it handles the request. Its normal chart cleanup
+continues unchanged: in release builds it trims unprotected lines to 50 buys and
+50 sells per market after the respective count exceeds 70. Working-order lines
+are protected. There is no three-day or 500-order retention guarantee.
+
+The application owns the returned immutable snapshot and decides when to refresh
+or release it. Opening a chart is a suitable request point. These are chart data,
+not trading notifications.
 
 ## Lifecycle Notes
 

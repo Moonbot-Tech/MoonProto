@@ -198,6 +198,17 @@ impl MoonReports {
 }
 
 impl MoonOrders {
+    /// Request existing chart order lines for one market, or all markets with `None`.
+    /// Returns immediately. Completion arrives as [`crate::Event::OrderLines`].
+    pub fn request_lines(&self, market: Option<&str>) -> Result<crate::OrderLinesTicket, MoonClientError> {
+        if market.is_some_and(|name| name.is_empty() || name.len() > 255) {
+            return Err(MoonClientError::UnknownMarket(market.unwrap().to_owned()));
+        }
+        let ticket = crate::OrderLinesTicket { request_id: random_nonzero_u64(), market: market.map(str::to_owned) };
+        self.tx.send(RuntimeCommand::OrderLines(ticket.clone())).map_err(|_| MoonClientError::RuntimeStopped)?;
+        Ok(ticket)
+    }
+
     /// Request a fresh order snapshot and return immediately.
     pub fn request_snapshot(&self) -> Result<(), MoonClientError> {
         self.tx

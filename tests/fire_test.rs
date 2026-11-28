@@ -851,6 +851,7 @@ struct Session {
     stats: Arc<Mutex<SessionStats>>,
     parse_failure_correlations_logged: usize,
     report_events: Vec<ReportEvent>,
+    order_line_events: Vec<moonproto::OrderLinesEvent>,
     market_history_events: Vec<MarketHistoryEvent>,
     market_history_archives: Vec<(moonproto::state::MarketHistoryTicket, Vec<moonproto::state::TradeHistoryRow>)>,
     order_state_events: Option<Vec<FireTestOrderStateEvent>>,
@@ -991,6 +992,7 @@ impl Session {
             stats,
             parse_failure_correlations_logged: 0,
             report_events: Vec::new(),
+            order_line_events: Vec::new(),
             market_history_events: Vec::new(),
             market_history_archives: Vec::new(),
             order_state_events: None,
@@ -1048,6 +1050,9 @@ impl Session {
         for event in events {
             if let Event::Report(report) = &event {
                 self.report_events.push(report.clone());
+            }
+            if let Event::OrderLines(lines) = &event {
+                self.order_line_events.push(lines.clone());
             }
             if let Event::MarketHistory(history) = &event {
                 self.market_history_events.push(history.clone());
@@ -8132,22 +8137,33 @@ fn run_sol_order_cancel_gate(cfg: &FireConfig, a: &mut Session, b: &mut Session)
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_sol_order_cancel_gate_body(a, b, cfg.order_mode, false);
         let uid = run_sol_order_cancel_gate_body(a, b, cfg.order_mode, true);
-        assert!(pump_pair_until_sessions(a, b, cfg.connect_timeout, "cancelled order history broadcast", |a, b| {
-            [a, b].into_iter().all(|s| s.state_snapshot().cancelled_orders().get(uid).is_some())
-        }), "cancelled order uid={uid} missing from history");
-        let saved = a.state_snapshot().cancelled_orders().get(uid).unwrap().clone();
-        assert_eq!(saved.is_emulator, cfg.order_mode == FireOrderMode::Emulator);
-        assert_eq!(saved.market, FIRETEST_SOL_CANCEL_MARKET);
-        assert!(saved.cancelled_at.unix_millis() >= saved.created_at.unix_millis());
         let keys = parse_key_info(&cfg.key_b64).expect("invalid FireTest key").keys;
-        let mut late = Session::connect("Cancelled-orders-late", cfg, keys, None);
-        assert!(pump_pair_until_sessions(a, &mut late, cfg.connect_timeout, "offline cancellation recovery", |_, s| {
-            s.state_snapshot().cancelled_orders().get(uid).is_some()
-        }), "late client did not recover cancelled order uid={uid}");
-        assert_eq!(late.state_snapshot().cancelled_orders().get(uid), Some(&saved));
-        assert_eq!(late.state_snapshot().cancelled_orders().iter().filter(|r| r.uid == uid).count(), 1);
-        assert!(late.state_snapshot().cancelled_orders().len() <= moonproto::CANCELLED_ORDERS_HISTORY_LIMIT);
-        println!("OK: cancelled order uid={uid} delivered live and recovered by a late client without duplicates");
+        let mut late = Session::connect("Order-lines-late", cfg, keys, None);
+        let one = late.client.orders().request_lines(Some(FIRETEST_SOL_CANCEL_MARKET)).unwrap();
+        let all = late.client.orders().request_lines(None).unwrap();
+        let mut replies = std::collections::HashMap::new();
+        let mut examined = 0;
+        assert!(pump_pair_until_sessions(a, &mut late, cfg.connect_timeout, "existing core order lines", |_, s| {
+            for event in &s.order_line_events[examined..] {
+                match event {
+                    moonproto::OrderLinesEvent::Ready { ticket, lines } => {
+                        assert!(!replies.contains_key(&ticket.request_id), "duplicate snapshot completion");
+                        replies.insert(ticket.request_id, Arc::clone(lines));
+                    }
+                    moonproto::OrderLinesEvent::Failed { ticket, error } => panic!("{ticket:?}: {error}"),
+                }
+            }
+            examined = s.order_line_events.len();
+            replies.contains_key(&one.request_id) && replies.contains_key(&all.request_id)
+        }), "existing-line snapshots did not complete");
+        let selected = &replies[&one.request_id];
+        assert!(selected.iter().all(|line| line.market == FIRETEST_SOL_CANCEL_MARKET));
+        let cancelled = selected.iter().find(|line| line.order_uid == Some(uid))
+            .expect("the core's retained cancelled line must carry the live order UID");
+        assert!(cancelled.points.len() >= 4, "order moves must remain in the retained geometry");
+        let all_lines = &replies[&all.request_id];
+        assert!(all_lines.iter().any(|line| line == cancelled), "both requests must preserve the cancelled line's full geometry");
+        println!("OK: existing core lines recovered by late client for one/all markets; uid={uid}");
     }));
     a.end_order_state_capture();
     b.end_order_state_capture();

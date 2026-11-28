@@ -400,8 +400,9 @@ pub(crate) const ORDER_COMMANDS: &[CommandDescriptor] = &[
         priority = Sliced,
         direction = Inbound
     ),
-    cmd_desc!(Command::Order, 54, "TCancelledOrdersRequest", base = Base, priority = High, direction = Outbound),
-    cmd_desc!(Command::Order, 55, "TCancelledOrderHistory", base = Base, priority = Sliced, direction = Inbound),
+    // 54..56 are retired cancellation-history commands; their IDs remain reserved.
+    cmd_desc!(Command::Order, 57, "TOrderLinesRequest", base = Base, priority = High, direction = Outbound),
+    cmd_desc!(Command::Order, 58, "TOrderLinesPage", base = Base, priority = Sliced, direction = Inbound),
     cmd_desc!(
         Command::Order,
         41,
@@ -1173,7 +1174,7 @@ mod tests {
 
     #[test]
     fn descriptor_map_keeps_retired_order_ids_unregistered() {
-        for id in (2..=22).chain(27..=30) {
+        for id in (2..=22).chain(27..=30).chain(54..=56) {
             assert!(
                 find_descriptor(Command::Order, id).is_none(),
                 "retired order command id {id} must stay unregistered"

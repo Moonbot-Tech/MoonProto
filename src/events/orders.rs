@@ -12,10 +12,8 @@ impl EventDispatcher {
         out: &mut Vec<Event>,
     ) {
         match TradeCommand::parse_for_apply(payload) {
-            Some(TradeCommand::CancelledOrderHistory(sequence, order)) => {
-                if self.cancelled_orders.apply(sequence, std::sync::Arc::clone(&order)) {
-                    out.push(Event::CancelledOrderHistory(order));
-                }
+            Some(TradeCommand::OrderLinesPage(page)) => {
+                self.order_line_requests.on_page(page, std::time::Instant::now(), out);
             }
             Some(TradeCommand::ClosedSellOrderReport(report)) => {
                 out.push(Event::ClosedSellOrderReport(ClosedSellOrderReportEvent {

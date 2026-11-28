@@ -548,15 +548,13 @@ fn post_init_reconnect_restores_domain_without_second_init_and_reopens_stream_ga
     );
     let order_pulls = sent
         .iter()
-        .filter(|item| item.cmd == Command::Order.to_byte() && item.data.first() == Some(&45))
+        .filter(|item| item.cmd == Command::Order.to_byte())
         .collect::<Vec<_>>();
     assert_eq!(
         order_pulls.len(),
         1,
         "each post-init Fine sends exactly one order full-pull"
     );
-    assert_eq!(sent.iter().filter(|item| item.cmd == Command::Order.to_byte()
-        && item.data.first() == Some(&54)).count(), 1, "reconnect also recovers cancellation history");
     assert_eq!(
         order_pulls[0].data[0], 45,
         "full-pull uses TOrderStatusRequest"
